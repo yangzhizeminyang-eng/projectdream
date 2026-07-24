@@ -1,0 +1,55 @@
+{
+  "name": "projectdream",
+  "version": "0.0.0",
+  "description": "面向 AI 漫剧和短视频生产的项目级工作台。",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "ai-comic-drama",
+    "storyboard",
+    "text-to-image",
+    "image-to-video",
+    "tts",
+    "vue",
+    "node"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "server": "node --env-file=.env.local --watch server/index.mjs",
+    "dev:full": "run-p server dev",
+    "test": "node --test server/services/ai/parsers.test.mjs server/services/ai/frame-prompt.test.mjs server/services/audio-dialogue.test.mjs server/services/audio-title.test.mjs server/services/character-rename.test.mjs server/services/export-validation.test.mjs server/services/frame-character-consistency.test.mjs server/services/frame.test.mjs server/services/lip-sync.test.mjs server/services/media-timeline.test.mjs server/services/video.test.mjs server/services/voice-profiles.test.mjs",
+    "build": "run-p type-check \"build-only {@}\" --",
+    "preview": "vite preview",
+    "build-only": "vite build",
+    "type-check": "vue-tsc --build"
+  },
+  "dependencies": {
+    "@alicloud/credentials": "^2.4.5",
+    "@alicloud/dypnsapi20170525": "^2.0.0",
+    "@alicloud/dysmsapi20170525": "^4.6.0",
+    "@alicloud/openapi-client": "^0.4.15",
+    "mysql2": "^3.23.0",
+    "pinia": "^3.0.4",
+    "tencentcloud-sdk-nodejs": "^4.1.269",
+    "vue": "^3.5.38",
+    "vue-router": "^4.4.5"
+  },
+  "devDependencies": {
+    "@tsconfig/node24": "^24.0.4",
+    "@types/node": "^24.13.2",
+    "@vitejs/plugin-vue": "^6.0.7",
+    "@vue/tsconfig": "^0.9.1",
+    "autoprefixer": "^10.4.20",
+    "npm-run-all2": "^9.0.2",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.9.2",
+    "vite": "^6.0.7",
+    "vite-plugin-vue-devtools": "^7.7.2",
+    "vue-tsc": "^2.2.0"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.12.0"
+  }
+}

@@ -1,0 +1,254 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ---------------------------------------------------------------
+   * 基础层：滚动体验全局基线
+   * ------------------------------------------------------------- */
+  html {
+    /* 全局平滑滚动：所有锚点/JS scrollTo 都走平滑过渡 */
+    scroll-behavior: smooth;
+    /* 防止滚动穿透：到边界时不再把滚动事件冒泡给父级 */
+    overscroll-behavior-y: none;
+    /* 在移动端保持滚动条宽度恒定，避免滚动条出现/消失造成横向抖动 */
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    background-color: #121412;
+    color: #e2e3df;
+    font-family: 'Noto Sans', sans-serif;
+    /* 不再用 overflow: hidden 锁死 body，改为 inner scrolling；
+       这样移动端的下拉刷新/橡皮筋效果可以由具体容器自主控制 */
+    min-height: 100vh;
+    min-height: 100dvh;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html, body, #app {
+    height: 100vh;
+    height: 100dvh; /* 移动端浏览器地址栏高度自适应 */
+    width: 100vw;
+  }
+
+  /* 减少动画偏好：尊重操作系统的"减少动效"设置 */
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .material-symbols-outlined {
+    font-family: 'Material Symbols Outlined';
+    font-weight: normal;
+    font-style: normal;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    -webkit-font-feature-settings: 'liga';
+    -webkit-font-smoothing: antialiased;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    vertical-align: middle;
+    user-select: none;
+  }
+
+  .burning-orange-btn {
+    background-color: #d97707;
+    color: #000;
+    transition: background-color 0.2s ease;
+  }
+  .burning-orange-btn:hover {
+    background-color: #ffb77d;
+  }
+
+  .bronze-border {
+    border: 1px solid #A48454;
+  }
+
+  .production-tracker {
+    height: 2px;
+    background-color: #1B1C1A;
+  }
+  .production-tracker-fill {
+    background-color: #d97707;
+  }
+
+  /* ---------------------------------------------------------------
+   * 滚动条样式集
+   * - 默认 darkroom 风格（窄/青铜色），与 design token 对齐
+   * - 触控端：使用 overlay-style（scrollbar-width: none 仍允许滚动）
+   * ------------------------------------------------------------- */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+    /* 触控设备：保持滚动能力，关闭原生滚动条以避免遮挡内容 */
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #A48454 transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: #121412;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #A48454;
+    border-radius: 0;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #ffb77d;
+  }
+  .custom-scrollbar::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* 横向滚动条：用于胶片轨/时间线 */
+  .horizontal-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #A48454 transparent;
+  }
+  .horizontal-scrollbar::-webkit-scrollbar {
+    width: 4px;
+    height: 6px;
+  }
+  .horizontal-scrollbar::-webkit-scrollbar-track {
+    background: #0d0f0d;
+  }
+  .horizontal-scrollbar::-webkit-scrollbar-thumb {
+    background: #554336;
+  }
+  .horizontal-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #ffb77d;
+  }
+
+  .paper-texture {
+    background-color: #F7F4EC;
+    background-image: url("https://www.transparenttextures.com/patterns/natural-paper.png");
+    color: #121412;
+  }
+
+  .noir-gradient {
+    background: linear-gradient(180deg, rgba(18,20,18,0) 0%, rgba(18,20,18,0.8) 100%);
+  }
+
+  .hard-border {
+    border: 1px solid #A48454;
+  }
+
+  input:focus, textarea:focus, select:focus {
+    outline: none;
+    box-shadow: 0 0 0 1px #ffb77d;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  [role='button']:focus-visible,
+  input:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(255, 183, 125, 0.45);
+  }
+
+  .nav-item {
+    @apply px-4 py-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors duration-200 flex items-center gap-3 cursor-pointer;
+  }
+
+  .nav-item-active {
+    @apply px-4 py-2 text-primary border-r-2 border-primary bg-surface-container-low flex items-center gap-3 cursor-pointer;
+  }
+}
+
+@layer utilities {
+  .font-display-lg {
+    font-family: 'Playfair Display', serif;
+  }
+  .font-headline-md {
+    font-family: 'Playfair Display', serif;
+  }
+  .font-headline-lg {
+    font-family: 'Playfair Display', serif;
+  }
+  .font-body-md {
+    font-family: 'Noto Sans', sans-serif;
+  }
+  .font-body-lg {
+    font-family: 'Noto Sans', sans-serif;
+  }
+  .font-label-md {
+    font-family: 'Noto Sans', sans-serif;
+  }
+  .font-label-sm {
+    font-family: 'Noto Sans', sans-serif;
+  }
+
+  /* ---------------------------------------------------------------
+   * 滚动优化 utilities
+   * ------------------------------------------------------------- */
+
+  /* GPU 加速：将元素提升至独立合成层，减少滚动时的重绘 */
+  .gpu {
+    transform: translateZ(0);
+    will-change: transform;
+  }
+
+  /* 滚动容器：在长列表/时间线中使用
+   * - contain: 隔离布局/样式/绘制，减少重排范围
+   * - transform: 触发 GPU
+   * - will-change: 提示合成器提前优化
+   * - touch-action: 让浏览器接管触摸手势，避免 passive listener 误判
+   * - overscroll-behavior: contain：到边界时不把滚动事件传给父级
+   */
+  .scroll-optimized {
+    contain: layout style paint;
+    transform: translateZ(0);
+    will-change: scroll-position;
+    touch-action: pan-x pan-y;
+    overscroll-behavior: contain;
+  }
+
+  /* 横向胶片轨：proximity snap（只在接近边界时吸附） + 隐藏滚动条
+   * - proximity 而非 mandatory：用户可以自由停在中间位置，只在接近边界时吸附
+   * - 在 10+ 项的胶片轨上 mandatory 体验过强，会强制每翻一格
+   */
+  .filmstrip {
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scroll-behavior: smooth;
+  }
+  .filmstrip > * {
+    scroll-snap-align: start;
+  }
+
+  /* 离屏内容自动跳过渲染：用于长列表/卡片墙 */
+  .cv-auto {
+    content-visibility: auto;
+    contain-intrinsic-size: 1px 400px;
+  }
+
+  /* 滚动条固定宽度占位，避免滚动条出现造成的横向 layout shift */
+  .scrollbar-stable {
+    scrollbar-gutter: stable;
+  }
+}
