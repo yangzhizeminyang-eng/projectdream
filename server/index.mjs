@@ -2031,8 +2031,14 @@ async function enqueueLipSyncJob(userId, storyboardId, body = {}) {
   const [audioRows] = await db.execute(
     `SELECT * FROM audio_assets
      WHERE storyboard_id = ? AND track_type = 'dialogue' AND status = 'confirmed'
-     ORDER BY confirmed_at DESC, id DESC LIMIT 1`,
-    [storyboardId],
+     ORDER BY CASE
+       WHEN character_id = ? THEN 0
+       WHEN character_id IS NULL THEN 1
+       ELSE 2
+     END ASC,
+       confirmed_at DESC, id DESC
+     LIMIT 1`,
+    [storyboardId, shot.character_id],
   )
   const audio = audioRows[0]
   if (!audio) {
@@ -2041,7 +2047,11 @@ async function enqueueLipSyncJob(userId, storyboardId, body = {}) {
     throw error
   }
   if (audio.character_id && Number(audio.character_id) !== Number(shot.character_id)) {
-    const error = new Error('当前对白音频角色与分镜角色不一致，请先统一角色绑定')
+    const shotCharacter = shot.resolved_character_name || shot.character_name || `角色 ${shot.character_id}`
+    const audioCharacter = audio.character_name || `角色 ${audio.character_id}`
+    const error = new Error(
+      `当前分镜绑定的说话人是“${shotCharacter}”，但已确认对白音频属于“${audioCharacter}”。请先在分镜编辑页把当前分镜绑定到真正说话的人，或在音频页为“${shotCharacter}”重新生成并确认对白音频。多人对白请先使用“AI 拆分多人对白”，按对白从上到下拆成单人说话分镜。`,
+    )
     error.statusCode = 409
     throw error
   }

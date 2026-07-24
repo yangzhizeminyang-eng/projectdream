@@ -174,6 +174,19 @@ async function requestJson(url, options, config, label) {
   return payload
 }
 
+async function fetchWithRetry(url, options, attempts = 3) {
+  let lastError = null
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fetch(url, options)
+    } catch (error) {
+      lastError = error
+      if (attempt < attempts) await sleep(1200 * attempt)
+    }
+  }
+  throw lastError
+}
+
 function assertToApiProvider(config) {
   if (config.provider !== 'toapi') {
     throw new Error(`Unsupported lip-sync provider: ${config.provider}`)
@@ -227,20 +240,24 @@ export async function uploadDashScopeLipSyncFile({
 
   let response
   try {
-    response = await fetch(uploadHost, {
-      method: 'POST',
-      body: form,
-      signal: AbortSignal.timeout(config.requestTimeoutMs),
-    })
+    response = await fetchWithRetry(
+      uploadHost,
+      {
+        method: 'POST',
+        body: form,
+        signal: AbortSignal.timeout(config.requestTimeoutMs),
+      },
+      3,
+    )
   } catch (error) {
     throw new Error(
-      `DashScope lip-sync file upload failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+      `口型素材上传失败：网络连接被中断，请稍后重试，或检查 DashScope 密钥、网络代理和阿里 OSS 上传访问。原始错误：${error instanceof Error ? error.message : 'unknown error'}`,
     )
   }
   const responseText = await response.text()
   if (!response.ok) {
     throw new Error(
-      `DashScope lip-sync file upload failed: ${responseText.slice(0, 400) || `HTTP ${response.status}`}`,
+      `口型素材上传失败：DashScope 临时存储返回 ${responseText.slice(0, 400) || `HTTP ${response.status}`}`,
     )
   }
   return {

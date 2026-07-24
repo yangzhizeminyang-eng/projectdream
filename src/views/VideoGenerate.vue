@@ -9,8 +9,10 @@ import {
   getGenerationJob,
   getModelSettings,
   getStoryboard,
+  listProjectAudio,
   listShotImages,
   listStoryboardVideos,
+  type AudioAssetDTO,
   type ImageAssetDTO,
   type StoryboardDTO,
   type VideoAssetDTO,
@@ -39,6 +41,7 @@ const confirmedImage = ref<ImageAssetDTO | null>(null)
 const confirmedStartFrame = ref<ImageAssetDTO | null>(null)
 const confirmedEndFrame = ref<ImageAssetDTO | null>(null)
 const videos = ref<VideoAssetDTO[]>([])
+const dialogueAudios = ref<AudioAssetDTO[]>([])
 const selectedVideoId = ref<number | null>(null)
 
 const motionMode = ref('PAN')
@@ -76,6 +79,78 @@ const motionBaseVideo = computed<VideoAssetDTO | null>(
 )
 
 const canLipSyncMotionVideo = computed(() => lipSyncProvider.value.toLowerCase() === 'dashscope')
+
+const confirmedDialogueAudios = computed(() =>
+  dialogueAudios.value
+    .filter(
+      (item) =>
+        item.status === 'confirmed' &&
+        item.trackType === 'dialogue' &&
+        Number(item.storyboardId || 0) === Number(storyboardId.value),
+    )
+    .sort((a, b) => Number(b.id) - Number(a.id)),
+)
+
+const confirmedDialogueAudio = computed<AudioAssetDTO | null>(() => {
+  const currentCharacterId = Number(storyboard.value?.characterId || 0)
+  const matched = confirmedDialogueAudios.value.find(
+    (item) => currentCharacterId && Number(item.characterId || 0) === currentCharacterId,
+  )
+  return matched || confirmedDialogueAudios.value[0] || null
+})
+
+const lipSyncSpeakerName = computed(() =>
+  String(storyboard.value?.characterName || '').trim() || '未绑定说话角色',
+)
+
+const audioSpeakerName = computed(() =>
+  String(confirmedDialogueAudio.value?.characterName || '').trim() || '未确认对白音频',
+)
+
+const audioRoleMismatch = computed(() => {
+  const shotCharacterId = Number(storyboard.value?.characterId || 0)
+  const audioCharacterId = Number(confirmedDialogueAudio.value?.characterId || 0)
+  return Boolean(shotCharacterId && audioCharacterId && shotCharacterId !== audioCharacterId)
+})
+
+const dialogueTurns = computed(() => {
+  const text = String(storyboard.value?.dialogueText || '').trim()
+  if (!text) return []
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const turns = lines
+    .map((line, index) => {
+      const match = line.match(/^【?([^：:]{1,30})】?[：:]\s*(.+)$/)
+      if (!match) return null
+      return { index: index + 1, speaker: String(match[1] || '').trim(), text: String(match[2] || '').trim() }
+    })
+    .filter((item): item is { index: number; speaker: string; text: string } => Boolean(item))
+  if (turns.length) return turns
+  return storyboard.value?.characterName
+    ? [{ index: 1, speaker: storyboard.value.characterName, text }]
+    : []
+})
+
+const hasMultiSpeakerDialogue = computed(() => {
+  const speakers = new Set(dialogueTurns.value.map((item) => item.speaker).filter(Boolean))
+  return speakers.size > 1
+})
+
+const lipSyncBlockedReason = computed(() => {
+  if (!storyboard.value?.characterId) return '当前分镜还没有绑定说话角色，请先回分镜编辑页选择说话人。'
+  if (!confirmedDialogueAudio.value) return '当前分镜还没有已确认对白音频，请先到音频页生成并确认对白。'
+  if (audioRoleMismatch.value) {
+    return `当前分镜说话人是“${lipSyncSpeakerName.value}”，但已确认音频属于“${audioSpeakerName.value}”，请先统一角色绑定。`
+  }
+  if (hasMultiSpeakerDialogue.value) {
+    return '当前对白里识别到多个说话人，请先回分镜编辑页点击“AI 拆分多人对白”，再逐条生成音频和口型。'
+  }
+  if (motionBaseVideo.value && !canLipSyncMotionVideo.value) {
+    return '当前口型服务不支持给动作视频加口型，请在 AI 设置里把口型服务切换为 DashScope。'
+  }
+  return ''
+})
+
+const canGenerateLipSync = computed(() => Boolean(confirmedImage.value && !lipSyncing.value && !lipSyncBlockedReason.value))
 
 const lipSyncHelperText = computed(() => {
   if (!motionBaseVideo.value) {
@@ -124,6 +199,13 @@ function backToStoryboardEditor(): void {
 function goToFrameModule(): void {
   router.push({
     path: '/workspace/frame/result',
+    query: buildQuery(),
+  })
+}
+
+function goToAudioModule(): void {
+  router.push({
+    path: '/workspace/audio',
     query: buildQuery(),
   })
 }
@@ -198,12 +280,14 @@ async function loadPage(): Promise<void> {
 
     if (!confirmed) {
       videos.value = []
+      dialogueAudios.value = []
       selectedVideoId.value = null
       pageState.value = 'missing-image'
       return
     }
 
-    await refreshVideos()
+    const [audioItems] = await Promise.all([listProjectAudio(projectId.value), refreshVideos()])
+    dialogueAudios.value = audioItems
     pageState.value = 'ready'
   } catch (error) {
     errorMsg.value = error instanceof Error ? error.message : '视频模块加载失败'
@@ -253,25 +337,29 @@ async function pollLipSyncJob(jobId: number): Promise<void> {
       lipSyncing.value = false
       lipSyncProgress.value = 100
       await refreshVideos()
+      errorMsg.value = ''
       infoMsg.value = '对白口型视频已生成并设为当前主版本'
       return
     }
     if (job.status === 'failed' || job.status === 'canceled') {
       lipSyncing.value = false
+      infoMsg.value = ''
       errorMsg.value = job.errorText || '对白口型同步失败'
       return
     }
     lipSyncTimer = setTimeout(() => void pollLipSyncJob(jobId), 5000)
   } catch (error) {
     lipSyncing.value = false
+    infoMsg.value = ''
     errorMsg.value = error instanceof Error ? error.message : '口型任务状态查询失败'
   }
 }
 
 async function onGenerateLipSync(): Promise<void> {
   if (!storyboardId.value || !confirmedImage.value || lipSyncing.value) return
-  if (motionBaseVideo.value && !canLipSyncMotionVideo.value) {
-    errorMsg.value = '当前口型服务不支持给动作视频加口型，请在 AI 设置里把口型服务切换为 DashScope。'
+  if (lipSyncBlockedReason.value) {
+    errorMsg.value = lipSyncBlockedReason.value
+    infoMsg.value = ''
     return
   }
   lipSyncing.value = true
@@ -502,6 +590,47 @@ onBeforeUnmount(() => {
             <input v-model="modelName" type="text" class="field-input" />
           </label>
 
+          <div class="lip-sync-check" :class="{ blocked: lipSyncBlockedReason }">
+            <div class="check-head">
+              <div>
+                <span class="check-kicker">口型检查</span>
+                <strong>{{ lipSyncBlockedReason ? '需要先修正' : '可以生成口型' }}</strong>
+              </div>
+              <span class="status-badge" :class="{ confirmed: !lipSyncBlockedReason }">
+                {{ lipSyncProvider || '未读取服务商' }}
+              </span>
+            </div>
+
+            <div class="check-grid">
+              <div>
+                <span>当前分镜说话人</span>
+                <b>{{ lipSyncSpeakerName }}</b>
+              </div>
+              <div>
+                <span>已确认对白音频</span>
+                <b>{{ audioSpeakerName }}</b>
+              </div>
+            </div>
+
+            <p v-if="lipSyncBlockedReason" class="check-warning">{{ lipSyncBlockedReason }}</p>
+            <p v-else class="check-copy">口型只会驱动当前分镜绑定的说话人，其他同框角色作为反应人物。</p>
+
+            <div v-if="dialogueTurns.length" class="dialogue-order">
+              <span>对白顺序按文本从上到下执行</span>
+              <ol>
+                <li v-for="turn in dialogueTurns.slice(0, 4)" :key="`${turn.index}-${turn.speaker}`">
+                  <b>{{ turn.speaker }}</b>
+                  <em>{{ turn.text }}</em>
+                </li>
+              </ol>
+            </div>
+
+            <div class="check-actions">
+              <button class="ghost-btn compact" type="button" @click="backToStoryboardEditor">回分镜编辑</button>
+              <button class="ghost-btn compact" type="button" @click="goToAudioModule">去音频页</button>
+            </div>
+          </div>
+
           <button class="primary-btn w-full" type="button" :disabled="generating" @click="onGenerate">
             {{ generating ? '生成中...' : '开始生成视频' }}
           </button>
@@ -509,7 +638,7 @@ onBeforeUnmount(() => {
           <button
             class="ghost-btn mt-3 w-full"
             type="button"
-            :disabled="lipSyncing"
+            :disabled="!canGenerateLipSync"
             @click="onGenerateLipSync"
           >
             {{
@@ -757,6 +886,107 @@ onBeforeUnmount(() => {
   line-height: 1.6;
 }
 
+.lip-sync-check {
+  margin: 16px 0;
+  border: 1px solid rgba(74, 222, 128, 0.36);
+  background: rgba(20, 83, 45, 0.13);
+  padding: 14px;
+}
+
+.lip-sync-check.blocked {
+  border-color: rgba(248, 113, 113, 0.44);
+  background: rgba(127, 29, 29, 0.14);
+}
+
+.check-head,
+.check-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.check-kicker {
+  display: block;
+  color: #c9ab83;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.check-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.check-grid > div {
+  border: 1px solid #5a4938;
+  background: rgba(15, 16, 15, 0.76);
+  padding: 10px;
+}
+
+.check-grid span,
+.dialogue-order > span {
+  display: block;
+  color: #c9ab83;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+
+.check-grid b,
+.dialogue-order b {
+  color: #f4ede5;
+}
+
+.check-warning,
+.check-copy {
+  margin: 12px 0 0;
+  color: #fecaca;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.check-copy {
+  color: #bbf7d0;
+}
+
+.dialogue-order {
+  margin-top: 12px;
+  border-top: 1px solid rgba(141, 111, 74, 0.55);
+  padding-top: 12px;
+}
+
+.dialogue-order ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.dialogue-order li {
+  margin-top: 6px;
+  color: #f4ede5;
+}
+
+.dialogue-order em {
+  display: block;
+  color: #b79f84;
+  font-style: normal;
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+.check-actions {
+  margin-top: 12px;
+  justify-content: flex-start;
+}
+
+.compact {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
 .result-panel {
   margin-top: 4px;
 }
@@ -943,6 +1173,10 @@ onBeforeUnmount(() => {
   }
 
   .meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .check-grid {
     grid-template-columns: 1fr;
   }
 }
