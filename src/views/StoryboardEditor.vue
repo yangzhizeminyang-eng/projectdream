@@ -405,6 +405,25 @@ function cancelSwitchShot(): void {
   pendingRouteChange.value = null
 }
 
+function buildDraftPayload() {
+  return {
+    shotType: draft.value.shotType,
+    cameraAngle: draft.value.cameraAngle,
+    composition: draft.value.composition,
+    durationSeconds: Number(draft.value.durationSeconds) || 0,
+    characterId: draft.value.characterId,
+    characterName: draft.value.characterName,
+    actionText: draft.value.actionText,
+    dialogueText: draft.value.dialogueText,
+    visualPrompt: draft.value.visualPrompt,
+    startVisualPrompt: draft.value.startVisualPrompt,
+    endVisualPrompt: draft.value.endVisualPrompt,
+    imageUrl: draft.value.imageUrl,
+    endImageUrl: draft.value.endImageUrl,
+    status: draft.value.status,
+  }
+}
+
 /**
  * @description 保存分镜修改
  *              1) snapshot 防御：保存中切换镜头或路由，旧回包不污染 shot
@@ -424,22 +443,7 @@ async function onSave(): Promise<void> {
   errorMsg.value = ''
   infoMsg.value = ''
   try {
-    const updated = await updateStoryboard(shot.value.id, {
-      shotType: draft.value.shotType,
-      cameraAngle: draft.value.cameraAngle,
-      composition: draft.value.composition,
-      durationSeconds: Number(draft.value.durationSeconds) || 0,
-      characterId: draft.value.characterId,
-      characterName: draft.value.characterName,
-      actionText: draft.value.actionText,
-      dialogueText: draft.value.dialogueText,
-      visualPrompt: draft.value.visualPrompt,
-      startVisualPrompt: draft.value.startVisualPrompt,
-      endVisualPrompt: draft.value.endVisualPrompt,
-      imageUrl: draft.value.imageUrl,
-      endImageUrl: draft.value.endImageUrl,
-      status: draft.value.status,
-    })
+    const updated = await updateStoryboard(shot.value.id, buildDraftPayload())
     if (isContextChanged(snap)) return
     // 二次保险：比对更新项的 id 与发请求时的 id
     if (updated.id !== targetShotId) return
@@ -530,15 +534,25 @@ async function markDone(): Promise<void> {
 
 async function onOptimizeKeyframes(): Promise<void> {
   if (!shot.value || saving.value || markingDone.value || optimizingKeyframes.value) return
+  const snap = snapshotContext()
+  const targetShotId = shot.value.id
   optimizingKeyframes.value = true
   errorMsg.value = ''
   infoMsg.value = ''
   try {
-    const result = await optimizeStoryboardKeyframes(shot.value.id)
+    if (isDraftDirty.value) {
+      const saved = await updateStoryboard(targetShotId, buildDraftPayload())
+      if (isContextChanged(snap) || saved.id !== targetShotId) return
+      shot.value = saved
+      syncDraftFromShot(saved)
+      siblingShots.value = siblingShots.value.map((s) => (s.id === saved.id ? saved : s))
+    }
+    const result = await optimizeStoryboardKeyframes(targetShotId)
+    if (isContextChanged(snap) || result.storyboard.id !== targetShotId) return
     shot.value = result.storyboard
     syncDraftFromShot(result.storyboard)
     siblingShots.value = siblingShots.value.map((s) => (s.id === result.storyboard.id ? result.storyboard : s))
-    infoMsg.value = result.notes || '已根据动作自动生成起始帧和结束帧提示词'
+    infoMsg.value = result.notes || '已保存当前分镜，并根据动作自动生成起始帧和结束帧提示词'
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : 'AI 优化两帧提示词失败'
   } finally {
@@ -1003,6 +1017,9 @@ onMounted(() => {
                   <h2 class="mt-1 text-base font-bold text-on-surface">用起始帧和结束帧控制普通视频动作</h2>
                   <p class="mt-1 text-xs leading-relaxed text-on-surface-variant">
                     用户只写动作即可，AI 会把动作整理成首尾两帧；生成视频时优先使用起始帧，结束帧作为动作终点约束。
+                  </p>
+                  <p class="mt-1 text-xs leading-relaxed text-amber-200/80">
+                    推荐顺序：先拆分多人对白 / 子分镜，再承接上一镜头或生成静帧，最后生成动作视频、对白音频和口型。
                   </p>
                 </div>
                 <div class="flex flex-wrap gap-2 xl:justify-end">

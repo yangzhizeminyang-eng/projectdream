@@ -1624,17 +1624,34 @@ function normalizeDialogueSubShots(rawSubShots, context) {
     .filter((item) => item.characterId && item.dialogueText)
 }
 
-async function assertStoryboardHasNoGeneratedAssets(storyboardId) {
+async function assertStoryboardHasNoGeneratedAssets(storyboardId, options = {}) {
+  const allowContinuityStartImage = Boolean(options.allowContinuityStartImage)
   const [assetRows] = await db.execute(
     `SELECT
        (SELECT COUNT(*) FROM image_assets WHERE storyboard_id = ?) AS imageCount,
+       (SELECT COUNT(*) FROM image_assets
+        WHERE storyboard_id = ? AND frame_role = 'start' AND prompt_snapshot LIKE '承接上一镜头%') AS continuityStartImageCount,
        (SELECT COUNT(*) FROM video_assets WHERE storyboard_id = ?) AS videoCount,
        (SELECT COUNT(*) FROM audio_assets WHERE storyboard_id = ?) AS audioCount`,
-    [storyboardId, storyboardId, storyboardId],
+    [storyboardId, storyboardId, storyboardId, storyboardId],
   )
   const assetInfo = assetRows[0] || {}
-  if (Number(assetInfo.imageCount || 0) || Number(assetInfo.videoCount || 0) || Number(assetInfo.audioCount || 0)) {
-    const error = new Error('当前分镜已经有图片、视频或音频素材。请在生成素材前拆分，避免素材和角色口型错位。')
+  const imageCount = Number(assetInfo.imageCount || 0)
+  const continuityStartImageCount = Number(assetInfo.continuityStartImageCount || 0)
+  const videoCount = Number(assetInfo.videoCount || 0)
+  const audioCount = Number(assetInfo.audioCount || 0)
+  const onlyContinuityStartImage =
+    allowContinuityStartImage &&
+    imageCount > 0 &&
+    imageCount === continuityStartImageCount &&
+    videoCount === 0 &&
+    audioCount === 0
+  if ((imageCount || videoCount || audioCount) && !onlyContinuityStartImage) {
+    const error = new Error(
+      videoCount || audioCount
+        ? '当前分镜已经有视频或音频素材，不能再拆分。正确流程是先拆分多人对白/子分镜，再生成静帧、动作视频、对白音频和口型视频。'
+        : '当前分镜已经有生成图片素材，不能再拆分。只有“承接上一镜头”的起始帧允许在拆分时保留到第一条子分镜。请先确认流程：拆分 -> 承接/生成静帧 -> 生成视频/音频 -> 口型。'
+    )
     error.statusCode = 409
     throw error
   }
@@ -1644,7 +1661,7 @@ async function splitStoryboardIntoSubShots(userId, storyboardId) {
   const context = await loadStoryboardDirectorContext(userId, storyboardId)
   if (!context) return null
 
-  await assertStoryboardHasNoGeneratedAssets(storyboardId)
+  await assertStoryboardHasNoGeneratedAssets(storyboardId, { allowContinuityStartImage: true })
 
   let rawSubShots = null
   try {
@@ -1712,7 +1729,7 @@ async function splitStoryboardIntoSubShots(userId, storyboardId) {
        SET shot_type = ?, camera_angle = ?, composition = ?, duration_seconds = ?,
            action_text = ?, dialogue_text = ?, visual_prompt = ?,
            start_visual_prompt = ?, end_visual_prompt = ?,
-           image_url = NULL, end_image_url = NULL, video_url = NULL,
+           image_url = ?, end_image_url = NULL, video_url = NULL,
            status = 'pending', updated_at = NOW()
        WHERE id = ?`,
       [
@@ -1725,6 +1742,7 @@ async function splitStoryboardIntoSubShots(userId, storyboardId) {
         first.visualPrompt,
         first.startVisualPrompt,
         first.endVisualPrompt,
+        shot.image_url || null,
         storyboardId,
       ],
     )
@@ -1779,7 +1797,7 @@ async function splitStoryboardIntoSubShots(userId, storyboardId) {
 async function splitStoryboardDialogueTurns(userId, storyboardId) {
   const context = await loadStoryboardDirectorContext(userId, storyboardId)
   if (!context) return null
-  await assertStoryboardHasNoGeneratedAssets(storyboardId)
+  await assertStoryboardHasNoGeneratedAssets(storyboardId, { allowContinuityStartImage: true })
 
   const fallbackTurns = fallbackDialogueSubShots(context)
   if (fallbackTurns.length < 2) {
@@ -1878,7 +1896,7 @@ async function splitStoryboardDialogueTurns(userId, storyboardId) {
            character_id = ?, character_name = ?,
            action_text = ?, dialogue_text = ?, visual_prompt = ?,
            start_visual_prompt = ?, end_visual_prompt = ?,
-           image_url = NULL, end_image_url = NULL, video_url = NULL,
+           image_url = ?, end_image_url = NULL, video_url = NULL,
            status = 'pending', updated_at = NOW()
        WHERE id = ?`,
       [
@@ -1893,6 +1911,7 @@ async function splitStoryboardDialogueTurns(userId, storyboardId) {
         first.visualPrompt,
         first.startVisualPrompt,
         first.endVisualPrompt,
+        shot.image_url || null,
         storyboardId,
       ],
     )
