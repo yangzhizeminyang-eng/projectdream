@@ -1,4 +1,28 @@
 const AGE_GROUP_ORDER = ['child', 'teen', 'young_adult', 'middle_aged', 'senior']
+const SILENT_DIALOGUE = /^(?:\(\s*无对白\s*\)|（\s*无对白\s*）|无对白|无台词|静默|no dialogue)$/i
+
+export function getDialogueSpeakerNames(shots = [], knownCharacterNames = []) {
+  const knownNames = [...new Set(knownCharacterNames.map((name) => String(name || '').trim()).filter(Boolean))]
+  const speakers = new Set()
+  for (const shot of Array.isArray(shots) ? shots : []) {
+    const dialogue = String(shot.dialogueText || '').trim()
+    if (!dialogue || SILENT_DIALOGUE.test(dialogue)) continue
+    let foundSpeaker = false
+    for (const name of knownNames) {
+      const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const namedDialogue = new RegExp(`(?:^|[\\n。！？!?；;])\\s*${escapedName}\\s*(?:[（(][^）)\\n]{0,60}[）)])?\\s*[：:]`)
+      if (namedDialogue.test(dialogue)) {
+        speakers.add(name)
+        foundSpeaker = true
+      }
+    }
+    if (!foundSpeaker) {
+      const characterName = String(shot.characterName || '').trim()
+      if (knownNames.includes(characterName)) speakers.add(characterName)
+    }
+  }
+  return [...speakers]
+}
 
 export const CHARACTER_AGE_GROUPS = [
   { value: 'child', label: '儿童（12 岁及以下）' },
@@ -332,6 +356,8 @@ const STYLE_RULES = [
 ]
 
 export function inferCharacterVoiceTraits(character = {}) {
+  // 从角色的年龄、性别、角色标签和文本描述推断音色需求。
+  // 推断结果只用于推荐，不会覆盖用户明确绑定的 voiceProfile。
   const identitySource = [character.name, character.role_tag ?? character.roleTag]
     .filter(Boolean)
     .join('\n')
@@ -391,6 +417,7 @@ function ageDistance(ageGroup, profileAgeGroups) {
 }
 
 export function recommendVoiceProfiles(character, profiles = VOICE_PROFILE_SEEDS, limit = 3) {
+  // 给候选音色打分：性别、年龄段、风格标签匹配越多，排序越靠前。
   const traits = inferCharacterVoiceTraits(character)
   const scored = profiles
     .map(voiceProfileRow)
@@ -435,4 +462,62 @@ export function recommendVoiceProfiles(character, profiles = VOICE_PROFILE_SEEDS
     traits,
     items: scored.slice(0, Math.max(1, Math.min(6, Number(limit) || 3))),
   }
+}
+
+export function resolveCharacterVoiceProfile({
+  character = {},
+  profiles = VOICE_PROFILE_SEEDS,
+  requestedProfileKey = '',
+} = {}) {
+  const activeProfiles = (Array.isArray(profiles) ? profiles : [])
+    .map(voiceProfileRow)
+    .filter((profile) => profile.status === 'active')
+  const traits = inferCharacterVoiceTraits(character)
+  const requestedKey = String(requestedProfileKey || '').trim()
+  const selected = requestedKey
+    ? activeProfiles.find((profile) => profile.profileKey === requestedKey) || null
+    : recommendVoiceProfiles(character, activeProfiles, 1).items[0] || null
+
+  if (!selected) {
+    return {
+      profile: null,
+      traits,
+      error: requestedKey ? '试听音色方案不存在或已停用' : '当前没有可用的角色音色方案',
+    }
+  }
+
+  if (traits.gender && selected.gender !== traits.gender && selected.gender !== 'neutral') {
+    const expectedLabel = traits.gender === 'male' ? '男性' : traits.gender === 'female' ? '女性' : '中性'
+    const actualLabel = selected.gender === 'male' ? '男性' : selected.gender === 'female' ? '女性' : '中性'
+    return {
+      profile: null,
+      traits,
+      error: `${expectedLabel}角色不能绑定${actualLabel}声线，请选择性别匹配的音色`,
+    }
+  }
+
+  return { profile: selected, traits, error: null }
+}
+
+export function isCharacterVoiceReady(character = {}, selectedProfile = null) {
+  const locked = [true, 1, '1'].includes(character?.voice_locked ?? character?.voiceLocked)
+  const voiceDesign = character?.voice_design_json ?? character?.voiceDesign
+  let customVoiceDesign = voiceDesign
+  if (typeof voiceDesign === 'string') {
+    try { customVoiceDesign = JSON.parse(voiceDesign) } catch { customVoiceDesign = null }
+  }
+  const hasDesignedVoice = Boolean(
+    String(character?.voice_setting ?? character?.voiceSetting ?? '').trim()
+    && String(customVoiceDesign?.provider || '').trim()
+    && String(customVoiceDesign?.voiceId || '').trim()
+    && String(customVoiceDesign?.voiceId || '').trim() === String(character?.voice_setting ?? character?.voiceSetting ?? '').trim()
+    && String(customVoiceDesign?.targetModel || customVoiceDesign?.target_model || '').trim(),
+  )
+  const hasVoiceSource = Boolean(
+    selectedProfile
+    || String(character?.voice_profile_key ?? character?.voiceProfileKey ?? '').trim()
+    || String(character?.reference_audio_url ?? character?.referenceAudioUrl ?? '').trim()
+    || hasDesignedVoice,
+  )
+  return locked && hasVoiceSource
 }

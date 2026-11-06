@@ -17,12 +17,13 @@
  *                7) watch 三 query 任一变化触发 loadAll
  *                8) onSave / markDone 三同步：shot / draft / siblingShots
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import WorkspaceLayout from '@/components/WorkspaceLayout.vue'
 import {
   copyPreviousFrameToStoryboard,
   getStoryboard,
+  getStoryboardPerformancePlan,
   listCharacters,
   listStoryboards,
   optimizeStoryboardKeyframes,
@@ -31,6 +32,7 @@ import {
   updateStoryboard,
   type CharacterDTO,
   type StoryboardDTO,
+  type StoryboardPerformancePlanDTO,
 } from '@/api/project'
 import { setWorkspaceContext } from '@/lib/context'
 
@@ -71,12 +73,17 @@ interface ShotDraft {
   shotType: string
   cameraAngle: string
   composition: string
-  durationSeconds: number
+  durationSeconds: number | null
   characterId: number | null
   characterName: string
   actionText: string
   dialogueText: string
   visualPrompt: string
+  shotPurpose: string
+  actingBeat: string
+  audioDirection: string
+  speechDurationPolicy: string
+  reactionShot: boolean
   startVisualPrompt: string
   endVisualPrompt: string
   imageUrl: string
@@ -87,12 +94,17 @@ const draft = ref<ShotDraft>({
   shotType: '',
   cameraAngle: '',
   composition: '',
-  durationSeconds: 0,
+  durationSeconds: null,
   characterId: null,
   characterName: '',
   actionText: '',
   dialogueText: '',
   visualPrompt: '',
+  shotPurpose: 'story',
+  actingBeat: '',
+  audioDirection: '',
+  speechDurationPolicy: 'preserve',
+  reactionShot: false,
   startVisualPrompt: '',
   endVisualPrompt: '',
   imageUrl: '',
@@ -106,6 +118,10 @@ const optimizingKeyframes = ref(false)
 const copyingContinuity = ref(false)
 const splittingDialogue = ref(false)
 const splittingSubShots = ref(false)
+const loadingPerformancePlan = ref(false)
+const applyingPerformancePlan = ref(false)
+const performancePlanVisible = ref(false)
+const performancePlan = ref<StoryboardPerformancePlanDTO | null>(null)
 const errorMsg = ref('')
 const infoMsg = ref('')
 
@@ -185,6 +201,11 @@ const isDraftDirty = computed<boolean>(() => {
   if ((draft.value.actionText || '') !== (s.actionText || '')) return true
   if ((draft.value.dialogueText || '') !== (s.dialogueText || '')) return true
   if ((draft.value.visualPrompt || '') !== (s.visualPrompt || '')) return true
+  if ((draft.value.shotPurpose || '') !== (s.shotPurpose || 'story')) return true
+  if ((draft.value.actingBeat || '') !== (s.actingBeat || '')) return true
+  if ((draft.value.audioDirection || '') !== (s.audioDirection || '')) return true
+  if ((draft.value.speechDurationPolicy || 'preserve') !== (s.speechDurationPolicy || 'preserve')) return true
+  if (Boolean(draft.value.reactionShot) !== Boolean(s.reactionShot)) return true
   if ((draft.value.startVisualPrompt || '') !== (s.startVisualPrompt || '')) return true
   if ((draft.value.endVisualPrompt || '') !== (s.endVisualPrompt || '')) return true
   if ((draft.value.imageUrl || '') !== (s.imageUrl || '')) return true
@@ -204,12 +225,17 @@ function syncDraftFromShot(s: StoryboardDTO): void {
     shotType: s.shotType || '',
     cameraAngle: s.cameraAngle || '',
     composition: s.composition || '',
-    durationSeconds: s.durationSeconds || 0,
+    durationSeconds: Number(s.durationSeconds) > 0 ? Number(s.durationSeconds) : null,
     characterId: s.characterId || null,
     characterName: s.characterName || '',
     actionText: s.actionText || '',
     dialogueText: s.dialogueText || '',
     visualPrompt: s.visualPrompt || '',
+    shotPurpose: s.shotPurpose || 'story',
+    actingBeat: s.actingBeat || '',
+    audioDirection: s.audioDirection || '',
+    speechDurationPolicy: s.speechDurationPolicy || 'preserve',
+    reactionShot: Boolean(s.reactionShot),
     startVisualPrompt: s.startVisualPrompt || '',
     endVisualPrompt: s.endVisualPrompt || '',
     imageUrl: s.imageUrl || '',
@@ -248,6 +274,7 @@ async function fetchShots(sceneId: number): Promise<StoryboardDTO[]> {
  * @returns {Promise<void>}
  */
 async function loadAll(): Promise<void> {
+  // 先加载当前镜头，再加载同场景镜头和角色，最后一次性提交页面状态。
   if (!projectId.value) {
     pageState.value = 'missing-project'
     return
@@ -281,6 +308,8 @@ async function loadAll(): Promise<void> {
     siblingShots.value = list
     characters.value = projectCharacters
     syncDraftFromShot(s)
+    performancePlan.value = null
+    performancePlanVisible.value = false
     pageState.value = 'ready'
     setWorkspaceContext({
       projectId: projectId.value,
@@ -382,12 +411,17 @@ function resetDraftToEmpty(): void {
     shotType: '',
     cameraAngle: '',
     composition: '',
-    durationSeconds: 0,
+    durationSeconds: null,
     characterId: null,
     characterName: '',
     actionText: '',
     dialogueText: '',
     visualPrompt: '',
+    shotPurpose: 'story',
+    actingBeat: '',
+    audioDirection: '',
+    speechDurationPolicy: 'preserve',
+    reactionShot: false,
     startVisualPrompt: '',
     endVisualPrompt: '',
     imageUrl: '',
@@ -410,18 +444,31 @@ function buildDraftPayload() {
     shotType: draft.value.shotType,
     cameraAngle: draft.value.cameraAngle,
     composition: draft.value.composition,
-    durationSeconds: Number(draft.value.durationSeconds) || 0,
+    durationSeconds: Number(draft.value.durationSeconds),
     characterId: draft.value.characterId,
     characterName: draft.value.characterName,
     actionText: draft.value.actionText,
     dialogueText: draft.value.dialogueText,
     visualPrompt: draft.value.visualPrompt,
+    shotPurpose: draft.value.shotPurpose,
+    actingBeat: draft.value.actingBeat,
+    audioDirection: draft.value.audioDirection,
+    speechDurationPolicy: draft.value.speechDurationPolicy,
+    reactionShot: draft.value.reactionShot,
     startVisualPrompt: draft.value.startVisualPrompt,
     endVisualPrompt: draft.value.endVisualPrompt,
     imageUrl: draft.value.imageUrl,
     endImageUrl: draft.value.endImageUrl,
     status: draft.value.status,
   }
+}
+
+function validateStoryboardDurationDraft(): string | null {
+  const duration = draft.value.durationSeconds
+  if (!Number.isInteger(duration) || Number(duration) < 4 || Number(duration) > 15) {
+    return '镜头时长需为 4-15 秒整数，符合当前视频模型的生成范围。'
+  }
+  return null
 }
 
 /**
@@ -432,7 +479,14 @@ function buildDraftPayload() {
  * @returns {Promise<void>}
  */
 async function onSave(): Promise<void> {
+  // 保存时同时维护“当前镜头、编辑草稿、左侧镜头列表”三份前端状态，避免界面显示不一致。
   if (saving.value || markingDone.value || !shot.value) return
+  const durationError = validateStoryboardDurationDraft()
+  if (durationError) {
+    errorMsg.value = durationError
+    infoMsg.value = ''
+    return
+  }
   if (!isDraftDirty.value) {
     infoMsg.value = '未检测到修改'
     return
@@ -473,6 +527,12 @@ async function onSave(): Promise<void> {
  */
 async function markDone(): Promise<void> {
   if (saving.value || markingDone.value || !shot.value) return
+  const durationError = validateStoryboardDurationDraft()
+  if (durationError) {
+    errorMsg.value = durationError
+    infoMsg.value = ''
+    return
+  }
   if (shot.value.status === 'done' && draft.value.status === 'done' && !isDraftDirty.value) {
     infoMsg.value = '当前镜头已经是已完成状态'
     return
@@ -492,6 +552,11 @@ async function markDone(): Promise<void> {
     actionText?: string
     dialogueText?: string
     visualPrompt?: string
+    shotPurpose?: string
+    actingBeat?: string
+    audioDirection?: string
+    speechDurationPolicy?: string
+    reactionShot?: boolean
     startVisualPrompt?: string
     endVisualPrompt?: string
     imageUrl?: string
@@ -502,12 +567,17 @@ async function markDone(): Promise<void> {
     payload.shotType = draft.value.shotType
     payload.cameraAngle = draft.value.cameraAngle
     payload.composition = draft.value.composition
-    payload.durationSeconds = Number(draft.value.durationSeconds) || 0
+    payload.durationSeconds = Number(draft.value.durationSeconds)
     payload.characterId = draft.value.characterId
     payload.characterName = draft.value.characterName
     payload.actionText = draft.value.actionText
     payload.dialogueText = draft.value.dialogueText
     payload.visualPrompt = draft.value.visualPrompt
+    payload.shotPurpose = draft.value.shotPurpose
+    payload.actingBeat = draft.value.actingBeat
+    payload.audioDirection = draft.value.audioDirection
+    payload.speechDurationPolicy = draft.value.speechDurationPolicy
+    payload.reactionShot = draft.value.reactionShot
     payload.startVisualPrompt = draft.value.startVisualPrompt
     payload.endVisualPrompt = draft.value.endVisualPrompt
     payload.imageUrl = draft.value.imageUrl
@@ -533,6 +603,7 @@ async function markDone(): Promise<void> {
 }
 
 async function onOptimizeKeyframes(): Promise<void> {
+  // 优化两帧前先保存未提交的草稿，保证 AI 看到的是用户刚编辑的最新内容。
   if (!shot.value || saving.value || markingDone.value || optimizingKeyframes.value) return
   const snap = snapshotContext()
   const targetShotId = shot.value.id
@@ -552,7 +623,9 @@ async function onOptimizeKeyframes(): Promise<void> {
     shot.value = result.storyboard
     syncDraftFromShot(result.storyboard)
     siblingShots.value = siblingShots.value.map((s) => (s.id === result.storyboard.id ? result.storyboard : s))
-    infoMsg.value = result.notes || '已保存当前分镜，并根据动作自动生成起始帧和结束帧提示词'
+    infoMsg.value = result.notes
+      ? `AI 优化完成，起始帧和结束帧提示词已自动保存。${result.notes}`
+      : 'AI 优化完成，起始帧和结束帧提示词已自动保存'
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : 'AI 优化两帧提示词失败'
   } finally {
@@ -561,6 +634,7 @@ async function onOptimizeKeyframes(): Promise<void> {
 }
 
 async function onCopyPreviousFrame(): Promise<void> {
+  // 这个操作把上一镜头的确认图复制成当前镜头起始帧，用来保持镜头之间的视觉连续性。
   if (!shot.value || saving.value || markingDone.value || copyingContinuity.value) return
   copyingContinuity.value = true
   errorMsg.value = ''
@@ -581,12 +655,47 @@ async function onCopyPreviousFrame(): Promise<void> {
 }
 
 async function onSplitSubShots(): Promise<void> {
-  if (!shot.value || saving.value || markingDone.value || splittingSubShots.value || splittingDialogue.value) return
+  // 先只读预览。预览不会启动模型、不会写库，只有用户确认后才进入真实拆分。
+  if (
+    !shot.value ||
+    saving.value ||
+    markingDone.value ||
+    loadingPerformancePlan.value ||
+    applyingPerformancePlan.value ||
+    splittingDialogue.value
+  ) return
   if (isDraftDirty.value) {
-    errorMsg.value = '拆分子分镜前请先保存当前修改'
+    errorMsg.value = '预览表演节拍前请先保存当前修改'
     infoMsg.value = ''
     return
   }
+  loadingPerformancePlan.value = true
+  errorMsg.value = ''
+  infoMsg.value = ''
+  try {
+    performancePlan.value = await getStoryboardPerformancePlan(shot.value.id)
+    performancePlanVisible.value = true
+    infoMsg.value = performancePlan.value.applyAllowed
+      ? '表演节拍预览已生成，请确认后再执行拆分'
+      : '表演节拍预览已生成，但当前素材状态阻止执行拆分'
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '读取表演节拍规划失败'
+  } finally {
+    loadingPerformancePlan.value = false
+  }
+}
+
+async function onApplyPerformancePlan(): Promise<void> {
+  // 真实拆分只接受刚刚预览且明确允许的计划，避免绕过只读预览直接调用模型。
+  if (
+    !shot.value ||
+    !performancePlan.value?.applyAllowed ||
+    saving.value ||
+    markingDone.value ||
+    applyingPerformancePlan.value ||
+    splittingDialogue.value
+  ) return
+  applyingPerformancePlan.value = true
   splittingSubShots.value = true
   errorMsg.value = ''
   infoMsg.value = ''
@@ -598,15 +707,19 @@ async function onSplitSubShots(): Promise<void> {
       shot.value = current
       syncDraftFromShot(current)
     }
+    performancePlan.value = null
+    performancePlanVisible.value = false
     infoMsg.value = `已拆成 ${result.createdCount} 个短子分镜，后续生成视频会更稳定、更省钱`
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : 'AI 拆分子分镜失败'
   } finally {
+    applyingPerformancePlan.value = false
     splittingSubShots.value = false
   }
 }
 
 async function onSplitDialogueTurns(): Promise<void> {
+  // 多人对白按说话人拆成短镜头，后续口型和视频生成会更容易分别处理。
   if (!shot.value || saving.value || markingDone.value || splittingDialogue.value || splittingSubShots.value) return
   if (isDraftDirty.value) {
     errorMsg.value = '拆分多人对白前请先保存当前修改'
@@ -646,6 +759,133 @@ const statusOptions = [
   { value: 'done', label: '已完成' },
   { value: 'failed', label: '失败' },
 ]
+
+const statusMenuRoot = ref<HTMLElement | null>(null)
+const statusMenuOpen = ref(false)
+const statusMenuIndex = ref(0)
+const fallbackStatusOption = { value: 'pending', label: '等待生成' }
+
+const selectedStatusOption = computed(() => {
+  return statusOptions.find((option) => option.value === draft.value.status) ?? fallbackStatusOption
+})
+
+const activeStatusOption = computed(() => {
+  return statusOptions[statusMenuIndex.value] ?? selectedStatusOption.value
+})
+
+function statusOptionId(value: string): string {
+  return `storyboard-status-option-${value}`
+}
+
+function statusToneClasses(value: string): string {
+  switch (value) {
+    case 'generating':
+      return 'border-primary/70 text-primary'
+    case 'done':
+      return 'border-green-500/60 text-green-300'
+    case 'failed':
+      return 'border-red-500/60 text-red-300'
+    default:
+      return 'border-outline-variant text-on-surface-variant'
+  }
+}
+
+function statusDotClasses(value: string): string {
+  switch (value) {
+    case 'generating':
+      return 'bg-primary'
+    case 'done':
+      return 'bg-green-400'
+    case 'failed':
+      return 'bg-red-400'
+    default:
+      return 'bg-outline'
+  }
+}
+
+function statusOptionClasses(option: { value: string }, index: number): string {
+  const isActive = index === statusMenuIndex.value
+  const isSelected = option.value === draft.value.status
+  const stateClasses = statusToneClasses(option.value)
+  const surfaceClasses = isActive || isSelected
+    ? 'bg-surface-container-high'
+    : 'bg-surface-container-lowest hover:bg-surface-container-high'
+  const emphasisClasses = isSelected ? 'font-semibold' : 'font-normal'
+  return `${stateClasses} ${surfaceClasses} ${emphasisClasses}`
+}
+
+function openStatusMenu(): void {
+  if (saving.value || markingDone.value) return
+  statusMenuIndex.value = Math.max(
+    0,
+    statusOptions.findIndex((option) => option.value === draft.value.status),
+  )
+  statusMenuOpen.value = true
+}
+
+function closeStatusMenu(): void {
+  statusMenuOpen.value = false
+}
+
+function toggleStatusMenu(): void {
+  if (statusMenuOpen.value) {
+    closeStatusMenu()
+  } else {
+    openStatusMenu()
+  }
+}
+
+function chooseStatusOption(value: string): void {
+  const optionIndex = statusOptions.findIndex((option) => option.value === value)
+  const option = statusOptions[optionIndex]
+  if (!option) return
+  draft.value.status = option.value
+  statusMenuIndex.value = optionIndex
+  closeStatusMenu()
+}
+
+function onStatusMenuKeydown(event: KeyboardEvent): void {
+  if (saving.value || markingDone.value) return
+
+  if (event.key === 'Escape') {
+    if (!statusMenuOpen.value) return
+    event.preventDefault()
+    closeStatusMenu()
+    return
+  }
+
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    if (!statusMenuOpen.value) openStatusMenu()
+    const offset = event.key === 'ArrowDown' ? 1 : -1
+    statusMenuIndex.value =
+      (statusMenuIndex.value + offset + statusOptions.length) % statusOptions.length
+    return
+  }
+
+  if (event.key === 'Home' || event.key === 'End') {
+    event.preventDefault()
+    if (!statusMenuOpen.value) openStatusMenu()
+    statusMenuIndex.value = event.key === 'Home' ? 0 : statusOptions.length - 1
+    return
+  }
+
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    if (!statusMenuOpen.value) {
+      openStatusMenu()
+      return
+    }
+    chooseStatusOption(activeStatusOption.value.value)
+  }
+}
+
+function onDocumentPointerDown(event: PointerEvent): void {
+  const target = event.target
+  if (statusMenuRoot.value && target instanceof Node && !statusMenuRoot.value.contains(target)) {
+    closeStatusMenu()
+  }
+}
 
 function onCharacterChanged(): void {
   const selected = characters.value.find((item) => item.id === Number(draft.value.characterId))
@@ -687,19 +927,7 @@ function backToStoryboardList(): void {
 function openVideoGenerate(): void {
   if (!projectId.value || !sceneId.value || !storyboardId.value) return
   router.push({
-    path: '/workspace/video',
-    query: {
-      projectId: String(projectId.value),
-      sceneId: String(sceneId.value),
-      storyboardId: String(storyboardId.value),
-    },
-  })
-}
-
-function openFrameGenerate(): void {
-  if (!projectId.value || !sceneId.value || !storyboardId.value) return
-  router.push({
-    path: '/workspace/frame',
+    path: '/workspace/episodes/studio',
     query: {
       projectId: String(projectId.value),
       sceneId: String(sceneId.value),
@@ -784,6 +1012,11 @@ watch(
 
 onMounted(() => {
   void loadAll()
+  document.addEventListener('pointerdown', onDocumentPointerDown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocumentPointerDown)
 })
 </script>
 
@@ -934,22 +1167,80 @@ onMounted(() => {
               <span class="material-symbols-outlined text-sm">movie</span>
               视频生成
             </button>
-            <button
-              type="button"
-              class="flex items-center gap-2 border border-outline-variant bg-surface px-4 py-2 text-xs font-bold uppercase tracking-widest text-on-surface hover:border-primary hover:text-primary"
-              :disabled="saving || markingDone || !shot"
-              @click="openFrameGenerate"
-            >
-              <span class="material-symbols-outlined text-sm">image</span>
-              画面生成
-            </button>
-            <select
-              v-model="draft.status"
-              class="border border-outline-variant bg-surface px-3 py-2 text-xs uppercase text-on-surface"
-              :disabled="saving || markingDone"
-            >
-              <option v-for="opt in statusOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-            </select>
+            <div ref="statusMenuRoot" class="relative shrink-0" @keydown="onStatusMenuKeydown">
+              <button
+                type="button"
+                role="combobox"
+                aria-label="镜头状态"
+                :aria-expanded="statusMenuOpen"
+                :aria-controls="statusMenuOpen ? 'storyboard-status-listbox' : undefined"
+                :aria-activedescendant="
+                  statusMenuOpen ? statusOptionId(activeStatusOption.value) : undefined
+                "
+                class="flex min-w-[140px] items-center justify-between gap-3 border px-3 py-2 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-50"
+                :class="[
+                  statusToneClasses(selectedStatusOption.value),
+                  statusMenuOpen ? 'border-primary bg-surface-container-high' : 'bg-surface-container-low',
+                ]"
+                :disabled="saving || markingDone"
+                @click="toggleStatusMenu"
+              >
+                <span class="flex min-w-0 items-center gap-2">
+                  <span
+                    aria-hidden="true"
+                    class="h-1.5 w-1.5 shrink-0 rounded-full"
+                    :class="statusDotClasses(selectedStatusOption.value)"
+                  ></span>
+                  <span class="truncate">{{ selectedStatusOption.label }}</span>
+                </span>
+                <span
+                  aria-hidden="true"
+                  class="material-symbols-outlined shrink-0 text-base text-on-surface-variant transition-transform duration-200"
+                  :class="{ 'rotate-180 text-primary': statusMenuOpen }"
+                >
+                  expand_more
+                </span>
+              </button>
+
+              <Transition name="status-menu">
+                <div
+                  v-if="statusMenuOpen"
+                  id="storyboard-status-listbox"
+                  role="listbox"
+                  aria-label="选择镜头状态"
+                  class="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-full min-w-[164px] overflow-hidden border border-outline-variant bg-surface-container-lowest p-1 shadow-[0_16px_34px_rgba(0,0,0,0.42)]"
+                >
+                  <button
+                    v-for="(option, index) in statusOptions"
+                    :id="statusOptionId(option.value)"
+                    :key="option.value"
+                    type="button"
+                    role="option"
+                    :aria-selected="option.value === draft.status"
+                    class="flex w-full items-center justify-between gap-3 border-l-2 px-3 py-2.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50"
+                    :class="statusOptionClasses(option, index)"
+                    @mouseenter="statusMenuIndex = index"
+                    @click="chooseStatusOption(option.value)"
+                  >
+                    <span class="flex items-center gap-2">
+                      <span
+                        aria-hidden="true"
+                        class="h-1.5 w-1.5 shrink-0 rounded-full"
+                        :class="statusDotClasses(option.value)"
+                      ></span>
+                      <span>{{ option.label }}</span>
+                    </span>
+                    <span
+                      v-if="option.value === draft.status"
+                      aria-hidden="true"
+                      class="material-symbols-outlined text-sm text-primary"
+                    >
+                      check
+                    </span>
+                  </button>
+                </div>
+              </Transition>
+            </div>
             <button
               type="button"
               class="flex items-center gap-2 border border-primary/40 bg-primary/5 px-4 py-2 text-xs font-bold uppercase tracking-widest text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1019,7 +1310,7 @@ onMounted(() => {
                     用户只写动作即可，AI 会把动作整理成首尾两帧；生成视频时优先使用起始帧，结束帧作为动作终点约束。
                   </p>
                   <p class="mt-1 text-xs leading-relaxed text-amber-200/80">
-                    推荐顺序：先拆分多人对白 / 子分镜，再承接上一镜头或生成静帧，最后生成动作视频、对白音频和口型。
+                    推荐顺序：先拆分多人对白 / 表演节拍，再承接上一镜头或生成静帧，最后生成动作视频、对白音频和口型；长对白会自动保留语速并补一个无对白反应镜头。
                   </p>
                 </div>
                 <div class="flex flex-wrap gap-2 xl:justify-end">
@@ -1059,13 +1350,119 @@ onMounted(() => {
                   <button
                     type="button"
                     class="flex items-center gap-2 border border-primary/50 bg-primary/10 px-3 py-2 text-xs font-bold text-primary hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="splittingSubShots || splittingDialogue || saving || markingDone"
+                    :disabled="loadingPerformancePlan || applyingPerformancePlan || splittingDialogue || saving || markingDone"
                     @click="onSplitSubShots"
                   >
-                    <span class="material-symbols-outlined text-sm" :class="{ 'animate-spin': splittingSubShots }">
-                      {{ splittingSubShots ? 'progress_activity' : 'splitscreen' }}
+                    <span class="material-symbols-outlined text-sm" :class="{ 'animate-spin': loadingPerformancePlan || applyingPerformancePlan }">
+                      {{ loadingPerformancePlan || applyingPerformancePlan ? 'progress_activity' : 'splitscreen' }}
                     </span>
-                    {{ splittingSubShots ? '拆分中...' : 'AI 拆分子分镜' }}
+                    {{
+                      loadingPerformancePlan
+                        ? '读取规划中...'
+                        : applyingPerformancePlan
+                          ? '拆分中...'
+                          : 'AI 拆分表演节拍'
+                    }}
+                  </button>
+                </div>
+              </div>
+
+              <div
+                v-if="performancePlanVisible && performancePlan"
+                class="mb-4 border border-primary/40 bg-surface-container-low p-4"
+              >
+                <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                  <div>
+                    <p class="text-[10px] font-bold uppercase tracking-widest text-primary">表演节拍预览</p>
+                    <h3 class="mt-1 text-sm font-bold text-on-surface">先确认说话镜头，再补反应镜头</h3>
+                    <p class="mt-1 text-xs leading-relaxed text-on-surface-variant">
+                      这是只读预览，不会启动模型、不会写库、不会创建任务。
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    class="border border-outline-variant px-3 py-1.5 text-xs font-bold text-on-surface-variant hover:border-primary hover:text-primary"
+                    @click="performancePlanVisible = false"
+                  >
+                    收起预览
+                  </button>
+                </div>
+
+                <div class="mt-3 grid gap-2 sm:grid-cols-4">
+                  <div class="border border-outline-variant bg-surface px-3 py-2">
+                    <p class="text-[10px] text-on-surface-variant">原始时长</p>
+                    <p class="mt-1 text-sm font-bold text-on-surface">
+                      {{ performancePlan.source.durationSeconds }} 秒
+                    </p>
+                  </div>
+                  <div class="border border-outline-variant bg-surface px-3 py-2">
+                    <p class="text-[10px] text-on-surface-variant">规划总时长</p>
+                    <p class="mt-1 text-sm font-bold text-on-surface">
+                      {{ performancePlan.totalDurationSeconds }} 秒
+                    </p>
+                  </div>
+                  <div class="border border-outline-variant bg-surface px-3 py-2">
+                    <p class="text-[10px] text-on-surface-variant">时长增加</p>
+                    <p class="mt-1 text-sm font-bold text-on-surface">
+                      +{{ performancePlan.durationDeltaSeconds }} 秒
+                    </p>
+                  </div>
+                  <div class="border border-outline-variant bg-surface px-3 py-2">
+                    <p class="text-[10px] text-on-surface-variant">对白语速</p>
+                    <p class="mt-1 text-sm font-bold text-primary">
+                      {{ performancePlan.speechTimingPreserved ? '保留原始语速' : '需要复核' }}
+                    </p>
+                  </div>
+                </div>
+
+                <div class="mt-3 space-y-2">
+                  <div
+                    v-for="(subShot, index) in performancePlan.subShots"
+                    :key="`${subShot.shotPurpose}-${index}`"
+                    class="border border-outline-variant bg-surface px-3 py-3"
+                  >
+                    <div class="flex flex-wrap items-center gap-2 text-xs">
+                      <span class="font-bold text-primary">节拍 {{ index + 1 }}</span>
+                      <span class="border border-outline-variant px-2 py-0.5 text-on-surface-variant">
+                        {{ subShot.shotPurpose === 'reaction' ? '反应镜头' : subShot.shotPurpose === 'insert' ? '细节镜头' : '说话镜头' }}
+                      </span>
+                      <span class="text-on-surface-variant">{{ subShot.durationSeconds }} 秒</span>
+                      <span v-if="subShot.dialogueText" class="text-on-surface-variant">
+                        {{ subShot.dialogueText }}
+                      </span>
+                    </div>
+                    <p class="mt-2 text-xs leading-relaxed text-on-surface-variant">
+                      {{ subShot.actingBeat }}
+                    </p>
+                  </div>
+                </div>
+
+                <div
+                  v-if="performancePlan.applyBlockers.length"
+                  class="mt-3 border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs leading-relaxed text-red-300"
+                >
+                  <p class="font-bold">当前不能执行拆分</p>
+                  <p v-for="blocker in performancePlan.applyBlockers" :key="blocker" class="mt-1">
+                    {{ blocker }}
+                  </p>
+                </div>
+
+                <div class="mt-4 flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    class="border border-outline-variant px-3 py-2 text-xs font-bold text-on-surface-variant hover:border-primary hover:text-primary"
+                    @click="performancePlanVisible = false"
+                  >
+                    先不执行
+                  </button>
+                  <button
+                    type="button"
+                    class="flex items-center gap-2 bg-primary px-3 py-2 text-xs font-bold text-on-secondary-fixed hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="!performancePlan.applyAllowed || applyingPerformancePlan"
+                    @click="onApplyPerformancePlan"
+                  >
+                    <span class="material-symbols-outlined text-sm">check_circle</span>
+                    {{ applyingPerformancePlan ? '拆分中...' : '确认执行拆分' }}
                   </button>
                 </div>
               </div>
@@ -1159,10 +1556,56 @@ onMounted(() => {
                 <input
                   v-model.number="draft.durationSeconds"
                   type="number"
-                  min="0"
+                  min="4"
+                  max="15"
+                  step="1"
+                  required
                   class="mt-1 w-full border-b border-outline-variant bg-transparent p-1 text-sm focus:border-primary focus:outline-none"
                 />
               </label>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+              <label class="border border-outline-variant bg-surface-container p-3">
+                <span class="text-[10px] font-bold tracking-widest text-on-surface-variant">镜头目的</span>
+                <select
+                  v-model="draft.shotPurpose"
+                  class="mt-1 h-9 w-full border-b border-outline-variant bg-transparent text-sm focus:border-primary focus:outline-none"
+                >
+                  <option value="hook">开场钩子</option>
+                  <option value="dialogue">说话镜头</option>
+                  <option value="reaction">反应镜头</option>
+                  <option value="insert">道具插入</option>
+                  <option value="establishing">环境建立</option>
+                  <option value="transition">转场</option>
+                  <option value="story">剧情推进</option>
+                </select>
+              </label>
+              <label class="flex items-end gap-3 border border-outline-variant bg-surface-container p-3">
+                <input v-model="draft.reactionShot" type="checkbox" class="h-4 w-4 accent-primary" />
+                <span class="text-sm text-on-surface">这是反应/承接镜头</span>
+              </label>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+              <div class="relative border border-outline-variant bg-surface-container p-4">
+                <div class="absolute -top-3 left-4 bg-background px-2 text-[10px] font-bold tracking-widest text-secondary">表演节拍</div>
+                <textarea
+                  v-model="draft.actingBeat"
+                  rows="3"
+                  class="custom-scrollbar h-full w-full resize-none border-none bg-transparent p-0 font-body-md text-on-surface focus:ring-0"
+                  placeholder="停顿、吸气、视线、动作结果..."
+                ></textarea>
+              </div>
+              <div class="relative border border-outline-variant bg-surface-container p-4">
+                <div class="absolute -top-3 left-4 bg-background px-2 text-[10px] font-bold tracking-widest text-secondary">声音方向</div>
+                <textarea
+                  v-model="draft.audioDirection"
+                  rows="3"
+                  class="custom-scrollbar h-full w-full resize-none border-none bg-transparent p-0 font-body-md text-on-surface focus:ring-0"
+                  placeholder="语速、停顿、情绪、环境声..."
+                ></textarea>
+              </div>
             </div>
 
             <div class="grid grid-cols-2 gap-4">
@@ -1182,6 +1625,11 @@ onMounted(() => {
                   class="custom-scrollbar h-full w-full resize-none border-none bg-transparent p-0 font-body-md text-on-surface focus:ring-0"
                 ></textarea>
               </div>
+            </div>
+
+            <div class="flex items-center justify-between border border-outline-variant bg-surface-container px-4 py-3">
+              <span class="text-xs text-on-surface-variant">对白时长策略</span>
+              <span class="text-xs font-semibold text-primary">保留原始语速，不自动加速</span>
             </div>
           </div>
 
@@ -1328,5 +1776,19 @@ onMounted(() => {
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
   background: #a38c7c;
+}
+
+.status-menu-enter-active,
+.status-menu-leave-active {
+  transform-origin: top right;
+  transition:
+    opacity 160ms ease-out,
+    transform 160ms ease-out;
+}
+
+.status-menu-enter-from,
+.status-menu-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
 }
 </style>

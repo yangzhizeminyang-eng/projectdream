@@ -8,6 +8,8 @@ export function buildMediaCompleteness({
   confirmedVideoCount,
   missingStoryboardSceneCount,
 }) {
+  // 导出前的最小完整性检查：
+  // 场景必须有分镜，所有分镜必须有已确认视频，否则阻止导出。
   const totalStoryboards = normalizeCount(totalStoryboardCount)
   const confirmedVideos = Math.min(normalizeCount(confirmedVideoCount), totalStoryboards)
   const missingStoryboardScenes = normalizeCount(missingStoryboardSceneCount)

@@ -1,0 +1,388 @@
+{
+  "dataset": {
+    "case_count": 14,
+    "document_count": 11,
+    "top_k": 5
+  },
+  "raw_snapshot": {
+    "summary": {
+      "case_count": 14,
+      "recall_at_k": 0.75,
+      "mrr": 0.7083333333333334,
+      "empty_rate": 0.2857142857142857,
+      "leak_count": 3,
+      "latency_p50_ms": 0.084,
+      "latency_p95_ms": 0.313
+    },
+    "note": "未做版本清理与 filter 收窄时的暴露口径"
+  },
+  "cleaned_snapshot": {
+    "summary": {
+      "case_count": 14,
+      "recall_at_k": 0.75,
+      "mrr": 0.7083333333333334,
+      "empty_rate": 0.2857142857142857,
+      "leak_count": 1,
+      "latency_p50_ms": 0.067,
+      "latency_p95_ms": 0.3
+    },
+    "note": "模拟 replace_scopes=true 版本替换 + required_filters 生效后的口径"
+  },
+  "raw_per_case": [
+    {
+      "case_id": "pos-01",
+      "type": "positive",
+      "hit_asset_ids": [
+        "p21-char-linwanxia-v2",
+        "p21-char-linwanxia-v1",
+        "p21-storyboard-ep1"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.313
+    },
+    {
+      "case_id": "pos-02",
+      "type": "positive",
+      "hit_asset_ids": [
+        "p22-char-shenmo",
+        "p22-storyboard-ep1",
+        "p22-char-linwanxia"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.095
+    },
+    {
+      "case_id": "hard-01",
+      "type": "hard_negative",
+      "hit_asset_ids": [
+        "p21-char-linwanxia-v2",
+        "p21-char-linwanxia-v1",
+        "p21-storyboard-ep1"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.098
+    },
+    {
+      "case_id": "hard-02",
+      "type": "hard_negative",
+      "hit_asset_ids": [
+        "p22-char-linwanxia",
+        "p22-char-shenmo"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.094
+    },
+    {
+      "case_id": "iso-project-01",
+      "type": "isolation_project",
+      "hit_asset_ids": [],
+      "recall_at_k": 0.0,
+      "mrr": 0.0,
+      "empty": true,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.012
+    },
+    {
+      "case_id": "iso-project-02",
+      "type": "isolation_project",
+      "hit_asset_ids": [],
+      "recall_at_k": 0.0,
+      "mrr": 0.0,
+      "empty": true,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.01
+    },
+    {
+      "case_id": "iso-episode-01",
+      "type": "isolation_episode",
+      "hit_asset_ids": [
+        "p21-storyboard-ep1"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.094
+    },
+    {
+      "case_id": "iso-episode-02",
+      "type": "isolation_episode",
+      "hit_asset_ids": [
+        "p21-storyboard-ep2"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.026
+    },
+    {
+      "case_id": "stale-01",
+      "type": "stale_version",
+      "hit_asset_ids": [
+        "p21-char-linwanxia-v2",
+        "p21-char-linwanxia-v1",
+        "p21-storyboard-ep1"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [
+        "p21-char-linwanxia-v1"
+      ],
+      "duration_ms": 0.092
+    },
+    {
+      "case_id": "stale-02",
+      "type": "stale_version",
+      "hit_asset_ids": [
+        "p22-scene-oldtown-v2",
+        "p22-scene-oldtown-v1",
+        "p22-storyboard-ep1"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [
+        "p22-scene-oldtown-v1"
+      ],
+      "duration_ms": 0.084
+    },
+    {
+      "case_id": "empty-01",
+      "type": "empty",
+      "hit_asset_ids": [],
+      "recall_at_k": null,
+      "mrr": null,
+      "empty": true,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.085
+    },
+    {
+      "case_id": "empty-02",
+      "type": "empty",
+      "hit_asset_ids": [],
+      "recall_at_k": null,
+      "mrr": null,
+      "empty": true,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.078
+    },
+    {
+      "case_id": "amb-01",
+      "type": "ambiguous",
+      "hit_asset_ids": [
+        "p21-char-linwanxia-v2"
+      ],
+      "recall_at_k": 0.0,
+      "mrr": 0.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.081
+    },
+    {
+      "case_id": "amb-02",
+      "type": "ambiguous",
+      "hit_asset_ids": [
+        "p22-storyboard-ep1",
+        "p22-scene-oldtown-v2",
+        "p22-scene-oldtown-v1",
+        "p22-char-shenmo"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 0.5,
+      "empty": false,
+      "leaked_asset_ids": [
+        "p22-storyboard-ep1"
+      ],
+      "duration_ms": 0.075
+    }
+  ],
+  "cleaned_per_case": [
+    {
+      "case_id": "pos-01",
+      "type": "positive",
+      "hit_asset_ids": [
+        "p21-char-linwanxia-v2",
+        "p21-storyboard-ep1"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.3
+    },
+    {
+      "case_id": "pos-02",
+      "type": "positive",
+      "hit_asset_ids": [
+        "p22-char-shenmo",
+        "p22-storyboard-ep1",
+        "p22-char-linwanxia"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.265
+    },
+    {
+      "case_id": "hard-01",
+      "type": "hard_negative",
+      "hit_asset_ids": [
+        "p21-char-linwanxia-v2",
+        "p21-storyboard-ep1"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.294
+    },
+    {
+      "case_id": "hard-02",
+      "type": "hard_negative",
+      "hit_asset_ids": [
+        "p22-char-linwanxia",
+        "p22-char-shenmo"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.106
+    },
+    {
+      "case_id": "iso-project-01",
+      "type": "isolation_project",
+      "hit_asset_ids": [],
+      "recall_at_k": 0.0,
+      "mrr": 0.0,
+      "empty": true,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.018
+    },
+    {
+      "case_id": "iso-project-02",
+      "type": "isolation_project",
+      "hit_asset_ids": [],
+      "recall_at_k": 0.0,
+      "mrr": 0.0,
+      "empty": true,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.03
+    },
+    {
+      "case_id": "iso-episode-01",
+      "type": "isolation_episode",
+      "hit_asset_ids": [
+        "p21-storyboard-ep1"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.084
+    },
+    {
+      "case_id": "iso-episode-02",
+      "type": "isolation_episode",
+      "hit_asset_ids": [
+        "p21-storyboard-ep2"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.022
+    },
+    {
+      "case_id": "stale-01",
+      "type": "stale_version",
+      "hit_asset_ids": [
+        "p21-char-linwanxia-v2",
+        "p21-storyboard-ep1"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.07
+    },
+    {
+      "case_id": "stale-02",
+      "type": "stale_version",
+      "hit_asset_ids": [
+        "p22-scene-oldtown-v2",
+        "p22-storyboard-ep1"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 1.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.067
+    },
+    {
+      "case_id": "empty-01",
+      "type": "empty",
+      "hit_asset_ids": [],
+      "recall_at_k": null,
+      "mrr": null,
+      "empty": true,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.088
+    },
+    {
+      "case_id": "empty-02",
+      "type": "empty",
+      "hit_asset_ids": [],
+      "recall_at_k": null,
+      "mrr": null,
+      "empty": true,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.061
+    },
+    {
+      "case_id": "amb-01",
+      "type": "ambiguous",
+      "hit_asset_ids": [
+        "p21-char-linwanxia-v2"
+      ],
+      "recall_at_k": 0.0,
+      "mrr": 0.0,
+      "empty": false,
+      "leaked_asset_ids": [],
+      "duration_ms": 0.062
+    },
+    {
+      "case_id": "amb-02",
+      "type": "ambiguous",
+      "hit_asset_ids": [
+        "p22-storyboard-ep1",
+        "p22-scene-oldtown-v2",
+        "p22-char-shenmo"
+      ],
+      "recall_at_k": 1.0,
+      "mrr": 0.5,
+      "empty": false,
+      "leaked_asset_ids": [
+        "p22-storyboard-ep1"
+      ],
+      "duration_ms": 0.059
+    }
+  ],
+  "query_engine": "offline_keyword_2gram (离线近似检索，非真实 Milvus；真实检索报告需 Linux/Docker 集成验证后另出)",
+  "generated_at": "2026-10-16T23:32:04+08:00"
+}

@@ -31,8 +31,11 @@ function pickByIndex(arr, index) {
  * @returns {Promise<object>} 单场戏剧本结构
  */
 function generateMockSceneScript(ctx) {
+  // mock 模式生成单场景剧本，结构上保持和真实模型返回一致。
   const scene = ctx.scene || {}
   const outline = ctx.outline || {}
+  const storyBible = ctx.storyBible || {}
+  const seasonStructure = ctx.seasonStructure || {}
   const project = ctx.project || {}
 
   const title = scene.title || '未命名场景'
@@ -42,15 +45,19 @@ function generateMockSceneScript(ctx) {
 
   const beat = pickByIndex(BEAT_TEMPLATES, (scene.scene_no || 1) - 1)
 
+  const episode = Array.isArray(seasonStructure.episodes)
+    ? seasonStructure.episodes.find((item) => Number(item.episodeNo) === Number(scene.episode_no ?? scene.episodeNo ?? 1))
+    : null
+  const lead = storyBible.characters?.find((character) => String(character.role || '').includes('主角'))
   const content = `【场景 ${String(scene.scene_no || 1).padStart(2, '0')}】${location} - ${time}
 
-${beat.setup} ${summary || '故事在这里翻开新的一页。'}
+${beat.setup} ${summary || episode?.logline || storyBible.logline || '故事在这里翻开新的一页。'}
 
-${beat.development} 主角停住呼吸，让远处的噪音自己消解。世界仍然在转，但主角已经知道——这场戏的真正节奏，由他自己决定。
+${beat.development} ${lead?.name || '主角'}停住呼吸，让远处的噪音自己消解。世界仍然在转，但主角已经知道——这场戏的真正节奏，由他自己决定。
 
 ${beat.escalation} 一束非常规的信号穿透了环境，${title} 的真正含义在这一刻被压到桌面。
 
-${beat.turn} 主角没有立刻回应。他/她选择先看清来路，再决定是否要承担起回应之后的代价。
+${beat.turn} ${lead?.name || '主角'}没有立刻回应。他/她选择先看清来路，再决定是否要承担起回应之后的代价。
 
 ${beat.resolution} 镜头缓缓拉远。城市的底噪重新涌回。${outline.title || project.name || '本片'}的叙事在这里被轻轻推了一格。
 `.trim()
@@ -70,6 +77,8 @@ ${beat.resolution} 镜头缓缓拉远。城市的底噪重新涌回。${outline.
 }
 
 export async function generateSceneScript(ctx) {
+  // 单场景剧本是从场景摘要进入分镜前的中间步骤。
+  // 输出必须是可继续拆分的正文，而不是只适合展示的抽象摘要。
   const config = getAiConfig()
   if (isMockProvider(config)) {
     return generateMockSceneScript(ctx)

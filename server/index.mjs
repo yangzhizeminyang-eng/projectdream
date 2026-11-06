@@ -1,30 +1,152 @@
+/*登录、注册、短信验证码
+项目、总纲、场景、剧本、分镜 CRUD
+调 AI 生成文本、图、视频、音频
+管理生成任务状态
+提供本地生成媒体文件访问
+调 FFmpeg 做成片导出*/
+
 import { createHash, randomInt, randomUUID } from 'node:crypto'
-import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { URL } from 'node:url'
 import mysql from 'mysql2/promise'
-import tencentcloud from 'tencentcloud-sdk-nodejs'
+import tencentcloud from 'tencentcloud-sdk-nodejs-sms'
 
 import { generateOutline as aiGenerateOutline } from './services/ai/outline.mjs'
 import { getAiConfig } from './services/ai/config.mjs'
 import { generateStructuredJson } from './services/ai/provider.mjs'
+import { buildPromptTemplateContext } from './services/ai/prompt-template-skill.mjs'
+import { inspectAssetImage, locateCharacterHeadBounds } from './services/ai/vision.mjs'
 import { rewriteFrameVisualPrompt } from './services/ai/frame-prompt.mjs'
 import { generateSceneScript as aiGenerateSceneScript } from './services/ai/script.mjs'
 import { generateStoryboards as aiGenerateStoryboards } from './services/ai/storyboard.mjs'
 import {
+  buildVoicePerformanceInstructions,
+  buildVoicePreviewText,
+  generateVoiceDesign as aiGenerateVoiceDesign,
+  normalizeVoiceDesign,
+  resolvePersistedCustomVoiceDesign,
+} from './services/ai/voice.mjs'
+import { extractSceneSpecsFromScriptScenes } from './services/ai/scene-extraction.mjs'
+import {
+  extractScenesWithAgent,
+  extractSceneSpaceAnchorsWithAgent,
+} from './services/ai/scene-extraction-agent.mjs'
+import {
+  resolveSceneSpaceManifest,
+} from './services/scene-space-manifest.mjs'
+import {
   generateCharacters as aiGenerateCharacters,
   generateCharacterProfile as aiGenerateCharacterProfile,
 } from './services/ai/characters.mjs'
+import { normalizeCharacterCostume } from './services/ai/character-costume.mjs'
 import {
   generateCharacterImageCandidates,
   generateFrameCandidates,
   assertFrameReferenceImageSupport,
+  buildAssetNodeImageStorageKey,
+  buildCharacterImageStorageKey,
+  buildGeneratedFrameStorageKey,
   getFrameConfig,
   isMockFrameProvider,
 } from './services/frame.mjs'
+import {
+  assetNodeImageRow,
+  buildAssetCanvasView,
+  findSceneNodeMatch,
+  normalizeAssetNodeLayout,
+  normalizeAssetNodeType,
+} from './services/asset-canvas.mjs'
+import {
+  buildAssetNodeGenerationPrompt,
+  buildAssetNodePromptSnapshot,
+  buildAssetNodeViewPrompt,
+  buildCharacterViewNegativePrompt,
+  resolveAssetNodeGenerationPrompt,
+} from './services/asset-node-prompt.mjs'
+import {
+  buildScriptCharacterPrompt,
+  buildCharacterAssetPackPrompt,
+  buildSceneEnvironmentPrompt,
+  buildScriptScenePrompt,
+  buildTemporalVariantPrompt,
+  extractTemporalStates,
+  inferSceneLocation,
+  inferSceneTimeOfDay,
+  isLegacyCharacterPrompt,
+} from './services/asset-character-prompt.mjs'
+import {
+  buildPropAssetGroupKey,
+  buildTemporalAssetGroupKey,
+  normalizeAssetGroupKey,
+  resolveTemporalState,
+} from './services/asset-temporal-groups.mjs'
+import {
+  buildActiveAssetNodeDedupPlan,
+  buildAssetParserSyncPlan,
+  buildCharacterRecordSyncPlan,
+} from './services/asset-parser-sync.mjs'
+import { buildSceneDisplayLabel } from './services/scene-label.mjs'
+import { normalizeStoryboardDurationSeconds } from './services/storyboard-duration.mjs'
+import { validateStoryboardDurationContracts } from './services/storyboard-duration-contract.mjs'
+import { buildReferencedAssetPromptContext } from './services/storyboard-asset-references.mjs'
+import { normalizePropAssets } from './services/asset-props.mjs'
+import { createCaptchaStore } from './services/auth-captcha.mjs'
+import { chooseSceneForRelink } from './services/asset-node-relink.mjs'
+import {
+  getConfirmedCharacterBaseImage,
+  getCharacterBaseReferenceImage,
+  validateCharacterAssetPackConfirmation,
+  validateCharacterTurnaroundConfirmation,
+  validateCharacterFaceCloseupConfirmation,
+  validateAssetImageConfirmation,
+  validateCharacterViewGeneration,
+  validatePropTurnaroundConfirmation,
+  resolveCharacterReferenceImageUrls,
+} from './services/asset-character-workflow.mjs'
+import {
+  buildCharacterIdentityLockPrompt,
+  buildCharacterIdentityLockSnapshot,
+  parseCharacterIdentityLock,
+  resolveCharacterReferenceSet,
+} from './services/character-identity-lock.mjs'
+import {
+  buildCharacterFaceCropFilter,
+  buildCharacterQualityRepairPrompt,
+  characterDerivedQualityAttempts,
+} from './services/character-face-crop.mjs'
+import {
+  buildSceneNineGridCropFilter,
+  buildSceneNineGridAnglePrompt,
+  buildSceneNineGridQualityRepairPrompt,
+  buildSceneNineGridViewDescriptors,
+  getSceneNineGridAngles,
+  sceneNineGridQualityAttempts,
+  validateSceneNineGridViewConfirmation,
+} from './services/scene-nine-grid.mjs'
+import { enforceEmptySceneVision, isSceneVisionCheckEnabled, shouldStopAssetRetry } from './services/scene-vision-policy.mjs'
+import {
+  buildCharacterAssetPackCropFilter,
+  buildCharacterAssetPackDescriptors,
+} from './services/character-asset-pack.mjs'
+import { probeMediaDimensions } from './services/media-probe.mjs'
+import { createObjectStorageFromEnv } from './services/object-storage.mjs'
+import { replaceVideoFirstFrame } from './services/video-first-frame.mjs'
+import {
+  isCharacterAssetPackRow,
+  planAssetPackAdoption,
+  planSingleAssetAdoption,
+} from './services/asset-pack-lifecycle.mjs'
+import {
+  buildGeneratedVideoStorageKey,
+  buildGeneratedVideoEndFrameStorageKey,
+  buildExportStorageKey,
+  buildLipSyncVideoStorageKey,
+  buildSubtitleCleanedVideoStorageKey,
+} from './services/media-storage-keys.mjs'
 import {
   buildFrameConsistencyPrompt,
   createFrameCharacterSnapshot,
@@ -34,8 +156,18 @@ import {
   generateVideoCandidates,
   getVideoConfig,
   isMockVideoProvider,
+  isOfficialAgnesModel,
+  isWanVideoProvider,
+  assertVideoProviderSnapshot,
+  assertVideoModelProvider,
+  uploadVideoImageBytes,
+  buildVideoContinuityConstraints,
+  buildColorContinuityConstraints,
   resolveVideoImageInput,
 } from './services/video.mjs'
+import {
+  extractExactLastFrame,
+} from './services/video-last-frame.mjs'
 import {
   buildLipSyncPrompt,
   createDashScopeLipSyncTask,
@@ -47,17 +179,140 @@ import {
   resolveLipSyncDuration,
   uploadDashScopeLipSyncFile,
   waitForDashScopeLipSyncTask,
+  buildLatentSyncPayload,
+  createLatentSyncTask,
+  waitForLatentSyncTask,
   waitForLipSyncVideoTask,
   waitForPrivateAvatarAsset,
 } from './services/lip-sync.mjs'
-import { generateAudioCandidates, getAudioConfig, isMockAudioProvider } from './services/audio.mjs'
+import {
+  buildAudioAssetStorageKey,
+  createQwenDesignedVoice,
+  generateAudioCandidates,
+  getAudioConfig,
+  isMockAudioProvider,
+} from './services/audio.mjs'
 import { extractSpokenDialogue } from './services/audio-dialogue.mjs'
+import {
+  buildScriptAgentActivityPayload,
+  normalizeScriptAgentActivityInput,
+} from './services/script-agent.mjs'
+import { createAgentRegistry } from './services/agent/registry.mjs'
+import { createAgentExecutor } from './services/agent/executor.mjs'
+import { drainQueuedAgentPipelines, recoverInterruptedAgentPipelines } from './services/agent/pipeline-queue.mjs'
+import { indexRagDocuments, queryRagDocuments } from './services/rag-client.mjs'
+import { buildProjectKnowledgeChunks, buildRagDocuments } from './services/project-knowledge.mjs'
+import { buildStoryboardAssetCatalog } from './services/storyboard-asset-catalog.mjs'
+import { resolveStoryboardStageResult } from './services/agent/storyboard-stage-result.mjs'
+import { normalizeMysqlDateTime } from './services/agent/mysql-datetime.mjs'
+import {
+  inspectGeneratedVideoResult,
+  inspectVideoConfirmationEligibility,
+  inspectStoryboardAssetReferenceGate,
+  inspectStoryboardGenerationContext,
+} from './services/agent/quality-gate.mjs'
+import {
+  AGENT_PIPELINE_STAGES,
+  SCRIPTING_PIPELINE_STAGE_KEYS,
+  getAgentPipelineStage,
+  getNextAgentPipelineStageForKeys,
+} from './services/agent/pipeline-stages.mjs'
+import {
+  buildStoryboardReferenceSnapshot,
+  validateStoryboardReferenceSnapshot,
+} from './services/storyboard-asset-references.mjs'
+import {
+  buildMentionContextPrompt,
+  normalizeStoryboardMentionContext,
+} from './services/storyboard-mention-context.mjs'
+import {
+  bindStoryboardShotAssets,
+  buildStoryboardMentionedPrompt,
+} from './services/storyboard-asset-binding.mjs'
+import { assetNodeRowId } from './services/storyboard-asset-row.mjs'
+import {
+  requiresCharacterFaceReference,
+} from './services/character-face-policy.mjs'
+import {
+  buildStoryboardPerformancePrompt,
+  normalizeStoryboardPerformance,
+} from './services/storyboard-performance.mjs'
+import { validateStoryboardDirectionContract } from './services/storyboard-direction-contract.mjs'
+import {
+  buildStoryboardVideoPromptParts,
+  buildStoryboardDirectionPrompt,
+  buildVideoReferenceImageGuide,
+} from './services/video-generation-request.mjs'
+import {
+  buildVideoCandidateInspection,
+  inferVideoCandidateExpectations,
+  inspectVideoCandidateFile,
+} from './services/video-candidate-inspection.mjs'
+import { sanitizeStoryboardPrompt } from './services/storyboard-prompt-sanitizer.mjs'
 import {
   buildAudioSourceTitle,
   isMalformedAudioTitle,
   resolveAudioSourceTitle,
 } from './services/audio-title.mjs'
 import { buildMediaCompleteness } from './services/export-validation.mjs'
+import { selectExportClips } from './services/episode-export-selection.mjs'
+import {
+  normalizeEpisodeExportRequest,
+  resolveEpisodeExportPolicy,
+} from './services/episode-export-policy.mjs'
+import {
+  applyFinalEditDraftToAudioTracks,
+  applyFinalEditDraftToVideoItems,
+  normalizeFinalEditDraft as normalizeFinalEditDraftPayload,
+  saveFinalEditDraftForEpisode,
+  selectFinalEditDraftForEpisode,
+} from './services/final-edit-draft.mjs'
+import {
+  buildCinematicEditPlan,
+  buildCinematicAudioFilter,
+  buildCinematicVideoFilter,
+  validateCinematicEditPlan,
+} from './services/cinematic-edit-plan.mjs'
+import {
+  evaluateCinematicQuality,
+  resolveCinematicAudioRenderIssues,
+  resolveCinematicInspectionIssues,
+} from './services/cinematic-quality-gate.mjs'
+import { resolveCinematicExportStatus } from './services/cinematic-export-state.mjs'
+import {
+  evaluateSeasonStructure,
+  evaluateStoryBible,
+  normalizeSeasonStructureInput,
+  normalizeStoryBibleInput,
+} from './services/story-quality.mjs'
+import { normalizeProjectUpdateInput } from './services/project-settings.mjs'
+import { normalizeGeneratedMediaUrl } from './services/media-public-url.mjs'
+import { resolveVideoConfirmationSource } from './services/media-url.mjs'
+import { resolveAppRuntimeRole } from './services/runtime-role.mjs'
+import { startExportQueueSweep } from './services/export-queue.mjs'
+import { createScriptFingerprint, evaluateCreativeWorkflowGates } from './services/workflow-gates.mjs'
+import {
+  buildStoryboardContinuityPrompt,
+  buildStoryboardFrameReference,
+  resolveContinuitySourceShotNo,
+  shouldUseStoryboardContinuity,
+} from './services/storyboard-continuity.mjs'
+import { buildSubtitleCleanupFfmpegArgs, buildSubtitleCleanupFilter } from './services/subtitle-cleanup.mjs'
+import {
+  canArchiveProjectAsset,
+  normalizeProjectAssetType,
+} from './services/project-assets.mjs'
+import { generateStoryBible } from './services/ai/story-bible.mjs'
+import { generateSeasonStructure } from './services/ai/season-structure.mjs'
+import {
+  buildEpisodeBlueprint,
+  buildProductionRunSeed,
+  evaluateEpisodeBlueprint,
+  normalizeProductionRunInput,
+  PRODUCTION_RUN_STAGES,
+} from './services/production-run.mjs'
+import { buildProductionStageCompletionTransition } from './services/production-stage-transition.mjs'
+import { buildProductionScriptSource } from './services/production-script-source.mjs'
 import {
   buildAtempoFilter,
   buildLegacySceneAudioOffsets,
@@ -76,9 +331,12 @@ import {
   CHARACTER_GENDERS,
   VOICE_PROFILE_SEEDS,
   inferCharacterVoiceTraits,
+  getDialogueSpeakerNames,
   normalizeCharacterAgeGroup,
   normalizeCharacterGender,
   recommendVoiceProfiles,
+  resolveCharacterVoiceProfile,
+  isCharacterVoiceReady,
   voiceProfileRow,
 } from './services/voice-profiles.mjs'
 
@@ -87,7 +345,16 @@ const Dypnsapi20170525 = require('@alicloud/dypnsapi20170525')
 const OpenApi = require('@alicloud/openapi-client')
 const { SendSmsVerifyCodeRequest } = require('@alicloud/dypnsapi20170525')
 
+// 后端主文件承担三类职责：
+// 1. 启动并初始化 MySQL 数据库
+// 2. 接收 HTTP 请求并执行项目业务
+// 3. 把耗时的图片、视频、口型同步、导出任务交给后台任务函数处理
+//
+// 这里使用 Node 原生 http，而不是 Express，所以路由会在文件底部通过 pathname + method 手动分发。
 const PORT = Number(process.env.PORT || 3001)
+// 生产部署时浏览器不能访问容器里的 127.0.0.1，所以媒体公开地址要允许从环境变量覆盖。
+// 例如腾讯云上设置 PUBLIC_BASE_URL=http://<YOUR_SERVER_IP> 后，导出视频会返回公网可访问的地址。
+const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${PORT}`).replace(/\/+$/, '')
 const CODE_TTL_SECONDS = 5 * 60
 const DEFAULT_ALIYUN_SIGN_NAME = '恒创联众'
 const LEGACY_ALIYUN_SIGN_NAME_ALIASES = new Set(['鎭掑垱鑱斾紬', '\u93ad\u6391\u57b1\u9471\u65be\u7d2c'])
@@ -97,6 +364,7 @@ const DB_PORT = Number(process.env.DB_PORT || 3306)
 const DB_USER = process.env.DB_USER || 'root'
 const DB_PASSWORD = process.env.DB_PASSWORD || ''
 const DB_NAME = process.env.DB_NAME || 'projectdream'
+const appRuntimeRole = resolveAppRuntimeRole()
 const DEMO_PHONE = '13912345678'
 const DEMO_NICKNAME = '测试用户'
 const DEMO_PASSWORD = '123456'
@@ -106,6 +374,14 @@ const GENERATED_VIDEO_DIR = path.join(process.cwd(), '.codex-runtime', 'generate
 const GENERATED_EXPORT_DIR = path.join(process.cwd(), '.codex-runtime', 'exports')
 const FFMPEG_BIN = String(process.env.FFMPEG_BIN || 'ffmpeg').trim() || 'ffmpeg'
 const FFPROBE_BIN = String(process.env.FFPROBE_BIN || 'ffprobe').trim() || 'ffprobe'
+const objectStorage = createObjectStorageFromEnv()
+const captchaSigningSecret = process.env.CAPTCHA_SECRET || process.env.SESSION_SECRET
+if (!captchaSigningSecret && appRuntimeRole.requiresCaptchaSecret) {
+  throw new Error('CAPTCHA_SECRET must be configured in production')
+}
+const captchaStore = createCaptchaStore({
+  secret: captchaSigningSecret || 'projectdream-captcha-development-secret',
+})
 
 const MODEL_SETTING_GROUPS = [
   { key: 'text', label: '文本模型' },
@@ -124,28 +400,35 @@ const MODEL_SETTING_FIELDS = [
   { key: 'AI_MODEL_STORYBOARD', group: 'text', label: '分镜模型', type: 'text' },
   { key: 'AI_MODEL_CHARACTER', group: 'text', label: '角色模型', type: 'text' },
   { key: 'AI_TIMEOUT_MS', group: 'text', label: '文本超时毫秒', type: 'number' },
+  { key: 'AI_LONG_TASK_TIMEOUT_MS', group: 'text', label: '长文本任务超时毫秒', type: 'number' },
   { key: 'AI_FALLBACK_TO_MOCK', group: 'text', label: '文本失败回退 mock', type: 'boolean' },
 
-  { key: 'FRAME_PROVIDER', group: 'frame', label: '图片服务商', type: 'select', options: ['bigmodel', 'zhipu', 'toapi', 'agnes', 'trae-url', 'mock'] },
+  { key: 'FRAME_PROVIDER', group: 'frame', label: '图片服务商', type: 'select', options: ['volcengine', 'bigmodel', 'zhipu', 'toapi', 'agnes', 'trae-url', 'mock'] },
   { key: 'FRAME_BASE_URL', group: 'frame', label: '图片接口地址', type: 'text' },
   { key: 'FRAME_API_KEY', group: 'frame', label: '图片接口密钥', type: 'secret' },
+  { key: 'ARK_API_KEY', group: 'frame', label: '火山方舟 / 豆包图片密钥', type: 'secret' },
+  { key: 'VOLCENGINE_API_KEY', group: 'frame', label: '火山方舟兼容密钥', type: 'secret' },
   { key: 'BIGMODEL_API_KEY', group: 'frame', label: '智谱接口密钥', type: 'secret' },
   { key: 'FRAME_MODEL', group: 'frame', label: '静帧默认模型', type: 'text' },
   { key: 'FRAME_FALLBACK_MODELS', group: 'frame', label: '静帧备用模型链', type: 'text' },
+  { key: 'FRAME_ASSET_PACK_MODEL', group: 'frame', label: '角色资产包模型', type: 'text' },
+  { key: 'FRAME_CHARACTER_ASSET_PACK_ENABLED', group: 'frame', label: '启用角色资产包', type: 'boolean' },
   { key: 'FRAME_IMAGE_SIZE', group: 'frame', label: '静帧尺寸', type: 'text' },
   { key: 'FRAME_IMAGE_RATIO', group: 'frame', label: '静帧比例', type: 'select', options: ['16:9', '9:16', '1:1'] },
   { key: 'FRAME_FALLBACK_TO_MOCK', group: 'frame', label: '图片失败回退 mock', type: 'boolean' },
 
-  { key: 'VIDEO_PROVIDER', group: 'video', label: '视频服务商', type: 'select', options: ['bigmodel', 'zhipu', 'agnes', 'mock'] },
+  { key: 'VIDEO_PROVIDER', group: 'video', label: '视频服务商', type: 'select', options: ['bigmodel', 'zhipu', 'agnes', 'minimax', 'wan', 'mock'] },
   { key: 'VIDEO_BASE_URL', group: 'video', label: '视频接口地址', type: 'text' },
   { key: 'VIDEO_API_KEY', group: 'video', label: '视频接口密钥', type: 'secret' },
   { key: 'VIDEO_MODEL', group: 'video', label: '图生视频模型', type: 'text' },
   { key: 'VIDEO_SIZE', group: 'video', label: '视频尺寸', type: 'text' },
   { key: 'VIDEO_WATERMARK_ENABLED', group: 'video', label: '供应商水印', type: 'boolean' },
   { key: 'VIDEO_FALLBACK_TO_MOCK', group: 'video', label: '视频失败回退 mock', type: 'boolean' },
+  { key: 'VIDEO_CREATE_RATE_LIMIT_MAX_REQUESTS', group: 'video', label: '视频创建限流次数', type: 'number' },
+  { key: 'VIDEO_CREATE_RATE_LIMIT_WINDOW_MS', group: 'video', label: '视频创建限流窗口毫秒', type: 'number' },
   { key: 'VIDEO_IMAGE_UPLOAD_BASE_URL', group: 'video', label: '源图上传接口地址', type: 'text' },
   { key: 'VIDEO_IMAGE_UPLOAD_API_KEY', group: 'video', label: '源图上传接口密钥', type: 'secret' },
-  { key: 'LIP_SYNC_PROVIDER', group: 'video', label: '口型服务商', type: 'select', options: ['dashscope', 'toapi', 'seedance', 'mock'] },
+  { key: 'LIP_SYNC_PROVIDER', group: 'video', label: '口型服务商', type: 'select', options: ['dashscope', 'toapi', 'seedance', 'latentsync', 'mock'] },
   { key: 'LIP_SYNC_BASE_URL', group: 'video', label: '口型接口地址', type: 'text' },
   { key: 'LIP_SYNC_MODEL', group: 'video', label: '口型模型', type: 'text' },
   { key: 'LIP_SYNC_API_KEY', group: 'video', label: '口型接口密钥', type: 'secret' },
@@ -169,6 +452,9 @@ const activeGenerationJobs = new Map()
 const activeExportJobs = new Map()
 const activeLipSyncProfileRequests = new Map()
 
+// 下面这些工具函数主要负责“边界适配”：
+// 外部模型返回的内容可能是字符串、JSON、远程 URL 或本地生成文件，
+// 后端先把它们统一成项目内部可处理的格式。
 function safeJsonParse(value, fallback = null) {
   if (value && typeof value === 'object') return value
   try {
@@ -221,8 +507,24 @@ function localGeneratedPathFromUrl(value) {
     return null
   }
   const host = parsed.hostname.toLowerCase()
-  if (!['127.0.0.1', 'localhost', '::1'].includes(host)) return null
+  let configuredPublicHost = ''
+  try {
+    configuredPublicHost = new URL(PUBLIC_BASE_URL).hostname.toLowerCase()
+  } catch {
+    configuredPublicHost = ''
+  }
+  if (!['127.0.0.1', 'localhost', '::1'].includes(host) && host !== configuredPublicHost) {
+    return null
+  }
   const pathname = decodeURIComponent(parsed.pathname)
+  if (pathname.startsWith('/storage/') && objectStorage.provider === 'local') {
+    const key = pathname.slice('/storage/'.length)
+    try {
+      return objectStorage.resolveLocalPath(key)
+    } catch {
+      return null
+    }
+  }
   if (pathname.startsWith('/generated/frame/')) {
     return path.join(GENERATED_FRAME_DIR, path.basename(pathname))
   }
@@ -372,7 +674,7 @@ async function prepareDashScopeLipSyncMedia(request) {
   }
 }
 
-async function persistSilentLipSyncVideo({ storyboardId, versionNo, sourceUrl }) {
+async function persistSilentLipSyncVideo({ projectId, storyboardId, versionNo, sourceUrl }) {
   const baseName = `storyboard-${storyboardId}-v${versionNo}-lip-sync`
   const sourcePath = path.join(GENERATED_VIDEO_DIR, 'sources', `${baseName}-provider.mp4`)
   const outputPath = path.join(GENERATED_VIDEO_DIR, `${baseName}.mp4`)
@@ -383,9 +685,150 @@ async function persistSilentLipSyncVideo({ storyboardId, versionNo, sourceUrl })
       '-y', '-i', sourcePath, '-map', '0:v:0', '-an', '-c:v', 'copy', '-movflags', '+faststart', outputPath,
     ])
   }
+  const storageKey = buildLipSyncVideoStorageKey({ projectId, storyboardId, versionNo })
+  const stored = await objectStorage.putObject({
+    key: storageKey,
+    bytes: await readFile(outputPath),
+    contentType: 'video/mp4',
+  })
   return {
     outputPath,
-    videoUrl: `${buildGeneratedVideoPublicBaseUrl()}/${path.basename(outputPath)}`,
+    storageKey: stored.key,
+    videoUrl: stored.url,
+  }
+}
+
+async function ensureAudioAssetStorage(audio) {
+  if (!audio?.id || !audio?.project_id) return audio
+  const existingKey = String(audio.storage_key || '').trim()
+  if (existingKey) {
+    const existing = await objectStorage.getObject(existingKey)
+    if (existing?.bytes?.length) {
+      return { ...audio, audio_url: objectStorage.createSignedUrl({ key: existingKey }) }
+    }
+  }
+  const sourceUrl = String(audio.audio_url || '').trim()
+  if (!sourceUrl && !audio.filePath) throw new Error(`音频资产 ${audio.id} 缺少可访问地址`)
+  const extension = mediaFileExtension(sourceUrl || audio.filePath, '.wav')
+  const sourcePath = audio.filePath
+    ? String(audio.filePath)
+    : path.join(GENERATED_AUDIO_DIR, 'sources', `audio-asset-${audio.id}${extension}`)
+  if (!audio.filePath) await downloadMediaToFile(sourceUrl, sourcePath)
+  const storageKey = buildAudioAssetStorageKey({
+    projectId: audio.project_id,
+    audioAssetId: audio.id,
+    extension,
+  })
+  const stored = await objectStorage.putObject({
+    key: storageKey,
+    bytes: await readFile(sourcePath),
+    contentType: audioMimeType(sourcePath),
+  })
+  await db.execute(
+    'UPDATE audio_assets SET storage_key = ?, audio_url = ? WHERE id = ?',
+    [stored.key, stored.url, audio.id],
+  )
+  return { ...audio, storage_key: stored.key, audio_url: stored.url }
+}
+
+async function persistGeneratedVideo({ projectId, storyboardId, versionNo, candidateNo, sourceUrl, expected, frameReferences }) {
+  const fileName = `storyboard-${storyboardId}-v${versionNo}-c${candidateNo}.mp4`
+  const outputPath = path.join(GENERATED_VIDEO_DIR, fileName)
+  await mkdir(GENERATED_VIDEO_DIR, { recursive: true })
+  await downloadMediaToFile(sourceUrl, outputPath, 180000)
+  let persistedVideoPath = outputPath
+  let continuityEvidence = null
+  if (frameReferences?.continuityEnabled) {
+    const referenceStorageKey = String(frameReferences.startFrameStorageKey || '').trim()
+    const referenceUrl = String(frameReferences.startFrameUrl || '').trim()
+    if (!referenceStorageKey && !referenceUrl) {
+      throw new Error('已启用镜头连续性，但缺少上一镜确认尾帧，拒绝保存视频')
+    }
+    const referenceFramePath = path.join(
+      GENERATED_VIDEO_DIR,
+      'sources',
+      `storyboard-${storyboardId}-v${versionNo}-c${candidateNo}-start.tiff`,
+    )
+    await mkdir(path.dirname(referenceFramePath), { recursive: true })
+    if (referenceStorageKey) {
+      const storedReference = await objectStorage.getObject(referenceStorageKey)
+      if (!storedReference?.bytes?.length) {
+        throw new Error('上一镜确认尾帧对象不存在或为空，拒绝丢弃连续性参考继续保存')
+      }
+      await writeFile(referenceFramePath, storedReference.bytes)
+    } else {
+      await downloadMediaToFile(referenceUrl, referenceFramePath)
+    }
+    const continuityResult = await replaceVideoFirstFrame({
+      videoPath: outputPath,
+      referenceFramePath,
+      outputPath: `${outputPath}.continuity`,
+      ffmpegBin: FFMPEG_BIN,
+      ffprobeBin: FFPROBE_BIN,
+      run: runExternalCommand,
+    })
+    persistedVideoPath = continuityResult.outputPath
+    continuityEvidence = {
+      verified: true,
+      frameHash: continuityResult.frameHash,
+      width: continuityResult.width,
+      height: continuityResult.height,
+      sourceStoryboardId: Number(frameReferences.sourceStoryboardId) || null,
+      sourceShotNo: String(frameReferences.sourceShotNo || '').trim() || null,
+    }
+    if (!(await fileExists(persistedVideoPath))) {
+      throw new Error('连续性首帧修正未产出视频，拒绝保存生成结果')
+    }
+  }
+  const endFramePath = path.join(
+    GENERATED_VIDEO_DIR,
+    'sources',
+    `storyboard-${storyboardId}-v${versionNo}-c${candidateNo}-end.tiff`,
+  )
+  await mkdir(path.dirname(endFramePath), { recursive: true })
+  await extractExactLastFrame({
+    videoPath: persistedVideoPath,
+    outputPath: endFramePath,
+    ffmpegBin: FFMPEG_BIN,
+    ffprobeBin: FFPROBE_BIN,
+    run: runExternalCommand,
+  })
+  if (!(await fileExists(endFramePath))) {
+    throw new Error('视频已下载，但尾帧抽取没有产出文件')
+  }
+
+  const storageKey = buildGeneratedVideoStorageKey({ projectId, storyboardId, versionNo, candidateNo })
+  const stored = await objectStorage.putObject({
+    key: storageKey,
+    bytes: await readFile(persistedVideoPath),
+    contentType: 'video/mp4',
+  })
+  const endFrameStorageKey = buildGeneratedVideoEndFrameStorageKey({
+    projectId,
+    storyboardId,
+    versionNo,
+    candidateNo,
+    extension: '.tiff',
+  })
+  const endFrameStored = await objectStorage.putObject({
+    key: endFrameStorageKey,
+    bytes: await readFile(endFramePath),
+    contentType: 'image/tiff',
+  })
+  const qualityReport = await inspectVideoCandidateFile({
+    filePath: persistedVideoPath,
+    expected,
+    ffprobeBin: FFPROBE_BIN,
+    ffmpegBin: FFMPEG_BIN,
+  })
+  if (continuityEvidence) qualityReport.continuity = continuityEvidence
+  return {
+    outputPath: persistedVideoPath,
+    storageKey: stored.key,
+    videoUrl: stored.url,
+    endFrameStorageKey,
+    endFrameUrl: endFrameStored.url,
+    qualityReport,
   }
 }
 
@@ -432,7 +875,52 @@ function buildSubtitleText(clips, timeline = buildMediaTimeline(clips)) {
   return rows.join('\n')
 }
 
-async function renderHybridExport({ exportId, projectId, config, clips, audioTracks }) {
+async function probeMediaDurationSeconds(filePath) {
+  try {
+    const result = await runExternalCommand(FFPROBE_BIN, [
+      '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', filePath,
+    ])
+    const duration = Number(String(result.stdout || '').trim())
+    return Number.isFinite(duration) && duration > 0 ? duration : 0
+  } catch {
+    return 0
+  }
+}
+
+async function renameWithRetry(from, to, attempts = 10) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await rename(from, to)
+      return
+    } catch (error) {
+      if (!['EBUSY', 'EPERM', 'EACCES'].includes(error?.code) || attempt === attempts - 1) throw error
+      await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)))
+    }
+  }
+}
+
+async function hasAudioStream(filePath) {
+  try {
+    const result = await runExternalCommand(FFPROBE_BIN, [
+      '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_type',
+      '-of', 'default=nw=1:nk=1', filePath,
+    ])
+    return String(result.stdout || '').trim().toLowerCase() === 'audio'
+  } catch {
+    return false
+  }
+}
+
+function boundaryPreservingVideoEncodeArgs(enabled) {
+  // Constant-QP intra frames make the same source frame encode identically no
+  // matter which clip it belongs to. CRF encoding shifts QP at cuts and breaks
+  // the decoded-frame hash even when both sides originate from the same image.
+  return enabled
+    ? ['-c:v', 'libx264', '-qp', '20', '-g', '1', '-keyint_min', '1', '-sc_threshold', '0', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-color_range', 'tv']
+    : ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p']
+}
+
+async function renderHybridExport({ exportId, projectId, config, clips, audioTracks, editPlan = null }) {
   const exportDir = path.join(GENERATED_EXPORT_DIR, String(exportId))
   const sourceDir = path.join(exportDir, 'sources')
   const clipDir = path.join(exportDir, 'clips')
@@ -441,55 +929,163 @@ async function renderHybridExport({ exportId, projectId, config, clips, audioTra
 
   const resolution = exportResolution(config.resolution)
   const frameRate = Math.max(1, Number(config.frameRate) || 24)
+  const preserveClipBoundaries = config.preserveClipBoundaries === true
+  const preserveSourceAudio = config.preserveSourceAudio === true
   const renderedClips = []
   const renderedClipItems = []
   const skipped = []
   for (const [index, clip] of clips.entries()) {
-    const duration = Math.max(1, Number(clip.durationSeconds) || 5)
+    const sourceDuration = Math.max(
+      0.25,
+      Number(clip.sourceDurationSeconds || clip.durationSeconds) || 5,
+    )
+    const trimStartSeconds = Math.max(
+      0,
+      Math.min(Number(clip.trimStartSeconds) || 0, Math.max(0, sourceDuration - 0.25)),
+    )
+    const requestedTrimEnd = Number(clip.trimEndSeconds)
+    const trimEndSeconds = Math.max(
+      trimStartSeconds + 0.25,
+      Math.min(Number.isFinite(requestedTrimEnd) && requestedTrimEnd > 0 ? requestedTrimEnd : sourceDuration, sourceDuration),
+    )
+    const duration = Math.max(
+      0.25,
+      Number(clip.durationSeconds) > 0
+        ? Number(clip.durationSeconds)
+        : trimEndSeconds - trimStartSeconds,
+    )
     const baseName = `clip-${String(index + 1).padStart(3, '0')}`
     const outputPath = path.join(clipDir, `${baseName}.mp4`)
     try {
       if (clip.sourceType === 'video' && clip.videoUrl) {
         const sourcePath = path.join(sourceDir, `${baseName}.mp4`)
         await downloadMediaToFile(clip.videoUrl, sourcePath)
+        const sourceHasAudio = preserveSourceAudio ? await hasAudioStream(sourcePath) : false
+        const audioInputArgs = preserveSourceAudio && !sourceHasAudio
+          ? ['-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000']
+          : []
+        const audioMapArgs = preserveSourceAudio
+          ? sourceHasAudio
+            ? ['-map', '0:v:0', '-map', '0:a:0', '-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-ac', '2']
+            : ['-map', '0:v:0', '-map', '1:a:0', '-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-ac', '2', '-shortest']
+          : ['-an']
         await runExternalCommand(FFMPEG_BIN, [
-          '-y', '-i', sourcePath, '-t', String(duration),
-          '-vf', `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=decrease,pad=${resolution.width}:${resolution.height}:(ow-iw)/2:(oh-ih)/2,tpad=stop_mode=clone:stop_duration=${duration},format=yuv420p`,
-          '-r', String(frameRate), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', outputPath,
+          '-y', '-i', sourcePath, ...audioInputArgs,
+          '-ss', String(trimStartSeconds), '-t', String(duration),
+          '-vf', `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=decrease:in_range=auto:out_range=limited,pad=${resolution.width}:${resolution.height}:(ow-iw)/2:(oh-ih)/2${preserveClipBoundaries ? '' : `,tpad=stop_mode=clone:stop_duration=${duration}`},format=yuv420p`,
+          '-r', String(frameRate), ...audioMapArgs, ...boundaryPreservingVideoEncodeArgs(preserveClipBoundaries), outputPath,
         ])
       } else if (clip.imageUrl) {
         const sourcePath = path.join(sourceDir, `${baseName}.png`)
         await downloadMediaToFile(clip.imageUrl, sourcePath)
         await runExternalCommand(FFMPEG_BIN, [
-          '-y', '-loop', '1', '-i', sourcePath, '-t', String(duration),
-          '-vf', `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=decrease,pad=${resolution.width}:${resolution.height}:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0008,1.08)':d=${Math.max(1, Math.round(duration * frameRate))}:s=${resolution.width}x${resolution.height}:fps=${frameRate},format=yuv420p`,
-          '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', outputPath,
+          '-y', '-loop', '1', '-i', sourcePath,
+          ...(preserveSourceAudio
+            ? ['-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000']
+            : []),
+          '-t', String(duration),
+          ...(preserveSourceAudio
+            ? ['-map', '0:v:0', '-map', '1:a:0', '-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-ac', '2', '-shortest']
+            : ['-an']),
+          '-vf', `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=decrease:in_range=auto:out_range=limited,pad=${resolution.width}:${resolution.height}:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0008,1.08)':d=${Math.max(1, Math.round(duration * frameRate))}:s=${resolution.width}x${resolution.height}:fps=${frameRate},format=yuv420p`,
+          ...boundaryPreservingVideoEncodeArgs(preserveClipBoundaries), outputPath,
         ])
       } else {
         skipped.push({ storyboardId: clip.storyboardId, reason: 'missing-video-and-image' })
         continue
       }
       renderedClips.push(outputPath)
-      renderedClipItems.push(clip)
+      renderedClipItems.push({
+        ...clip,
+        trimStartSeconds: Number(trimStartSeconds.toFixed(3)),
+        trimEndSeconds: Number(trimEndSeconds.toFixed(3)),
+        durationSeconds: Number(duration.toFixed(3)),
+      })
     } catch (error) {
+      if (config.episodeNo) throw new Error(`分镜 ${clip.storyboardId} 成片标准化失败：${error instanceof Error ? error.message : 'render failed'}`)
       skipped.push({ storyboardId: clip.storyboardId, reason: error instanceof Error ? error.message : 'render failed' })
     }
   }
   if (!renderedClips.length) throw new Error('no usable video or static frame clips')
 
-  const concatPath = path.join(exportDir, 'concat.txt')
-  await writeFile(concatPath, renderedClips.map((file) => `file '${file.replaceAll("'", "'\\''")}'`).join('\n'))
+  const boundaryEvidence = []
+  if (preserveClipBoundaries && renderedClips.length > 1) {
+    const boundaryDir = path.join(exportDir, 'boundaries')
+    await mkdir(boundaryDir, { recursive: true })
+    for (let index = 1; index < renderedClips.length; index += 1) {
+      const previousPath = renderedClips[index - 1]
+      const currentPath = renderedClips[index]
+      const boundaryPath = path.join(
+        boundaryDir,
+        `boundary-${String(index).padStart(3, '0')}.tiff`,
+      )
+      await extractExactLastFrame({
+        videoPath: previousPath,
+        outputPath: boundaryPath,
+        ffmpegBin: FFMPEG_BIN,
+        ffprobeBin: FFPROBE_BIN,
+        run: runExternalCommand,
+      })
+      const replaced = await replaceVideoFirstFrame({
+        videoPath: currentPath,
+        referenceFramePath: boundaryPath,
+        outputPath: `${currentPath}.boundary.mp4`,
+        ffmpegBin: FFMPEG_BIN,
+        ffprobeBin: FFPROBE_BIN,
+        run: runExternalCommand,
+      })
+      const beforeBoundaryPath = `${currentPath}.before-boundary.mp4`
+      await renameWithRetry(currentPath, beforeBoundaryPath)
+      try {
+        await renameWithRetry(replaced.outputPath, currentPath)
+        await rm(beforeBoundaryPath, { force: true })
+      } catch (error) {
+        await renameWithRetry(beforeBoundaryPath, currentPath).catch(() => {})
+        throw error
+      }
+      boundaryEvidence.push({
+        index,
+        previousStoryboardId: Number(renderedClipItems[index - 1]?.storyboardId) || null,
+        storyboardId: Number(renderedClipItems[index]?.storyboardId) || null,
+        frameHash: replaced.frameHash,
+        referencePath: boundaryPath,
+      })
+    }
+  }
+
   const baseVideoPath = path.join(exportDir, 'video-base.mp4')
+  const timelineClips = renderedClipItems.map((item) => ({
+    ...item,
+    durationSeconds: Math.max(0.25, Number(item.durationSeconds) || 4),
+  }))
+  const videoGraph = buildCinematicVideoFilter({ clips: timelineClips })
+  const baseFilterParts = [videoGraph.filterComplex].filter(Boolean)
+  const baseInputs = renderedClips.flatMap((file) => ['-i', file])
+  const mapArgs = ['-map', videoGraph.outputLabel]
+  if (preserveSourceAudio) {
+    const audioGraph = buildCinematicAudioFilter({ clips: timelineClips })
+    baseFilterParts.push(audioGraph.filterComplex)
+    mapArgs.push('-map', audioGraph.outputLabel, '-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-ac', '2')
+  }
   await runExternalCommand(FFMPEG_BIN, [
-    '-y', '-f', 'concat', '-safe', '0', '-i', concatPath,
-    '-c', 'copy', '-movflags', '+faststart', baseVideoPath,
+    '-hide_banner', '-loglevel', 'error', '-y', ...baseInputs,
+    '-filter_complex', baseFilterParts.join(';'),
+    ...mapArgs,
+    ...boundaryPreservingVideoEncodeArgs(preserveClipBoundaries),
+    '-movflags', '+faststart', baseVideoPath,
   ])
 
   const timeline = buildMediaTimeline(renderedClipItems)
-  const subtitleText = buildSubtitleText(renderedClipItems, timeline)
-  const subtitlePath = path.join(exportDir, 'subtitles.srt')
-  await writeFile(subtitlePath, subtitleText || '1\n00:00:00,000 --> 00:00:01,000\n\n')
-  const duration = timeline.durationSeconds
+  const generateSubtitleSidecar = config.generateSubtitleSidecar !== false
+  const subtitleText = generateSubtitleSidecar ? buildSubtitleText(renderedClipItems, timeline) : ''
+  const subtitlePath = generateSubtitleSidecar ? path.join(exportDir, 'subtitles.srt') : null
+  if (subtitlePath) {
+    await writeFile(subtitlePath, subtitleText || '1\n00:00:00,000 --> 00:00:01,000\n\n')
+  }
+  const probedDuration = config.preserveClipBoundaries
+    ? await probeMediaDurationSeconds(baseVideoPath)
+    : 0
+  const duration = probedDuration > 0 ? probedDuration : videoGraph.durationSeconds || timeline.durationSeconds
 
   const audioFiles = []
   let skippedLegacyAudioCount = 0
@@ -542,6 +1138,39 @@ async function renderHybridExport({ exportId, projectId, config, clips, audioTra
   }
 
   const finalPath = path.join(GENERATED_EXPORT_DIR, `export-${exportId}.mp4`)
+  const baseHasAudio = preserveSourceAudio ? await hasAudioStream(baseVideoPath) : false
+  let sourceAudioPreserved = false
+  if (baseHasAudio && audioFiles.length === 0) {
+    // Keep the video model's generated ambience instead of a silent bed.
+    const subtitleArgs = config.burnSubtitle !== false && subtitleText
+      ? ['-vf', `subtitles='${ffmpegPath(subtitlePath)}':force_style='FontName=Microsoft YaHei,FontSize=22,Outline=2,Alignment=2'`]
+      : []
+    await runExternalCommand(FFMPEG_BIN, [
+      '-y', '-i', baseVideoPath,
+      ...subtitleArgs,
+      '-map', '0:v:0', '-map', '0:a:0',
+      '-t', String(duration),
+      ...boundaryPreservingVideoEncodeArgs(config.preserveClipBoundaries === true),
+      '-af', 'volume=2.5,alimiter=limit=0.95',
+      '-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-ac', '2',
+      '-movflags', '+faststart', finalPath,
+    ])
+    sourceAudioPreserved = true
+  }
+  if (sourceAudioPreserved) {
+    return {
+      finalPath,
+      durationSeconds: duration,
+      coverPath: renderedClips[0],
+      skipped,
+      skippedLegacyAudioCount,
+      boundAudioCount: 0,
+      subtitlePath,
+      boundaryEvidence,
+      sourceAudioPreserved: true,
+    }
+  }
+
   const inputs = ['-y', '-i', baseVideoPath]
   const filterParts = []
   const audioLabels = []
@@ -573,12 +1202,18 @@ async function renderHybridExport({ exportId, projectId, config, clips, audioTra
     filterParts.push(`[${index + 1}:a]${audioChain}[${label}]`)
     audioLabels.push(`[${label}]`)
   })
-  // A silent bed keeps the output stream valid when no music or SFX exists.
-  // Do not synthesize a test tone: it is audible as low-frequency noise in the opening.
-  const silenceIndex = audioFiles.length + 1
-  inputs.push('-f', 'lavfi', '-i', `anullsrc=channel_layout=stereo:sample_rate=44100:duration=${duration}`)
-  filterParts.push(`[${silenceIndex}:a]atrim=0:${duration}[silence]`)
-  audioLabels.push('[silence]')
+  if (preserveSourceAudio && baseHasAudio) {
+    filterParts.push(`[0:a]volume=0.6,apad,atrim=0:${duration}[src]`)
+    audioLabels.push('[src]')
+  }
+  // A silent bed keeps the output stream valid when no music, SFX or source
+  // ambience exists. Do not synthesize a test tone.
+  if (!audioLabels.length) {
+    const silenceIndex = audioFiles.length + 1
+    inputs.push('-f', 'lavfi', '-i', `anullsrc=channel_layout=stereo:sample_rate=44100:duration=${duration}`)
+    filterParts.push(`[${silenceIndex}:a]atrim=0:${duration}[silence]`)
+    audioLabels.push('[silence]')
+  }
   filterParts.push(`${audioLabels.join('')}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,apad,atrim=0:${duration}[mixed]`)
   if (config.burnSubtitle !== false && subtitleText) {
     filterParts.push(`[0:v]subtitles='${ffmpegPath(subtitlePath)}':force_style='FontName=Microsoft YaHei,FontSize=22,Outline=2,Alignment=2'[subbed]`)
@@ -587,13 +1222,13 @@ async function renderHybridExport({ exportId, projectId, config, clips, audioTra
   try {
     await runExternalCommand(FFMPEG_BIN, [
       ...inputs, '-filter_complex', filterParts.join(';'), '-map', videoMap, '-map', '[mixed]',
-      '-t', String(duration), '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', finalPath,
+      '-t', String(duration), ...boundaryPreservingVideoEncodeArgs(config.preserveClipBoundaries === true), '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', finalPath,
     ])
   } catch (error) {
     if (config.burnSubtitle !== false && subtitleText) {
       await runExternalCommand(FFMPEG_BIN, [
         ...inputs, '-filter_complex', filterParts.filter((part) => !part.startsWith('[0:v]subtitles')).join(';'), '-map', '0:v', '-map', '[mixed]',
-        '-t', String(duration), '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', finalPath,
+        '-t', String(duration), ...boundaryPreservingVideoEncodeArgs(config.preserveClipBoundaries === true), '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', finalPath,
       ])
     } else {
       throw error
@@ -608,6 +1243,8 @@ async function renderHybridExport({ exportId, projectId, config, clips, audioTra
     skippedLegacyAudioCount,
     boundAudioCount: audioFiles.filter((item) => ['dialogue', 'narration'].includes(item.trackKey) && item.startSeconds >= 0).length,
     subtitlePath,
+    boundaryEvidence,
+    sourceAudioPreserved: false,
   }
 }
 
@@ -640,11 +1277,20 @@ async function fetchGenerationJob(jobId) {
 }
 
 async function createGenerationJob({ projectId, jobType, sourceId, request }) {
+  // 任务表有 project_id，但执行器只接收 request 快照；把项目归属同时写入快照，
+  // 让对象存储键、重试和审计都使用同一个项目上下文。
+  const requestSnapshot = { ...(request || {}), projectId: Number(projectId) }
+  const requestJson = JSON.stringify(requestSnapshot)
+  const requestedViewType = String(request?.viewType || '').trim()
+  const requestedViewKey = String(request?.viewKey || '').trim()
   const [activeRows] = await db.execute(
     `SELECT * FROM generation_jobs
-     WHERE project_id = ? AND job_type = ? AND source_id = ? AND status IN ('queued', 'running')
+     WHERE project_id = ? AND job_type = ? AND source_id = ?
+       AND status IN ('queued', 'running')
+       AND (? = '' OR JSON_UNQUOTE(JSON_EXTRACT(request_json, '$.viewType')) = ?)
+       AND (? = '' OR JSON_UNQUOTE(JSON_EXTRACT(request_json, '$.viewKey')) = ?)
      ORDER BY id DESC LIMIT 1`,
-    [projectId, jobType, sourceId],
+    [projectId, jobType, sourceId, requestedViewType, requestedViewType, requestedViewKey, requestedViewKey],
   )
   if (activeRows[0]) {
     queueGenerationJob(Number(activeRows[0].id))
@@ -656,7 +1302,7 @@ async function createGenerationJob({ projectId, jobType, sourceId, request }) {
     `INSERT INTO generation_jobs
        (job_key, project_id, job_type, source_id, status, progress_percent, request_json)
      VALUES (?, ?, ?, ?, 'queued', 0, ?)`,
-    [jobKey, projectId, jobType, sourceId, JSON.stringify(request || {})],
+    [jobKey, projectId, jobType, sourceId, requestJson],
   )
   const row = await fetchGenerationJob(Number(result.insertId))
   queueGenerationJob(Number(result.insertId))
@@ -712,6 +1358,11 @@ async function processFrameGenerationJob(jobId, request) {
       outputDir: GENERATED_FRAME_DIR,
       candidateCount: request.candidateCount,
       referenceImageUrls: request.referenceImageUrls || [],
+      referenceImageStorageKeys: request.referenceImageStorageKeys || [],
+      createSignedUrl: (key) => objectStorage.createSignedUrl({
+        key,
+        expiresInSeconds: Math.max(900, Number(process.env.FRAME_REFERENCE_IMAGE_SIGNED_URL_TTL_SECONDS) || 3600),
+      }),
     })
   }
 
@@ -733,6 +1384,7 @@ async function processFrameGenerationJob(jobId, request) {
         candidate.negativePrompt || request.negativePrompt || null,
         JSON.stringify(candidate.characterSnapshot || request.characterSnapshot || []),
         candidate.modelName || request.modelName,
+        request.viewType || 'single',
       ],
     )
     insertedIds.push(Number(result.insertId))
@@ -743,6 +1395,337 @@ async function processFrameGenerationJob(jobId, request) {
     insertedIds,
   )
   return { items: rows.map(imageAssetRow) }
+}
+
+async function processVideoGenerationJob(jobId, request) {
+  const [existingRows] = await db.execute(
+    `SELECT * FROM video_assets WHERE generation_job_id = ? ORDER BY id ASC`,
+    [jobId],
+  )
+  if (existingRows.length >= request.candidateCount) {
+    return { items: existingRows.map(videoAssetRow), providerTasks: request.providerTasks || [] }
+  }
+
+  const videoConfig = getVideoConfig()
+  assertVideoProviderSnapshot(request.videoProvider, videoConfig)
+  assertVideoModelProvider(request.modelName, videoConfig)
+  request.videoProvider ||= videoConfig.provider
+  request.videoGenerationStage = '准备资产引用'
+  let candidates
+  if (isMockVideoProvider(videoConfig)) {
+    candidates = Array.from({ length: request.candidateCount }, (_, index) => ({
+      videoUrl: buildMockVideoUrl(request.storyboardId, index, request.versionNo),
+      thumbnailUrl: buildMockVideoThumbnailUrl(request.imageUrl),
+      motionMode: request.motionMode,
+      durationSeconds: request.durationSeconds,
+      modelName: 'mock-video-v1',
+    }))
+  } else {
+    // Wan accepts Base64 media and the job already carries an exact first frame.
+    // Do not route its reference images through the Agnes/ToAPI public-URL bridge.
+    const wanProvider = isWanVideoProvider(videoConfig)
+    const referenceImages = wanProvider ? [] : await prepareVideoReferenceImages(request, videoConfig)
+    // Persist the exact provider-facing URLs so a failed job can be diagnosed
+    // without guessing whether it used a COS URL or the public storage proxy.
+    request.providerReferenceImages = referenceImages
+    request.videoGenerationStage = '提交并等待视频服务商任务'
+    await updateGenerationJob(jobId, { request_json: JSON.stringify(request) })
+    candidates = await generateVideoCandidates({
+      imageUrl: request.imageUrl,
+      firstFrameUrl: request.firstFrameUrl || request.imageUrl || '',
+      lastFrameUrl: request.lastFrameUrl || '',
+      prompt: request.promptSnapshot,
+      motionMode: request.motionMode,
+      durationSeconds: request.durationSeconds,
+      modelName: request.modelName,
+      candidateCount: request.candidateCount,
+      imageRatio: request.imageRatio || null,
+      generationMode: request.generationMode || 'image_to_video',
+      referenceImages,
+      referenceAudios: request.referenceAudioUrls || [],
+      resolveReferenceImages: wanProvider
+        ? async () => []
+        : async () => {
+            const refreshed = await prepareVideoReferenceImages(request, videoConfig)
+            request.providerReferenceImages = refreshed
+            await updateGenerationJob(jobId, { request_json: JSON.stringify(request) })
+            return refreshed
+          },
+      providerTasks: request.providerTasks || [],
+      onTasksCreated: async (providerTasks) => {
+        request.providerTasks = providerTasks.map((task) => ({
+          videoId: task.videoId,
+          initialPayload: task.initialPayload || null,
+          candidatePrompt: task.candidatePrompt,
+          videoUrl: task.videoUrl || null,
+          payload: task.payload || null,
+          status: task.status || 'pending',
+        }))
+        await updateGenerationJob(jobId, {
+          progress_percent: 30,
+          request_json: JSON.stringify(request),
+        })
+      },
+      onTasksCompleted: async (providerTasks) => {
+        // 供应商已经完成后，先把结果 URL 写入任务快照，再进行下载、抽帧和 COS
+        // 后处理。后处理失败时重试可复用该 URL，避免再次创建付费任务。
+        request.providerTasks = providerTasks.map((task) => ({
+          videoId: task.videoId,
+          initialPayload: task.initialPayload || null,
+          candidatePrompt: task.candidatePrompt,
+          videoUrl: task.videoUrl,
+          payload: task.payload || null,
+          status: task.status || 'succeeded',
+        }))
+        request.videoGenerationStage = '保存服务商视频结果'
+        await updateGenerationJob(jobId, {
+          progress_percent: 70,
+          request_json: JSON.stringify(request),
+        })
+      },
+    })
+  }
+
+  await updateGenerationJob(jobId, { progress_percent: 85 })
+  request.videoGenerationStage = '下载视频并写入 COS'
+  await updateGenerationJob(jobId, { request_json: JSON.stringify(request) })
+  const insertedIds = existingRows.map((row) => Number(row.id))
+  const persistedItems = existingRows.map((row) => ({
+    providerVideoUrl: null,
+    localVideoUrl: row.video_url,
+  }))
+  for (let index = existingRows.length; index < candidates.length; index += 1) {
+    const candidate = candidates[index]
+    const providerVideoUrl = candidate.videoUrl
+    const persisted = isMockVideoProvider(videoConfig)
+      ? {
+        videoUrl: providerVideoUrl,
+        qualityReport: buildVideoCandidateInspection({
+          expected: request.videoInspectionExpected,
+          inspectionError: '模拟视频没有本地媒体文件，未执行媒体技术检查。',
+        }),
+      }
+      : await persistGeneratedVideo({
+          projectId: request.projectId,
+          storyboardId: request.storyboardId,
+          versionNo: request.versionNo,
+          candidateNo: index + 1,
+          sourceUrl: providerVideoUrl,
+          expected: request.videoInspectionExpected,
+          frameReferences: request.frameReferences,
+        })
+    const [result] = await db.execute(
+      `INSERT INTO video_assets
+        (storyboard_id, image_asset_id, version_no, video_url, storage_key,
+         end_frame_url, end_frame_storage_key, thumbnail_url,
+         motion_mode, duration_seconds, model_name, generation_job_id, quality_report_json, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'candidate')`,
+      [
+        request.storyboardId,
+        request.imageAssetId,
+        request.versionNo,
+        persisted.videoUrl,
+        persisted.storageKey,
+        persisted.endFrameUrl || null,
+        persisted.endFrameStorageKey || null,
+        candidate.thumbnailUrl || request.imageUrl || null,
+        candidate.motionMode || request.motionMode || null,
+        candidate.durationSeconds || request.durationSeconds,
+        candidate.modelName || request.modelName,
+        jobId,
+        JSON.stringify(persisted.qualityReport || buildVideoCandidateInspection({
+          expected: request.videoInspectionExpected,
+          inspectionError: '缺少视频技术检查结果。',
+        })),
+      ],
+    )
+    insertedIds.push(Number(result.insertId))
+    persistedItems.push({ providerVideoUrl, localVideoUrl: persisted.videoUrl })
+  }
+
+  if (request.autoConfirm === true && insertedIds.length) {
+    const [selectedRows] = await db.execute(
+      `SELECT quality_report_json FROM video_assets WHERE id = ? LIMIT 1`,
+      [insertedIds[0]],
+    )
+    const selectedReport = safeJsonParse(selectedRows[0]?.quality_report_json, null)
+    if (selectedReport?.technicalStatus !== 'passed') {
+      throw new Error('视频技术质检尚未通过，不能自动采用；请在创作页检查候选后手动确认。')
+    }
+    const selectedVideoId = insertedIds[0]
+    const conn = await db.getConnection()
+    try {
+      await conn.beginTransaction()
+      await conn.execute(
+        `UPDATE video_assets
+         SET status = CASE WHEN status = 'confirmed' THEN 'archived' ELSE status END,
+             confirmed_at = NULL
+         WHERE storyboard_id = ? AND id <> ?`,
+        [request.storyboardId, selectedVideoId],
+      )
+      await conn.execute(
+        `UPDATE video_assets SET status = 'confirmed', confirmed_at = NOW() WHERE id = ?`,
+        [selectedVideoId],
+      )
+      const [selectedRows] = await conn.execute(`SELECT video_url FROM video_assets WHERE id = ? LIMIT 1`, [
+        selectedVideoId,
+      ])
+      await conn.execute(
+        `UPDATE storyboards SET video_url = ?, updated_at = NOW() WHERE id = ?`,
+        [selectedRows[0]?.video_url || null, request.storyboardId],
+      )
+      await conn.commit()
+    } catch (error) {
+      await conn.rollback()
+      throw error
+    } finally {
+      conn.release()
+    }
+  }
+
+  const placeholders = insertedIds.map(() => '?').join(', ')
+  const [rows] = await db.execute(
+    `SELECT * FROM video_assets WHERE id IN (${placeholders}) ORDER BY id ASC`,
+    insertedIds,
+  )
+  return {
+    items: rows.map(videoAssetRow),
+    providerTasks: request.providerTasks || [],
+    persistedItems,
+  }
+}
+
+async function processSubtitleCleanupJob(jobId, request) {
+  const sourceDir = path.join(GENERATED_VIDEO_DIR, 'sources')
+  await mkdir(sourceDir, { recursive: true })
+  const sourcePath = path.join(sourceDir, `subtitle-cleanup-${jobId}-source.mp4`)
+  const outputPath = path.join(GENERATED_VIDEO_DIR, `subtitle-cleanup-${jobId}.mp4`)
+  if (request.sourceStorageKey) {
+    const stored = await objectStorage.getObject(request.sourceStorageKey)
+    if (!stored?.bytes?.length) throw new Error('原视频对象不存在或为空，无法清理字幕')
+    await writeFile(sourcePath, stored.bytes)
+  } else {
+    await downloadMediaToFile(request.sourceVideoUrl, sourcePath, 180000)
+  }
+  await updateGenerationJob(jobId, { progress_percent: 35 })
+  await runExternalCommand(FFMPEG_BIN, buildSubtitleCleanupFfmpegArgs({
+    inputPath: sourcePath,
+    outputPath,
+    filter: buildSubtitleCleanupFilter(request.filterOptions),
+  }))
+  const storageKey = buildSubtitleCleanedVideoStorageKey({
+    projectId: request.projectId,
+    storyboardId: request.storyboardId,
+    sourceVideoId: request.sourceVideoId,
+  })
+  const stored = await objectStorage.putObject({
+    key: storageKey,
+    bytes: await readFile(outputPath),
+    contentType: 'video/mp4',
+  })
+  await updateGenerationJob(jobId, { progress_percent: 75 })
+  const [versionRows] = await db.execute(
+    `SELECT COALESCE(MAX(version_no), 0) AS maxVersion
+     FROM video_assets WHERE storyboard_id = ?`,
+    [request.storyboardId],
+  )
+  const [insertResult] = await db.execute(
+    `INSERT INTO video_assets
+       (storyboard_id, image_asset_id, version_no, video_url, storage_key,
+        thumbnail_url, motion_mode, duration_seconds, model_name, generation_job_id, source_type, status)
+     VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'subtitle_cleaned', 'candidate')`,
+    [
+      request.storyboardId,
+      Number(versionRows[0]?.maxVersion || 0) + 1,
+      stored.url,
+      storageKey,
+      request.thumbnailUrl || null,
+      'subtitle-cleanup',
+      request.durationSeconds || null,
+      request.modelName || 'ffmpeg-subtitle-cleanup',
+      jobId,
+    ],
+  )
+  const [rows] = await db.execute('SELECT * FROM video_assets WHERE id = ? LIMIT 1', [insertResult.insertId])
+  return { item: videoAssetRow(rows[0]) }
+}
+
+function looksLikeImageBytes(bytes) {
+  if (!bytes || bytes.length < 12) return false
+  const head = Buffer.from(bytes.subarray(0, 12)).toString('hex').toLowerCase()
+  return head.startsWith('89504e470d0a1a0a')
+    || head.startsWith('ffd8ff')
+    || head.startsWith('52494646') && head.slice(16, 24) === '57454250'
+    || head.startsWith('47494638')
+}
+
+async function prepareVideoReferenceImages(request, videoConfig) {
+  const uploaded = []
+  const publicStorageBaseUrl = String(PUBLIC_BASE_URL || '').replace(/\/+$/, '')
+  const canUsePublicStorageProxy = Boolean(
+    publicStorageBaseUrl &&
+    !/^(?:https?:\/\/)?(?:127\.0\.0\.1|localhost|0\.0\.0\.0)(?::|\/|$)/i.test(publicStorageBaseUrl),
+  )
+  const storageKeys = [...new Set(
+    (Array.isArray(request.referenceImageStorageKeys) ? request.referenceImageStorageKeys : [])
+      .map((key) => String(key || '').trim())
+      .filter(Boolean),
+  )]
+  const maxImages = /^minimax(?:-|$)/i.test(String(request.modelName || ''))
+    ? 9
+    : isOfficialAgnesModel(request.modelName) ? 5 : 6
+  const requestedImageCount = storageKeys.length || new Set(
+    (Array.isArray(request.referenceImages) ? request.referenceImages : [])
+      .map((url) => String(url || '').trim()).filter(Boolean),
+  ).size
+  if (requestedImageCount > maxImages) {
+    throw new Error(`本镜头绑定 ${requestedImageCount} 张参考图，当前模型最多接收 ${maxImages} 张。请减少非必要参考图后重试；系统不会静默丢弃已确认资产。`)
+  }
+  for (const storageKey of storageKeys) {
+    const stored = await objectStorage.getObject(storageKey)
+    if (!stored?.bytes?.length) {
+      throw new Error(`视频参考图对象不存在或为空：${storageKey}`)
+    }
+    if (!looksLikeImageBytes(stored.bytes)) {
+      throw new Error(`视频参考图不是有效图片文件：${storageKey}。请检查公网存储代理和 PUBLIC_BASE_URL 配置`)
+    }
+    // COS public URLs are often private even when they look like normal HTTPS
+    // links. Give Agnes a real signed URL so it receives PNG bytes, not the
+    // provider's HTML error page. Local storage still uses the app proxy.
+    if (objectStorage.provider === 'cos') {
+      uploaded.push(objectStorage.createSignedUrl({
+        key: storageKey,
+        // A queued free-tier video may wait behind several provider creation
+        // windows. The URL is still short-lived, but must outlive that queue.
+        expiresInSeconds: Math.max(
+          900,
+          Number(process.env.VIDEO_REFERENCE_IMAGE_SIGNED_URL_TTL_SECONDS) || 3600,
+        ),
+      }))
+    } else if (canUsePublicStorageProxy) {
+      const encodedKey = storageKey.split('/').map((part) => encodeURIComponent(part)).join('/')
+      uploaded.push(`${publicStorageBaseUrl}/storage/${encodedKey}`)
+    } else if (videoConfig.imageUploadApiKey) {
+      uploaded.push(await uploadVideoImageBytes(
+        stored.bytes,
+        stored.contentType || 'image/png',
+        storageKey,
+        videoConfig,
+      ))
+    } else {
+      if (!publicStorageBaseUrl || /^(?:https?:\/\/)?(?:127\.0\.0\.1|localhost|0\.0\.0\.0)(?::|\/|$)/i.test(publicStorageBaseUrl)) {
+        throw new Error('视频参考图无法提供公网地址：请配置 VIDEO_IMAGE_UPLOAD_API_KEY 或公网 PUBLIC_BASE_URL')
+      }
+      const encodedKey = storageKey.split('/').map((part) => encodeURIComponent(part)).join('/')
+      uploaded.push(`${publicStorageBaseUrl}/storage/${encodedKey}`)
+    }
+  }
+  if (storageKeys.length) return [...new Set(uploaded)]
+
+  const fallbackUrls = (Array.isArray(request.referenceImages) ? request.referenceImages : [])
+    .map((url) => String(url || '').trim())
+    .filter(Boolean)
+  return [...new Set(fallbackUrls)]
 }
 
 async function processCharacterImageGenerationJob(jobId, request) {
@@ -775,15 +1758,30 @@ async function processCharacterImageGenerationJob(jobId, request) {
 
   await updateGenerationJob(jobId, { progress_percent: 85 })
   const insertedIds = []
-  for (const candidate of candidates) {
+  for (const [index, candidate] of candidates.entries()) {
+    let storageKey = null
+    let imageUrl = candidate.imageUrl
+    if (candidate.filePath) {
+      const persisted = await persistGeneratedImageCandidate({
+          projectId: request.projectId,
+          ownerType: 'character',
+          ownerId: request.characterId,
+          versionNo: request.versionNo,
+          candidateNo: index + 1,
+          filePath: candidate.filePath,
+        })
+      storageKey = persisted.storageKey
+      imageUrl = persisted.imageUrl || imageUrl
+    }
     const [result] = await db.execute(
       `INSERT INTO character_images
-        (character_id, version_no, image_url, thumbnail_url, prompt_snapshot, model_name, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'candidate')`,
+        (character_id, version_no, image_url, storage_key, thumbnail_url, prompt_snapshot, model_name, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'candidate')`,
       [
         request.characterId,
         request.versionNo,
-        candidate.imageUrl,
+        imageUrl,
+        storageKey,
         candidate.thumbnailUrl,
         candidate.promptSnapshot || request.promptSnapshot,
         candidate.modelName || request.modelName,
@@ -797,6 +1795,922 @@ async function processCharacterImageGenerationJob(jobId, request) {
     insertedIds,
   )
   return { items: rows.map(characterImageRow) }
+}
+
+async function loadStoredImageBytes(storageKeys = []) {
+  const bytes = []
+  for (const storageKey of Array.isArray(storageKeys) ? storageKeys : []) {
+    const stored = await objectStorage.getObject(storageKey)
+    if (stored?.bytes?.length) bytes.push(stored.bytes)
+  }
+  return bytes
+}
+
+async function materializeCharacterFaceCropCandidate(request) {
+  const sourceKey = String(request.baseReferenceStorageKey || '').trim()
+  if (!sourceKey) {
+    throw new Error('角色基础图没有可读取的原始文件，无法确定性裁切脸部特写；请重新生成并确认基础图')
+  }
+  const source = await objectStorage.getObject(sourceKey)
+  if (!source?.bytes?.length) {
+    throw new Error('角色基础图原始文件不存在或为空，无法确定性裁切脸部特写')
+  }
+  const cropRoot = path.join(
+    GENERATED_FRAME_DIR,
+    `asset-node-${Number(request.assetNodeId)}-v${Number(request.versionNo)}-face-crop`,
+  )
+  await mkdir(cropRoot, { recursive: true })
+  const sourcePath = path.join(cropRoot, 'source.png')
+  const outputPath = path.join(cropRoot, 'face.png')
+  await writeFile(sourcePath, source.bytes)
+  const dimensions = await probeMediaDimensions(sourcePath)
+  if (!dimensions) {
+    throw new Error('无法读取基础图的实际尺寸，已停止脸部特写裁切')
+  }
+  const localization = await locateCharacterHeadBounds({
+    imageBytes: source.bytes,
+    imageWidth: dimensions.width,
+    imageHeight: dimensions.height,
+  })
+  if (!localization.ok) {
+    throw new Error(`脸部特写定位失败：${localization.reason}。基础全身图保持不变，请重新定位或重试`)
+  }
+  const cropFilter = buildCharacterFaceCropFilter({
+    imageWidth: dimensions.width,
+    imageHeight: dimensions.height,
+    headBox: localization.headBox,
+  })
+  await runExternalCommand(FFMPEG_BIN, [
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-y',
+    '-i',
+    sourcePath,
+    '-vf',
+    cropFilter,
+    '-frames:v',
+    '1',
+    '-c:v',
+    'png',
+    outputPath,
+  ])
+  if (!(await fileExists(outputPath))) {
+    throw new Error('基础图脸部裁切没有产出图片')
+  }
+  return {
+    filePath: outputPath,
+    imageUrl: null,
+    thumbnailUrl: null,
+    promptSnapshot: request.promptSnapshot,
+    modelName: 'vision-localized-face-crop-v3',
+  }
+}
+
+async function inspectCharacterGeneratedCandidate({ candidate, request, viewKey, identityReferenceBytes }) {
+  const localBytes = candidate.filePath && await fileExists(candidate.filePath)
+    ? await readFile(candidate.filePath)
+    : null
+  return inspectAssetImage({
+    imageUrl: localBytes ? null : candidate.imageUrl,
+    imageBytes: localBytes,
+    referenceImageUrls: identityReferenceBytes.length ? [] : request.referenceImageUrls || [],
+    referenceImageBytesList: identityReferenceBytes,
+    viewKey,
+    nodeType: 'character',
+    identityLock: true,
+    noFace: /不露脸|正面不呈现|不直接露脸|不出现正脸|脸部.*不可见/u.test(String(request.prompt || '')),
+  })
+}
+
+async function generateCharacterDerivedCandidate({
+  request,
+  prompt,
+  viewKey,
+  storageReferenceUrls,
+  identityReferenceBytes,
+}) {
+  if (request.viewType === 'character-face-closeup') {
+    const candidate = await materializeCharacterFaceCropCandidate(request)
+    return {
+      ...candidate,
+      precheckedVision: await inspectCharacterGeneratedCandidate({
+        candidate,
+        request,
+        viewKey,
+        identityReferenceBytes,
+      }),
+    }
+  }
+
+  const maxAttempts = characterDerivedQualityAttempts(request.qualityAttempts, 3)
+  let lastCandidate = null
+  let previousReason = ''
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const attemptPrompt = attempt === 1
+      ? prompt
+      : `${prompt}\n${buildCharacterQualityRepairPrompt({ viewKey, previousReason, attempt })}`
+    const [candidate] = isMockFrameProvider(getFrameConfig())
+      ? [{
+          imageUrl: buildMockImageUrl(900000000 + request.assetNodeId, attempt - 1, request.versionNo),
+          thumbnailUrl: buildMockImageUrl(900000000 + request.assetNodeId, attempt - 1, request.versionNo),
+          promptSnapshot: attemptPrompt,
+          modelName: 'mock-frame-v1',
+        }]
+      : await generateFrameCandidates({
+          storyboardId: `asset-node-${request.assetNodeId}-${viewKey}-quality-${attempt}`,
+          versionNo: request.versionNo,
+          prompt: attemptPrompt,
+          negativePrompt: request.negativePrompt,
+          modelName: request.modelName,
+          publicBaseUrl: buildGeneratedFramePublicBaseUrl(),
+          outputDir: GENERATED_FRAME_DIR,
+          candidateCount: 1,
+          generationMode: request.generationMode || 'image_to_video',
+          imageRatio: request.imageRatio || null,
+          referenceImageUrls: storageReferenceUrls.length ? storageReferenceUrls : request.referenceImageUrls || [],
+          generationContext: 'character-reference',
+        })
+    if (!candidate) throw new Error(`角色${request.viewLabel || viewKey}视角没有产出图片`)
+    const vision = await inspectCharacterGeneratedCandidate({
+      candidate,
+      request,
+      viewKey,
+      identityReferenceBytes,
+    })
+    lastCandidate = {
+      ...candidate,
+      promptSnapshot: attemptPrompt,
+      qualityAttempt: attempt,
+      precheckedVision: vision,
+    }
+    if (vision.passed) return lastCandidate
+    if (shouldStopAssetRetry(vision)) {
+      throw new Error(`角色${request.viewLabel || viewKey}视角内容门禁失败：${vision.reason}`)
+    }
+    previousReason = vision.reason || '视觉检查未通过'
+  }
+  return lastCandidate
+}
+
+async function inspectSceneGeneratedCandidate({ candidate, viewKey, sceneReferenceImageBytes }) {
+  const localBytes = candidate.filePath && await fileExists(candidate.filePath)
+    ? await readFile(candidate.filePath)
+    : null
+  const vision = await inspectAssetImage({
+    imageUrl: localBytes ? null : candidate.imageUrl,
+    imageBytes: localBytes,
+    referenceImageBytes: sceneReferenceImageBytes,
+    viewKey,
+    scene: true,
+    nodeType: 'scene',
+  })
+  return enforceEmptySceneVision(vision)
+}
+
+async function processAssetNodeImageGenerationJob(jobId, request) {
+  const frameConfig = getFrameConfig()
+  let candidates
+  const isSceneNineGridBatch = request.viewType === 'scene-nine-grid' && !request.viewKey
+  const isSceneNineGridAngle = request.viewType === 'scene-nine-grid' && Boolean(request.viewKey)
+  const isCharacterTurnaroundBatch = request.viewType === 'character-turnaround'
+    && !request.viewKey
+    && Array.isArray(request.viewBatch)
+    && request.viewBatch.length
+  const isCharacterDerivedSingle = request.nodeType === 'character'
+    && ['character-turnaround', 'character-face-closeup'].includes(request.viewType)
+    && Boolean(request.viewKey)
+  let identityReferenceBytes = await loadStoredImageBytes(request.identityReferenceImageStorageKeys)
+  // 资产板拆分后的每个区域都可能进入身份复核。检查当前区域时排除它自身，
+  // 避免把“自己和自己”判成一致。
+  let assetPackReferenceBytesByView = {}
+  let sceneReferenceImageBytes = null
+  if (isSceneVisionCheckEnabled()
+    && request.viewType === 'scene-nine-grid'
+    && Array.isArray(request.referenceImageStorageKeys)) {
+    const sceneReferenceStorageKeys = [
+      request.panoramaStorageKey,
+      ...request.referenceImageStorageKeys,
+    ].filter((key, index, keys) => key && keys.indexOf(key) === index)
+    for (const storageKey of sceneReferenceStorageKeys) {
+      const stored = await objectStorage.getObject(storageKey)
+      if (stored?.bytes?.length) {
+        sceneReferenceImageBytes = stored.bytes
+        break
+      }
+    }
+    if (!sceneReferenceImageBytes) {
+      throw new Error('场景九宫格母图原始对象不存在，已阻止使用过期签名 URL 继续视觉检查')
+    }
+  }
+  const isCharacterAssetPack = Boolean(request.assetPackEnabled)
+    && request.nodeType === 'character'
+    && request.viewType === 'single'
+  if (isCharacterAssetPack) {
+    const storageReferenceUrls = []
+    for (const storageKey of Array.isArray(request.referenceImageStorageKeys)
+      ? request.referenceImageStorageKeys
+      : []) {
+      const stored = await objectStorage.getObject(storageKey)
+      if (!stored?.bytes?.length) throw new Error(`参考图对象不存在或为空：${storageKey}`)
+      storageReferenceUrls.push(`data:${stored.contentType || 'image/png'};base64,${Buffer.from(stored.bytes).toString('base64')}`)
+    }
+    const [board] = isMockFrameProvider(frameConfig)
+      ? [{
+          imageUrl: buildMockImageUrl(900000000 + request.assetNodeId, 0, request.versionNo),
+          thumbnailUrl: buildMockImageUrl(900000000 + request.assetNodeId, 0, request.versionNo),
+          filePath: await materializeMockCharacterAssetPackBoard({
+            assetNodeId: request.assetNodeId,
+            versionNo: request.versionNo,
+          }),
+          promptSnapshot: request.promptSnapshot,
+          modelName: 'mock-frame-v1',
+        }]
+      : await generateFrameCandidates({
+          storyboardId: `asset-node-${request.assetNodeId}-character-pack`,
+          versionNo: request.versionNo,
+          prompt: request.prompt,
+          negativePrompt: request.negativePrompt,
+          modelName: request.modelName,
+          publicBaseUrl: buildGeneratedFramePublicBaseUrl(),
+          outputDir: GENERATED_FRAME_DIR,
+          candidateCount: 1,
+          imageRatio: '16:9',
+          referenceImageUrls: storageReferenceUrls.length
+            ? storageReferenceUrls
+            : request.referenceImageUrls || [],
+          generationContext: 'character-reference',
+        })
+    if (!board?.filePath) {
+      throw new Error('角色资产包模型没有返回可读取的资产板文件，已回退到普通角色基础图流程')
+    }
+    // 豆包资产包本身就是图4所示的完整母板。不要再按旧版固定坐标裁切：
+    // 不同模型会改变人物留白和排版，强行裁切会把脸、下巴和三视图切坏。
+    // 母板以一个独立结果保存，后续视频和视觉检查都引用这张同源图。
+    candidates = [{
+      ...board,
+      assetPackViewType: 'character-asset-pack',
+      viewIndex: null,
+      viewKey: null,
+      viewLabel: '角色资产板',
+      promptSnapshot: request.prompt,
+    }]
+    const boardBytes = await readFile(board.filePath)
+    identityReferenceBytes = [boardBytes]
+    assetPackReferenceBytesByView = { __pack__: boardBytes }
+  } else if (isSceneNineGridBatch) {
+    const storageReferenceUrls = []
+    for (const storageKey of Array.isArray(request.referenceImageStorageKeys)
+      ? request.referenceImageStorageKeys
+      : []) {
+      const stored = await objectStorage.getObject(storageKey)
+      if (!stored?.bytes?.length) {
+        throw new Error(`参考图对象不存在或为空：${storageKey}`)
+      }
+      const contentType = stored.contentType || 'image/png'
+      storageReferenceUrls.push(
+        `data:${contentType};base64,${Buffer.from(stored.bytes).toString('base64')}`,
+      )
+    }
+    const panoramaReference = String(
+      request.panoramaImageUrl || request.panoramaStorageKey || 'confirmed-panorama-reference',
+    ).trim()
+    candidates = []
+    const maxAttempts = isSceneVisionCheckEnabled()
+      ? sceneNineGridQualityAttempts(request.qualityAttempts, 5)
+      : 1
+    const failedAngles = []
+    for (const descriptor of buildSceneNineGridViewDescriptors({}).map((item) => item)) {
+      const baseAnglePrompt = buildSceneNineGridAnglePrompt({
+        angle: descriptor.viewKey,
+        panorama: panoramaReference,
+        spatialAnchors: request.sceneSpatialAnchors,
+      })
+      let accepted = null
+      let previousReason = ''
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const anglePrompt = attempt === 1
+          ? baseAnglePrompt
+          : `${baseAnglePrompt}\n${buildSceneNineGridQualityRepairPrompt({
+              angle: descriptor.viewKey,
+              previousReason,
+              attempt,
+            })}`
+        const [candidate] = isMockFrameProvider(frameConfig)
+          ? [{
+              imageUrl: buildMockImageUrl(900000000 + request.assetNodeId, descriptor.viewIndex - 1, request.versionNo),
+              thumbnailUrl: buildMockImageUrl(900000000 + request.assetNodeId, descriptor.viewIndex - 1, request.versionNo),
+              promptSnapshot: anglePrompt,
+              modelName: 'mock-frame-v1',
+            }]
+          : await generateFrameCandidates({
+              storyboardId: `asset-node-${request.assetNodeId}-${descriptor.viewKey}-quality-${attempt}`,
+              versionNo: request.versionNo,
+              prompt: anglePrompt,
+              negativePrompt: request.negativePrompt,
+              modelName: request.modelName,
+              publicBaseUrl: buildGeneratedFramePublicBaseUrl(),
+              outputDir: GENERATED_FRAME_DIR,
+              candidateCount: 1,
+              generationMode: request.generationMode || 'image_to_video',
+              imageRatio: request.imageRatio || null,
+              referenceImageUrls: storageReferenceUrls.length
+                ? storageReferenceUrls
+                : request.referenceImageUrls || [],
+              generationContext: 'scene-environment',
+            })
+        if (!candidate) throw new Error(`场景${descriptor.viewLabel}视角没有产出图片`)
+        const vision = isSceneVisionCheckEnabled()
+          ? await inspectSceneGeneratedCandidate({
+              candidate,
+              viewKey: descriptor.viewKey,
+              sceneReferenceImageBytes,
+            })
+          : {
+              passed: true,
+              skipped: true,
+              reason: '未运行视觉检查；结果需由用户按全景基准人工确认',
+            }
+        const enriched = {
+          ...candidate,
+          // 每个视角都留存自己的完整提示词，不能退回到九宫格批次的泛化提示词。
+          promptSnapshot: anglePrompt,
+          viewIndex: descriptor.viewIndex,
+          viewKey: descriptor.viewKey,
+          viewLabel: descriptor.viewLabel,
+          precheckedVision: vision,
+        }
+        if (vision.passed) {
+          accepted = enriched
+          break
+        }
+        if (shouldStopAssetRetry(vision)) {
+          throw new Error(`场景${descriptor.viewLabel}视角内容门禁失败：${vision.reason}`)
+        }
+        previousReason = vision.reason || '视觉检查未通过'
+      }
+      if (!accepted) {
+        failedAngles.push(`${descriptor.viewLabel}：${previousReason || '视觉检查未通过'}`)
+        continue
+      }
+      candidates.push(accepted)
+    }
+    if (candidates.length !== buildSceneNineGridViewDescriptors({}).length) {
+      throw new Error(`场景九宫格未完成 9/9：${failedAngles.join('；')}`)
+    }
+  } else if (isCharacterTurnaroundBatch) {
+    const storageReferenceUrls = []
+    for (const storageKey of Array.isArray(request.referenceImageStorageKeys)
+      ? request.referenceImageStorageKeys
+      : []) {
+      const stored = await objectStorage.getObject(storageKey)
+      if (!stored?.bytes?.length) throw new Error(`参考图对象不存在或为空：${storageKey}`)
+      storageReferenceUrls.push(`data:${stored.contentType || 'image/png'};base64,${Buffer.from(stored.bytes).toString('base64')}`)
+    }
+    candidates = []
+    for (const [index, descriptor] of request.viewBatch.entries()) {
+      const candidate = await generateCharacterDerivedCandidate({
+        request,
+        prompt: descriptor.prompt,
+        viewKey: descriptor.viewKey,
+        storageReferenceUrls,
+        identityReferenceBytes,
+      })
+      candidates.push({
+        ...candidate,
+        promptSnapshot: descriptor.prompt,
+        viewIndex: descriptor.viewIndex,
+        viewKey: descriptor.viewKey,
+        viewLabel: descriptor.viewLabel,
+      })
+    }
+  } else if (isSceneNineGridAngle) {
+    const [descriptor] = buildSceneNineGridViewDescriptors({}).filter((item) => item.viewKey === request.viewKey)
+    if (!descriptor) throw new Error(`无效的场景九宫格视角：${request.viewKey}`)
+    const storageReferenceUrls = []
+    for (const storageKey of Array.isArray(request.referenceImageStorageKeys)
+      ? request.referenceImageStorageKeys
+      : []) {
+      const stored = await objectStorage.getObject(storageKey)
+      if (!stored?.bytes?.length) throw new Error(`参考图对象不存在或为空：${storageKey}`)
+      storageReferenceUrls.push(`data:${stored.contentType || 'image/png'};base64,${Buffer.from(stored.bytes).toString('base64')}`)
+    }
+    const baseAnglePrompt = buildSceneNineGridAnglePrompt({
+      angle: descriptor.viewKey,
+      panorama: request.panoramaImageUrl || request.panoramaStorageKey,
+      spatialAnchors: request.sceneSpatialAnchors,
+    })
+    // Scene angle retries are not character derivatives. Reusing the
+    // character helper here makes its precheck treat the panorama URL as a
+    // character identity reference, which can send an expired COS URL to the
+    // vision model. Scene retries use the same direct provider path as the
+    // nine-grid batch; the common insert/inspection path supplies panorama
+    // bytes for the spatial check.
+    const maxAttempts = isSceneVisionCheckEnabled()
+      ? sceneNineGridQualityAttempts(request.qualityAttempts, 5)
+      : 1
+    let accepted = null
+    let previousReason = ''
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const anglePrompt = attempt === 1
+        ? baseAnglePrompt
+        : `${baseAnglePrompt}\n${buildSceneNineGridQualityRepairPrompt({
+            angle: descriptor.viewKey,
+            previousReason,
+            attempt,
+          })}`
+      const [candidate] = isMockFrameProvider(frameConfig)
+        ? [{
+            imageUrl: buildMockImageUrl(900000000 + request.assetNodeId, descriptor.viewIndex - 1, request.versionNo),
+            thumbnailUrl: buildMockImageUrl(900000000 + request.assetNodeId, descriptor.viewIndex - 1, request.versionNo),
+            promptSnapshot: anglePrompt,
+            modelName: 'mock-frame-v1',
+          }]
+        : await generateFrameCandidates({
+            storyboardId: `asset-node-${request.assetNodeId}-${descriptor.viewKey}-retry-quality-${attempt}`,
+            versionNo: request.versionNo,
+            prompt: anglePrompt,
+            negativePrompt: request.negativePrompt,
+            modelName: request.modelName,
+            publicBaseUrl: buildGeneratedFramePublicBaseUrl(),
+            outputDir: GENERATED_FRAME_DIR,
+            candidateCount: 1,
+            generationMode: request.generationMode || 'image_to_video',
+            imageRatio: request.imageRatio || null,
+            referenceImageUrls: storageReferenceUrls.length
+              ? storageReferenceUrls
+              : request.referenceImageUrls || [],
+            generationContext: 'scene-environment',
+          })
+      if (!candidate) throw new Error(`场景${descriptor.viewLabel}视角没有产出图片`)
+      const vision = isSceneVisionCheckEnabled()
+        ? await inspectSceneGeneratedCandidate({
+            candidate,
+            viewKey: descriptor.viewKey,
+            sceneReferenceImageBytes,
+          })
+        : {
+            passed: true,
+            skipped: true,
+            reason: '未运行视觉检查；结果需由用户按全景基准人工确认',
+          }
+      const enriched = {
+        ...candidate,
+        promptSnapshot: anglePrompt,
+        viewIndex: descriptor.viewIndex,
+        viewKey: descriptor.viewKey,
+        viewLabel: descriptor.viewLabel,
+        precheckedVision: vision,
+      }
+      if (vision.passed) {
+        accepted = enriched
+        break
+      }
+      if (shouldStopAssetRetry(vision)) {
+        throw new Error(`场景${descriptor.viewLabel}视角内容门禁失败：${vision.reason}`)
+      }
+      previousReason = vision.reason || '视觉检查未通过'
+    }
+    if (!accepted) throw new Error(`场景${descriptor.viewLabel}视角没有生成可用图片：${previousReason}`)
+    candidates = [accepted]
+  } else if (isCharacterDerivedSingle) {
+    // Single retries must use the same derived-image path as the batch job.
+    // In particular, face closeups are deterministic crops of the confirmed
+    // base image; falling through to the generic provider path recreates the
+    // old bug where a full-body reference was redrawn as a different face.
+    const storageReferenceUrls = []
+    for (const storageKey of Array.isArray(request.referenceImageStorageKeys)
+      ? request.referenceImageStorageKeys
+      : []) {
+      const stored = await objectStorage.getObject(storageKey)
+      if (!stored?.bytes?.length) throw new Error(`参考图对象不存在或为空：${storageKey}`)
+      storageReferenceUrls.push(`data:${stored.contentType || 'image/png'};base64,${Buffer.from(stored.bytes).toString('base64')}`)
+    }
+    const candidate = await generateCharacterDerivedCandidate({
+      request,
+      prompt: request.prompt,
+      viewKey: request.viewKey,
+      storageReferenceUrls,
+      identityReferenceBytes,
+    })
+    candidates = [{
+      ...candidate,
+      promptSnapshot: candidate.promptSnapshot || request.promptSnapshot,
+      viewIndex: request.viewIndex,
+      viewKey: request.viewKey,
+      viewLabel: request.viewLabel,
+    }]
+  } else if (isMockFrameProvider(frameConfig)) {
+    candidates = Array.from({ length: request.candidateCount }, (_, index) => {
+      const imageUrl = buildMockImageUrl(900000000 + request.assetNodeId, index, request.versionNo)
+      return {
+        imageUrl,
+        thumbnailUrl: imageUrl,
+        promptSnapshot: request.promptSnapshot,
+        modelName: 'mock-frame-v1',
+        viewIndex: request.viewIndex || null,
+        viewKey: request.viewKey || null,
+        viewLabel: request.viewLabel || null,
+      }
+    })
+  } else {
+    const storageReferenceUrls = []
+    for (const storageKey of Array.isArray(request.referenceImageStorageKeys)
+      ? request.referenceImageStorageKeys
+      : []) {
+      const stored = await objectStorage.getObject(storageKey)
+      if (!stored?.bytes?.length) {
+        throw new Error(`参考图对象不存在或为空：${storageKey}`)
+      }
+      const contentType = stored.contentType || 'image/png'
+      storageReferenceUrls.push(
+        `data:${contentType};base64,${Buffer.from(stored.bytes).toString('base64')}`,
+      )
+    }
+    candidates = await generateFrameCandidates({
+      storyboardId: `asset-node-${request.assetNodeId}`,
+      versionNo: request.versionNo,
+      prompt: request.prompt,
+      negativePrompt: request.negativePrompt,
+      modelName: request.modelName,
+      publicBaseUrl: buildGeneratedFramePublicBaseUrl(),
+      outputDir: GENERATED_FRAME_DIR,
+      candidateCount: request.candidateCount,
+      generationMode: request.generationMode || 'image_to_video',
+      imageRatio: request.imageRatio || null,
+      referenceImageUrls: storageReferenceUrls.length
+        ? storageReferenceUrls
+        : request.referenceImageUrls || [],
+      generationContext: request.nodeType === 'scene' ? 'scene-environment' : 'cinematic-frame',
+    })
+  }
+
+  if (['character-turnaround', 'character-face-closeup'].includes(request.viewType) && request.viewKey) {
+    candidates = candidates.slice(0, 1).map((candidate) => ({
+      ...candidate,
+      viewIndex: request.viewIndex,
+      viewKey: request.viewKey,
+      viewLabel: request.viewLabel,
+    }))
+  }
+  await updateGenerationJob(jobId, { progress_percent: 85 })
+  const insertedIds = []
+  async function insertImage({
+    candidate,
+    candidateNo,
+    viewSetType = request.viewType || 'single',
+    viewIndex = candidate.viewIndex || request.viewIndex || null,
+    viewKey = candidate.viewKey || request.viewKey || null,
+    viewLabel = candidate.viewLabel || request.viewLabel || null,
+    sourceImageId = null,
+    sourceImageUrl = null,
+    crop = null,
+  }) {
+    let storageKey = null
+    let imageUrl = candidate.imageUrl
+    if (candidate.filePath) {
+      const persisted = await persistGeneratedImageCandidate({
+        projectId: request.projectId,
+        ownerType: 'asset_node',
+        ownerId: request.assetNodeId,
+        versionNo: request.versionNo,
+        candidateNo,
+        filePath: candidate.filePath,
+      })
+      storageKey = persisted.storageKey
+      imageUrl = persisted.imageUrl || imageUrl
+    }
+    const [result] = await db.execute(
+      `INSERT INTO asset_node_images
+        (asset_node_id, version_no, image_url, storage_key, thumbnail_url, prompt_snapshot, model_name,
+         view_set_type, view_set_version, view_index, view_key, view_label,
+         source_image_id, source_image_url, crop_json,
+         character_identity_lock_json, identity_status, identity_reason,
+         identity_similarity_score, wardrobe_consistency_score,
+         vision_status, vision_reason, vision_checked_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', NULL, NULL, 'candidate')`,
+      [
+        request.assetNodeId,
+        request.versionNo,
+        imageUrl,
+        storageKey,
+        // 模型返回的缩略图通常是短时地址；图片落盘后必须跟随持久化地址。
+        storageKey ? imageUrl : candidate.thumbnailUrl,
+        candidate.promptSnapshot || request.promptSnapshot,
+        candidate.modelName || request.modelName,
+        viewSetType,
+        request.versionNo,
+        viewIndex,
+        viewKey,
+        viewLabel,
+        sourceImageId,
+        sourceImageUrl,
+        crop ? JSON.stringify(crop) : null,
+        request.identityLockSnapshot && request.nodeType === 'character'
+          ? JSON.stringify(request.identityLockSnapshot)
+          : null,
+        request.identityLockSnapshot && request.nodeType === 'character'
+          && ['character-turnaround', 'character-face-closeup'].includes(viewSetType)
+          ? 'pending'
+          : 'not_checked',
+      ],
+    )
+    const imageId = Number(result.insertId)
+    insertedIds.push(imageId)
+    if (request.nodeType === 'scene') {
+      await db.execute(
+        `UPDATE asset_node_images
+         SET vision_status = 'skipped',
+             vision_reason = '未运行视觉检查；结果需由用户按全景基准人工确认',
+             vision_checked_at = NULL,
+             identity_status = 'not_checked'
+         WHERE id = ?`,
+        [imageId],
+      )
+    }
+    if (candidate.precheckedVision) {
+      const prechecked = candidate.precheckedVision
+      const identityChecked = request.nodeType === 'character'
+        && ['character-turnaround', 'character-face-closeup'].includes(viewSetType)
+      await db.execute(
+        `UPDATE asset_node_images
+         SET vision_status = ?, vision_reason = ?, vision_checked_at = IF(?, NULL, NOW()),
+             identity_status = ?, identity_reason = ?,
+             identity_similarity_score = ?, wardrobe_consistency_score = ?
+         WHERE id = ?`,
+        [
+          prechecked.skipped ? 'skipped' : prechecked.pending ? 'pending' : prechecked.passed ? 'passed' : 'failed',
+          prechecked.reason || null,
+          Boolean(prechecked.skipped),
+          identityChecked ? (prechecked.pending ? 'pending' : prechecked.passed ? 'passed' : 'failed') : 'not_checked',
+          identityChecked ? prechecked.reason || null : null,
+          identityChecked ? prechecked.identitySimilarityScore : null,
+          identityChecked ? prechecked.wardrobeConsistencyScore : null,
+          imageId,
+        ],
+      )
+    }
+    return { imageId, imageUrl, storageKey }
+  }
+
+  for (const [index, candidate] of candidates.entries()) {
+    if (request.viewType === 'scene-nine-grid') {
+      await insertImage({
+        candidate,
+        candidateNo: index + 1,
+        viewSetType: 'scene-nine-grid',
+        viewIndex: candidate.viewIndex,
+        viewKey: candidate.viewKey,
+        viewLabel: candidate.viewLabel,
+        sourceImageId: request.panoramaImageId,
+        sourceImageUrl: request.panoramaImageUrl,
+        crop: null,
+      })
+    } else if (candidate.assetPackViewType) {
+      await insertImage({
+        candidate,
+        candidateNo: index + 1,
+        viewSetType: candidate.assetPackViewType,
+        viewIndex: candidate.viewIndex,
+        viewKey: candidate.viewKey,
+        viewLabel: candidate.viewLabel,
+        sourceImageId: null,
+        sourceImageUrl: null,
+      })
+    } else {
+      await insertImage({
+        candidate,
+        candidateNo: index + 1,
+        sourceImageId: request.sourceImageId,
+        sourceImageUrl: request.baseReferenceImageUrl || null,
+      })
+    }
+  }
+  if (!insertedIds.length) throw new Error('画布节点形象生成没有产出任何候选')
+  for (const insertedId of insertedIds) {
+    const [imageRows] = await db.execute(
+      `SELECT image_url, storage_key, view_key, view_set_type, source_image_id,
+              vision_status, identity_status, character_identity_lock_json
+       FROM asset_node_images WHERE id = ? LIMIT 1`,
+      [insertedId],
+    )
+    const image = imageRows[0]
+    const shouldInspect = request.nodeType !== 'scene'
+      && (['character-asset-pack', 'character-turnaround', 'character-face-closeup', 'prop-turnaround'].includes(image?.view_set_type)
+      || (
+        image?.view_set_type === 'single'
+        && ['character', 'scene', 'prop', 'material'].includes(request.nodeType)
+        && !image?.view_key
+      ))
+    if (!shouldInspect || image?.vision_status !== 'pending') continue
+    let vision
+    try {
+      const stored = image.storage_key ? await objectStorage.getObject(image.storage_key) : null
+      let sourceStored = null
+      let sourceRows = []
+      if (image.view_set_type === 'scene-nine-grid' && image.source_image_id) {
+        const [rows] = await db.execute(
+          'SELECT storage_key, image_url FROM asset_node_images WHERE id = ? LIMIT 1',
+          [image.source_image_id],
+        )
+        sourceRows = rows
+        if (sourceRows[0]?.storage_key) {
+          sourceStored = await objectStorage.getObject(sourceRows[0].storage_key)
+        }
+      }
+      const imageReferenceKey = image.view_key || (image.view_set_type === 'single' ? '__base__' : '')
+      const assetPackReferences = Object.entries(assetPackReferenceBytesByView)
+        .filter(([key]) => key !== imageReferenceKey)
+        .map(([, bytes]) => bytes)
+      const identityReferencesForImage = assetPackReferences.length
+        ? assetPackReferences
+        : identityReferenceBytes
+      vision = await inspectAssetImage({
+        imageUrl: stored ? null : image.image_url,
+        imageBytes: stored?.bytes || null,
+        // Scene checks must never send a signed COS URL to the vision model.
+        // The panorama bytes loaded from object storage are the only accepted
+        // reference for a scene-nine-grid result.
+        referenceImageUrl: null,
+        referenceImageBytes: image.view_set_type === 'scene-nine-grid'
+          ? sceneReferenceImageBytes
+          : sourceStored?.bytes || null,
+        referenceImageUrls: request.nodeType === 'character'
+          && ['character-turnaround', 'character-face-closeup'].includes(image.view_set_type)
+          ? identityReferencesForImage.length ? [] : request.referenceImageUrls || []
+          : [],
+        referenceImageBytesList: request.nodeType === 'character'
+          && ['character-turnaround', 'character-face-closeup'].includes(image.view_set_type)
+          ? identityReferencesForImage
+          : [],
+        viewKey: image.view_key || (request.nodeType === 'character' ? 'front' : null),
+        scene: request.nodeType === 'scene',
+        assetPack: image.view_set_type === 'character-asset-pack',
+        nodeType: request.nodeType,
+        identityLock: request.nodeType === 'character'
+          && ['character-turnaround', 'character-face-closeup'].includes(image.view_set_type),
+        noFace: request.nodeType === 'character'
+          && /不露脸|正脸不呈现|不直接露脸|不出现正脸|脸部.*不可见/u.test(String(request.prompt || '')),
+      })
+    } catch (error) {
+      vision = {
+        passed: false,
+        reason: `视觉检查无法读取已生成图片：${error instanceof Error ? error.message : '未知错误'}`,
+      }
+    }
+    const identityChecked = request.nodeType === 'character'
+      && ['character-turnaround', 'character-face-closeup'].includes(image.view_set_type)
+    await db.execute(
+      `UPDATE asset_node_images
+       SET vision_status = ?, vision_reason = ?, vision_checked_at = NOW(),
+           identity_status = ?, identity_reason = ?,
+           identity_similarity_score = ?, wardrobe_consistency_score = ?
+       WHERE id = ?`,
+      [
+        vision.pending ? 'pending' : vision.passed ? 'passed' : 'failed',
+        vision.reason || null,
+        identityChecked ? (vision.pending ? 'pending' : vision.passed ? 'passed' : 'failed') : 'not_checked',
+        identityChecked ? vision.reason || null : null,
+        identityChecked ? vision.identitySimilarityScore : null,
+        identityChecked ? vision.wardrobeConsistencyScore : null,
+        insertedId,
+      ],
+    )
+  }
+  // Vision approval only makes a generated image eligible for user adoption.
+  // Do not supersede or confirm an older image here: retries must remain
+  // reversible until the user explicitly clicks the adoption action.
+  const [generatedRows] = await db.execute(
+    `SELECT id, view_set_type, view_key, vision_status
+     FROM asset_node_images WHERE id IN (${insertedIds.map(() => '?').join(', ')})`,
+    insertedIds,
+  )
+  for (const generated of generatedRows) {
+    if (generated.vision_status === 'failed') {
+      await db.execute(
+        `UPDATE asset_node_images SET status = 'failed' WHERE id = ? AND status = 'candidate'`,
+        [generated.id],
+      )
+    }
+  }
+  if (request.nodeType === 'character' && request.assetPackEnabled) {
+    await autoAdoptAssetPack(request.assetNodeId, insertedIds)
+  } else if (['prop', 'material'].includes(String(request.nodeType || ''))
+    && request.viewType === 'single') {
+    for (const insertedId of insertedIds) await autoAdoptSingleAsset(insertedId)
+  }
+  if (isSceneVisionCheckEnabled()
+    && request.viewType === 'scene-nine-grid'
+    && generatedRows.some((generated) => generated.vision_status === 'failed')) {
+    const failedCount = generatedRows.filter((generated) => generated.vision_status === 'failed').length
+    throw new Error(`场景九宫格视觉检查未通过：${failedCount} 个视角不符合当前全景母图，请重试失败视角`)
+  }
+  const placeholders = insertedIds.map(() => '?').join(', ')
+  const [rows] = await db.execute(
+    `SELECT * FROM asset_node_images WHERE id IN (${placeholders}) ORDER BY id ASC`,
+    insertedIds,
+  )
+  return { items: rows.map(assetNodeImageDto) }
+}
+
+const CHARACTER_PACK_LEGACY_TYPES = "'single', 'character-asset-pack', 'character-face-closeup', 'character-turnaround'"
+
+async function commitAssetAdoption({ candidateIds, nodeType, assetNodeId, viewType }) {
+  const ids = [...new Set((Array.isArray(candidateIds) ? candidateIds : [candidateIds])
+    .map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))]
+  if (!ids.length) return false
+  const connection = await db.getConnection()
+  let adopted = false
+  try {
+    await connection.beginTransaction()
+    const [candidateRows] = await connection.execute(
+      `SELECT * FROM asset_node_images WHERE asset_node_id = ? AND id IN (${ids.map(() => '?').join(', ')}) FOR UPDATE`,
+      [Number(assetNodeId), ...ids],
+    )
+    if (nodeType === 'character') {
+      const legacyBoardIds = candidateRows
+        .filter((row) => isCharacterAssetPackRow(row)
+          && String(row.view_set_type || '') === 'single')
+        .map((row) => Number(row.id))
+        .filter((id) => Number.isSafeInteger(id) && id > 0)
+      if (legacyBoardIds.length) {
+        await connection.execute(
+          `UPDATE asset_node_images
+           SET view_set_type = 'character-asset-pack', view_key = NULL,
+               view_index = NULL, view_label = '角色资产板'
+           WHERE id IN (${legacyBoardIds.map(() => '?').join(', ')})`,
+          legacyBoardIds,
+        )
+        for (const row of candidateRows) {
+          if (legacyBoardIds.includes(Number(row.id))) {
+            row.view_set_type = 'character-asset-pack'
+            row.view_key = null
+            row.view_index = null
+            row.view_label = '角色资产板'
+          }
+        }
+      }
+    }
+    const [existingRows] = await connection.execute(
+      nodeType === 'character'
+        ? `SELECT * FROM asset_node_images WHERE asset_node_id = ? AND view_set_type IN (${CHARACTER_PACK_LEGACY_TYPES}) FOR UPDATE`
+        : `SELECT * FROM asset_node_images WHERE asset_node_id = ? AND view_set_type = ? FOR UPDATE`,
+      nodeType === 'character' ? [Number(assetNodeId)] : [Number(assetNodeId), viewType],
+    )
+    let plan
+    if (nodeType === 'character') {
+      plan = planAssetPackAdoption(candidateRows, existingRows)
+    } else {
+      const candidate = candidateRows.find((row) => Number(row.id) === ids[0])
+      plan = planSingleAssetAdoption(candidate, existingRows)
+    }
+    if (!plan.ready) {
+      await connection.rollback()
+      return false
+    }
+    const replaceIds = plan.replaceIds
+    if (replaceIds.length) {
+      await connection.execute(
+        `UPDATE asset_node_images SET status = 'superseded' WHERE id IN (${replaceIds.map(() => '?').join(', ')}) AND status IN ('candidate', 'confirmed')`,
+        replaceIds,
+      )
+    }
+    const adoptIds = plan.adoptIds || [plan.adoptId]
+    await connection.execute(
+      `UPDATE asset_node_images SET status = 'confirmed', confirmed_at = NOW() WHERE id IN (${adoptIds.map(() => '?').join(', ')})`,
+      adoptIds,
+    )
+    await connection.commit()
+    adopted = true
+  } catch (error) {
+    await connection.rollback().catch(() => {})
+    throw error
+  } finally {
+    connection.release()
+  }
+  return adopted
+}
+
+async function autoAdoptAssetPack(assetNodeId, candidateIds) {
+  return commitAssetAdoption({ candidateIds, nodeType: 'character', assetNodeId })
+}
+
+async function autoAdoptSingleAsset(imageId) {
+  const [rows] = await db.execute(
+    'SELECT asset_node_id, view_set_type FROM asset_node_images WHERE id = ? LIMIT 1',
+    [Number(imageId)],
+  )
+  const row = rows[0]
+  if (!row || row.view_set_type !== 'single') return false
+  const [nodeRows] = await db.execute('SELECT node_type FROM asset_nodes WHERE id = ? LIMIT 1', [row.asset_node_id])
+  const nodeType = String(nodeRows[0]?.node_type || '')
+  if (!['prop', 'material'].includes(nodeType)) return false
+  return commitAssetAdoption({
+    candidateIds: [imageId],
+    nodeType,
+    assetNodeId: row.asset_node_id,
+    viewType: 'single',
+  })
 }
 
 async function resolveLipSyncAvatarProfile(request, config) {
@@ -910,7 +2824,37 @@ async function processLipSyncGenerationJob(jobId, request) {
   const config = getLipSyncConfig()
   let providerTaskId = String(request.providerTaskId || '').trim()
   let generated
-  if (config.provider === 'dashscope') {
+  if (config.provider === 'latentsync') {
+    if (!/^https?:\/\//i.test(String(request.sourceVideoUrl || '').trim())) {
+      throw new Error('LatentSync 需要先生成一条可访问的原始视频，再进行口型同步')
+    }
+    if (!/^https?:\/\//i.test(String(request.audioUrl || '').trim())) {
+      throw new Error('LatentSync 需要一条可访问的对白音频')
+    }
+    await updateGenerationJob(jobId, { progress_percent: 20 })
+    if (!providerTaskId) {
+      const created = await createLatentSyncTask({
+        videoUrl: request.sourceVideoUrl,
+        audioUrl: request.audioUrl,
+        prompt: request.prompt,
+        durationSeconds: request.generationDurationSeconds,
+        config,
+      })
+      providerTaskId = created.taskId
+      request.providerTaskId = providerTaskId
+      await updateGenerationJob(jobId, {
+        progress_percent: 40,
+        request_json: JSON.stringify(request),
+      })
+    }
+    generated = await waitForLatentSyncTask(providerTaskId, {
+      config,
+      onProgress: ({ progress }) => {
+        const mapped = 40 + Math.round(Math.max(0, Math.min(100, progress)) * 0.5)
+        void updateGenerationJob(jobId, { progress_percent: mapped })
+      },
+    })
+  } else if (config.provider === 'dashscope') {
     await updateGenerationJob(jobId, { progress_percent: 20 })
     if (!providerTaskId) {
       const inputExpiresAt = Date.parse(String(request.providerInputExpiresAt || ''))
@@ -993,6 +2937,7 @@ async function processLipSyncGenerationJob(jobId, request) {
   await updateGenerationJob(jobId, { progress_percent: 92 })
 
   const persisted = await persistSilentLipSyncVideo({
+    projectId: request.projectId,
     storyboardId: request.storyboardId,
     versionNo: request.versionNo,
     sourceUrl: generated.videoUrl,
@@ -1012,15 +2957,16 @@ async function processLipSyncGenerationJob(jobId, request) {
     }
     const [insertResult] = await conn.execute(
       `INSERT INTO video_assets
-        (storyboard_id, image_asset_id, version_no, video_url, thumbnail_url,
+        (storyboard_id, image_asset_id, version_no, video_url, storage_key, thumbnail_url,
          motion_mode, duration_seconds, model_name, audio_asset_id, generation_job_id,
          source_type, status, confirmed_at)
-       VALUES (?, ?, ?, ?, ?, 'LIP_SYNC', ?, ?, ?, ?, 'lip_sync', ?, ${status === 'confirmed' ? 'NOW()' : 'NULL'})`,
+       VALUES (?, ?, ?, ?, ?, ?, 'LIP_SYNC', ?, ?, ?, ?, 'lip_sync', ?, ${status === 'confirmed' ? 'NOW()' : 'NULL'})`,
       [
         request.storyboardId,
         request.imageAssetId,
         request.versionNo,
         persisted.videoUrl,
+        persisted.storageKey,
         request.sourceVideoThumbnailUrl || request.imageUrl,
         request.generationDurationSeconds,
         config.model,
@@ -1054,6 +3000,9 @@ async function processLipSyncGenerationJob(jobId, request) {
 }
 
 async function processGenerationJob(jobId) {
+  // 任务执行的统一入口。
+  // 先用 UPDATE 抢占 queued 任务，避免同一个 job 被重复执行；
+  // 再根据 job_type 分派到静帧、角色图、视频或口型同步处理器。
   const [claimResult] = await db.execute(
     `UPDATE generation_jobs
      SET status = 'running', progress_percent = 10, error_text = NULL, updated_at = NOW()
@@ -1070,10 +3019,26 @@ async function processGenerationJob(jobId) {
       result = await processFrameGenerationJob(jobId, request)
     } else if (row.job_type === 'character_image') {
       result = await processCharacterImageGenerationJob(jobId, request)
+    } else if (row.job_type === 'asset_node_image') {
+      result = await processAssetNodeImageGenerationJob(jobId, request)
+    } else if (row.job_type === 'video_image') {
+      result = await processVideoGenerationJob(jobId, request)
+    } else if (row.job_type === 'subtitle_cleanup') {
+      result = await processSubtitleCleanupJob(jobId, request)
     } else if (row.job_type === 'lip_sync') {
       result = await processLipSyncGenerationJob(jobId, request)
     } else {
       throw new Error(`Unsupported generation job type: ${row.job_type}`)
+    }
+    if (row.job_type === 'video_image') {
+      const qualityReport = inspectGeneratedVideoResult({
+        items: result?.items || [],
+        expectedCandidateCount: request.candidateCount,
+      })
+      result = { ...result, qualityReport }
+      if (!qualityReport.passed) {
+        throw new Error(qualityReport.summary)
+      }
     }
     await updateGenerationJob(jobId, {
       status: 'success',
@@ -1082,7 +3047,9 @@ async function processGenerationJob(jobId) {
       error_text: null,
     })
   } catch (error) {
-    const errorText = sanitizeProviderError(error)
+    const failedRequest = safeJsonParse(row?.request_json, request)
+    const stage = request?.videoGenerationStage || failedRequest?.videoGenerationStage
+    const errorText = `${stage ? `阶段：${stage}；` : ''}${sanitizeProviderError(error)}`
     console.error(`[generation-job:${jobId}] failed`, errorText)
     await updateGenerationJob(jobId, {
       status: 'failed',
@@ -1093,17 +3060,99 @@ async function processGenerationJob(jobId) {
 }
 
 async function recoverGenerationJobs() {
+  // 服务重启后，之前卡在 running 的任务会重新放回 queued。
+  // 这是“进程级任务恢复”，不是完整消息队列，但能避免重启后任务永久丢失。
   await db.execute(
     `UPDATE generation_jobs SET status = 'queued', progress_percent = 0, updated_at = NOW()
      WHERE status = 'running'`,
   )
+  await resumeQueuedGenerationJobs()
+}
+
+async function resumeQueuedGenerationJobs() {
+  // 启动时扫描数据库里的 queued 任务并恢复执行。
   const [rows] = await db.execute(
     `SELECT id FROM generation_jobs WHERE status = 'queued' ORDER BY id ASC`,
   )
   for (const row of rows) queueGenerationJob(Number(row.id))
 }
 
+async function repairVideoRetryReferences(job, request) {
+  if (job?.job_type !== 'video_image') return request
+
+  const existingKeys = Array.isArray(request.referenceImageStorageKeys)
+    ? request.referenceImageStorageKeys.filter(Boolean)
+    : []
+  const existingImages = Array.isArray(request.referenceImages)
+    ? request.referenceImages.filter(Boolean)
+    : []
+  if (existingKeys.length >= 2 && existingImages.length >= 2) return request
+
+  const [shotRows] = await db.execute(
+    `SELECT s.asset_reference_json
+     FROM storyboards s
+     INNER JOIN script_scenes sc ON sc.id = s.scene_id
+     WHERE s.id = ? AND sc.project_id = ? LIMIT 1`,
+    [Number(job.source_id), Number(job.project_id)],
+  )
+  const reference = parseJsonObject(shotRows[0]?.asset_reference_json)
+  const nodeIds = [Number(reference.characterId), Number(reference.sceneAssetId)].filter(Boolean)
+  if (!nodeIds.length) return request
+
+  const placeholders = nodeIds.map(() => '?').join(', ')
+  const [assetRows] = await db.execute(
+    `SELECT ai.id, ai.storage_key, ai.image_url, ai.thumbnail_url,
+            ai.view_key, ai.view_set_type, ai.status, ai.vision_status,
+            an.node_type
+     FROM asset_node_images ai
+     INNER JOIN asset_nodes an ON an.id = ai.asset_node_id
+     WHERE ai.asset_node_id IN (${placeholders})
+       AND ai.status = 'confirmed'
+       AND ((an.node_type = 'character' AND ai.view_set_type = 'character-asset-pack')
+         OR (an.node_type IN ('prop', 'tool', 'material') AND ai.view_set_type = 'single' AND ai.view_key IS NULL)
+         OR an.node_type = 'scene')
+       AND (ai.vision_status = 'passed' OR ai.vision_status IS NULL
+            OR (an.node_type = 'scene' AND ai.vision_status = 'skipped'))
+     ORDER BY ai.id ASC`,
+    nodeIds,
+  )
+  const characterRows = assetRows
+    .filter((row) => row.node_type === 'character' && ['front', 'side', 'back'].includes(String(row.view_key || '')))
+    .sort((left, right) => ({ front: 0, side: 1, back: 2 }[left.view_key] ?? 9) - ({ front: 0, side: 1, back: 2 }[right.view_key] ?? 9))
+  const characterBaseRows = assetRows.filter((row) =>
+    row.node_type === 'character'
+      && ['single', 'character-asset-pack'].includes(String(row.view_set_type || ''))
+      && !String(row.view_key || '').trim(),
+  )
+  const characterFaceRows = assetRows.filter((row) =>
+    row.node_type === 'character' && row.view_set_type === 'character-face-closeup' && String(row.view_key || '') === 'face',
+  )
+  const characterAssetPackRows = assetRows.filter((row) =>
+    row.node_type === 'character' && row.view_set_type === 'character-asset-pack',
+  )
+  const scenePanoramaRows = assetRows.filter(
+    (row) => row.node_type === 'scene' && !String(row.view_key || '').trim() && row.view_set_type === 'single',
+  )
+  const sceneAngleRows = assetRows.filter(
+    (row) => row.node_type === 'scene' && String(row.view_key || '') === String(reference.sceneViewKey || ''),
+  )
+  const selected = [...characterBaseRows, ...characterRows, ...characterFaceRows, ...characterAssetPackRows, ...scenePanoramaRows, ...sceneAngleRows]
+    .filter((row, index, rows) => rows.findIndex((item) => item.storage_key && item.storage_key === row.storage_key) === index)
+    .filter((row) => row.storage_key || row.image_url || row.thumbnail_url)
+    .slice(0, 6)
+  if (selected.length < 2) return request
+
+  return {
+    ...request,
+    referenceImages: selected.map((row) => row.image_url || row.thumbnail_url).filter(Boolean),
+    referenceImageStorageKeys: selected.map((row) => row.storage_key).filter(Boolean),
+    providerReferenceImages: [],
+  }
+}
+
 async function enqueueFrameImageJob(userId, shotId, body = {}) {
+  // 创建静帧任务前先做权限和角色一致性校验。
+  // 注意这里先不调用图片模型，只把完整请求快照写进 generation_jobs。
   const [shotRows] = await db.execute(
     `SELECT s.*, sc.project_id, p.visual_style AS project_visual_style,
             p.user_id AS ownerId
@@ -1115,10 +3164,20 @@ async function enqueueFrameImageJob(userId, shotId, body = {}) {
   )
   const shot = shotRows[0]
   if (!shot || shot.ownerId !== userId) return null
+  const assetReferenceGate = inspectStoryboardAssetReferenceGate({
+    storyboard: shot,
+    requireCharacter: Boolean(shot.character_id || shot.character_name),
+  })
+  if (!assetReferenceGate.passed) {
+    const error = new Error(assetReferenceGate.summary)
+    error.statusCode = 409
+    error.qualityReport = assetReferenceGate
+    throw error
+  }
 
   const [characterRows] = await db.execute(
     `SELECT id, name, role_tag, personality, appearance, age_group, gender,
-            reference_image_url, status
+            reference_image_url, reference_image_storage_key, status
      FROM characters
      WHERE project_id = ? AND status <> 'archived'
      ORDER BY id ASC`,
@@ -1147,6 +3206,7 @@ async function enqueueFrameImageJob(userId, shotId, body = {}) {
     config: frameConfig,
     modelName,
     referenceImageUrls: consistencyPrompt.referenceImageUrls,
+    referenceImageStorageKeys: consistencyPrompt.referenceImageStorageKeys,
   })
   const [versionRows] = await db.execute(
     `SELECT COALESCE(MAX(version_no), 0) AS maxVersion FROM image_assets WHERE storyboard_id = ?`,
@@ -1166,6 +3226,590 @@ async function enqueueFrameImageJob(userId, shotId, body = {}) {
       negativePrompt: consistencyPrompt.negativePrompt,
       characterSnapshot: createFrameCharacterSnapshot(frameCharacterContext),
       referenceImageUrls: consistencyPrompt.referenceImageUrls,
+      referenceImageStorageKeys: consistencyPrompt.referenceImageStorageKeys,
+    },
+  })
+}
+
+async function enqueueStoryboardVideoJob(userId, storyboardId, body = {}) {
+  // 当前生产链路采用「脚本直出视频」：
+  // 分镜 Agent 先写好景别、机位、构图、动作、对白和画面提示词，
+  // 视频模型直接读取脚本与资产引用生成，不再把镜头静帧作为硬前置。
+  const [shotRows] = await db.execute(
+      `SELECT s.*, sc.project_id, p.user_id AS ownerId, p.aspect_ratio
+     FROM storyboards s
+     INNER JOIN script_scenes sc ON sc.id = s.scene_id
+     INNER JOIN projects p ON p.id = sc.project_id
+     WHERE s.id = ? LIMIT 1`,
+    [storyboardId],
+  )
+  const shot = shotRows[0]
+  if (!shot || shot.ownerId !== userId) return null
+  const workflowGates = await getProjectWorkflowReadiness(Number(shot.project_id))
+  if (!workflowGates.storyboard.allowed) {
+    const error = new Error(workflowGates.storyboard.reason)
+    error.statusCode = 409
+    error.qualityReport = { passed: false, blockers: [{ code: workflowGates.storyboard.code, message: error.message }] }
+    throw error
+  }
+  let promptOverride = sanitizeStoryboardPrompt(body.prompt || shot.visual_prompt, {
+    characterNames: [shot.character_name],
+  })
+
+  const reference = parseJsonObject(
+    shot.asset_reference_json || shot.assetReference || shot.asset_reference,
+  )
+  const directionContract = validateStoryboardDirectionContract({
+    ...shot,
+    ...(reference.performance || {}),
+    gazePlan: reference.gazePlan || reference.performance?.gazePlan || shot.gaze_plan,
+    soundPlan: reference.soundPlan || reference.performance?.soundPlan || shot.sound_plan,
+  })
+  if (!directionContract.passed) {
+    const error = new Error(`本镜头视线/声音执行计划未通过校验：${directionContract.blockers.join('；')}`)
+    error.statusCode = 409
+    error.qualityReport = {
+      passed: false,
+      blockers: directionContract.blockers.map((message) => ({
+        code: 'storyboard-direction-contract-incomplete',
+        message,
+      })),
+      summary: '本镜头视线/声音执行计划未就绪',
+    }
+    throw error
+  }
+  const continuityEnabled = shouldUseStoryboardContinuity({
+    tools: body.mentionTools || reference.tools,
+    prompt: [promptOverride, shot.visual_prompt, shot.start_visual_prompt].filter(Boolean).join('\n'),
+    assetReference: reference,
+  })
+  const requestedContinuitySource = continuityEnabled
+    ? resolveContinuitySourceShotNo({
+        prompt: [promptOverride, shot.visual_prompt, shot.start_visual_prompt].filter(Boolean).join('\n'),
+        assetReference: reference,
+      })
+    : null
+  const [previousShotRows] = await db.execute(
+    `SELECT s.id, s.shot_no, s.end_image_url, s.sort_order,
+            va.end_frame_url, va.end_frame_storage_key
+     FROM storyboards s
+     LEFT JOIN video_assets va
+       ON va.id = (
+         SELECT candidate.id FROM video_assets candidate
+         WHERE candidate.storyboard_id = s.id AND candidate.status = 'confirmed'
+         ORDER BY candidate.confirmed_at DESC, candidate.id DESC LIMIT 1
+       )
+     WHERE s.scene_id = ?
+       AND ((? <> '' AND s.shot_no = ?) OR (? = '' AND s.sort_order < ?))
+     ORDER BY s.sort_order DESC, s.id DESC
+     LIMIT 1`,
+    [
+      Number(shot.scene_id),
+      requestedContinuitySource || '', requestedContinuitySource || '',
+      requestedContinuitySource || '', Number(shot.sort_order || 0),
+    ],
+  )
+  const previousShot = previousShotRows[0] || null
+  if (previousShot?.end_frame_storage_key) {
+    previousShot.end_frame_url = resolveObjectStorageUrl(
+      previousShot.end_frame_storage_key,
+      previousShot.end_frame_url,
+    )
+  }
+  const [currentEndRows] = await db.execute(
+    `SELECT image_url, storage_key
+     FROM image_assets
+     WHERE storyboard_id = ? AND frame_role = 'end' AND status = 'confirmed'
+     ORDER BY confirmed_at DESC, id DESC LIMIT 1`,
+    [storyboardId],
+  )
+  const frameReference = buildStoryboardFrameReference({
+    continuityEnabled,
+    previousShot,
+    previousVideo: previousShot,
+    currentShot: shot,
+    currentEndFrame: currentEndRows[0] || null,
+  })
+  if (continuityEnabled && (!previousShot || frameReference.missingStartFrame)) {
+    const error = new Error('当前镜头已选择片段衔接，但上一镜没有可读取的确认尾帧，请先确认上一镜视频或结束帧')
+    error.statusCode = 409
+    error.qualityReport = {
+      passed: false,
+      blockers: [{ code: 'missing-previous-end-frame', message: error.message }],
+      summary: error.message,
+    }
+    throw error
+  }
+  const hasCharacterBinding = Boolean(reference.characterId || shot.character_id || shot.character_name)
+  const assetReferenceGate = inspectStoryboardAssetReferenceGate({
+    storyboard: shot,
+    requireCharacter: hasCharacterBinding,
+  })
+  if (!assetReferenceGate.passed) {
+    const error = new Error(assetReferenceGate.summary)
+    error.statusCode = 409
+    error.qualityReport = assetReferenceGate
+    throw error
+  }
+
+  const referencedAssets = Array.isArray(body.referencedAssets) ? body.referencedAssets : []
+  if (!Number(reference.sceneAssetId)) {
+    const error = new Error('当前分镜没有绑定完整的场景资产版本，请先重新生成分镜并完成资产确认')
+    error.statusCode = 409
+    throw error
+  }
+  const mentionContext = normalizeStoryboardMentionContext({
+    referencedAssets,
+    tools: body.mentionTools,
+    voiceBindings: body.voiceBindings,
+    prompt: shot.visual_prompt,
+  })
+  const referencedAssetIds = referencedAssets
+    .map((asset) => parseId(asset?.id || asset?.assetId))
+    .filter(Boolean)
+  let assetRows = []
+  if (referencedAssetIds.length) {
+    const placeholders = referencedAssetIds.map(() => '?').join(', ')
+      const [rows] = await db.execute(
+        `SELECT ai.id, an.label, ai.status, ai.storage_key,
+                COALESCE(ai.image_url, '') AS image_url,
+                ai.thumbnail_url
+         FROM asset_node_images ai
+         INNER JOIN asset_nodes an ON an.id = ai.asset_node_id
+         INNER JOIN projects p ON p.id = an.project_id
+         WHERE ai.id IN (${placeholders}) AND p.id = ? AND p.user_id = ?
+         ORDER BY ai.id ASC`,
+      [...referencedAssetIds, Number(shot.project_id), userId],
+    )
+    assetRows = rows
+  }
+
+  const lockedReferenceRows = []
+  const referenceNodeIds = [
+    Number(reference.characterId),
+    Number(reference.sceneAssetId),
+    ...(Array.isArray(reference.propAssetRefs)
+      ? reference.propAssetRefs.map((item) => Number(item?.assetNodeId)).filter(Boolean)
+      : Array.isArray(reference.propAssetIds) ? reference.propAssetIds.map(Number).filter(Boolean) : []),
+  ].filter(Boolean)
+  if (referenceNodeIds.length) {
+    const placeholders = referenceNodeIds.map(() => '?').join(', ')
+    const [rows] = await db.execute(
+      `SELECT ai.id, an.id AS asset_node_id, an.ref_id, an.label, an.node_type,
+              an.prompt_text AS asset_prompt, an.environment_prompt_text AS environment_prompt,
+              ai.status, ai.storage_key, ai.prompt_snapshot AS image_prompt,
+              ai.view_set_type, ai.view_key, ai.view_set_version, ai.version_no,
+              ai.vision_status, COALESCE(ai.image_url, '') AS image_url, ai.thumbnail_url
+       FROM asset_node_images ai
+       INNER JOIN asset_nodes an ON an.id = ai.asset_node_id
+       INNER JOIN projects p ON p.id = an.project_id
+       WHERE an.id IN (${placeholders}) AND p.id = ? AND p.user_id = ?
+         AND ai.status = 'confirmed'
+         AND ((an.node_type = 'character'
+               AND ai.view_set_type IN ('single', 'character-asset-pack', 'character-face-closeup', 'character-turnaround'))
+           OR (an.node_type IN ('prop', 'tool', 'material') AND ai.view_set_type = 'single' AND ai.view_key IS NULL)
+           OR an.node_type = 'scene')
+         AND (ai.vision_status = 'passed' OR ai.vision_status IS NULL
+              OR (an.node_type = 'scene' AND ai.vision_status = 'skipped'))
+       ORDER BY ai.id ASC`,
+      [...referenceNodeIds, Number(shot.project_id), userId],
+    )
+    lockedReferenceRows.push(...rows)
+  }
+  const requiredAngleRows = lockedReferenceRows.filter((row) =>
+    row.node_type === 'character'
+      ? ['front', 'side', 'back'].includes(String(row.view_key || ''))
+      : row.node_type === 'scene'
+        && Boolean(reference.sceneViewKey)
+        && String(row.view_key || '') === String(reference.sceneViewKey || ''),
+  ).sort((left, right) => {
+    const typeOrder = { character: 0, scene: 1 }
+    const viewOrder = { front: 0, side: 1, back: 2 }
+    return (typeOrder[left.node_type] ?? 9) - (typeOrder[right.node_type] ?? 9)
+      || (viewOrder[left.view_key] ?? 3) - (viewOrder[right.view_key] ?? 3)
+      || Number(left.id || 0) - Number(right.id || 0)
+  })
+  const characterBaseRows = lockedReferenceRows.filter((row) =>
+    row.node_type === 'character'
+      && ['single', 'character-asset-pack'].includes(String(row.view_set_type || ''))
+      && !String(row.view_key || '').trim(),
+  )
+  const characterFaceRows = lockedReferenceRows.filter((row) =>
+    row.node_type === 'character'
+      && ((row.view_set_type === 'character-face-closeup' && String(row.view_key || '') === 'face')
+        || row.view_set_type === 'character-asset-pack'),
+  )
+  const characterAssetPackRows = lockedReferenceRows.filter((row) =>
+    row.node_type === 'character' && row.view_set_type === 'character-asset-pack',
+  )
+  const scenePanoramaRows = lockedReferenceRows.filter((row) =>
+    row.node_type === 'scene' && !String(row.view_key || '').trim() && row.view_set_type === 'single',
+  )
+  const propReferenceRows = lockedReferenceRows.filter((row) => ['prop', 'tool', 'material'].includes(String(row.node_type || '')))
+  const lockedImageRows = [...characterBaseRows, ...characterFaceRows, ...characterAssetPackRows, ...scenePanoramaRows, ...requiredAngleRows, ...propReferenceRows]
+    .filter((row, index, rows) => rows.findIndex((item) => Number(item.id) === Number(row.id)) === index)
+  promptOverride = sanitizeStoryboardPrompt(promptOverride, {
+    characterNames: [
+      shot.character_name,
+      ...lockedReferenceRows.filter((row) => row.node_type === 'character').map((row) => row.label),
+    ],
+  })
+  if (promptOverride && promptOverride !== String(shot.visual_prompt || '').trim()) {
+    await db.execute(
+      `UPDATE storyboards SET visual_prompt = ?, updated_at = NOW() WHERE id = ?`,
+      [promptOverride, storyboardId],
+    )
+    shot.visual_prompt = promptOverride
+  }
+  const lockedImages = lockedImageRows
+    .map((row) => row.image_url || row.thumbnail_url)
+    .filter(Boolean)
+  const hasCharacterAssetPack = characterAssetPackRows.length > 0
+  const minimumLockedImageCount = hasCharacterBinding && !hasCharacterAssetPack ? 6 : 1
+  if (lockedImages.length < minimumLockedImageCount) {
+    const error = new Error('当前分镜绑定的角色参考图或场景全景基准缺失')
+    error.statusCode = 409
+    error.qualityReport = {
+      passed: false,
+      blockers: [{ code: 'locked-asset-images-incomplete', message: error.message }],
+      summary: error.message,
+    }
+    throw error
+  }
+  assetRows = [...assetRows, ...lockedReferenceRows]
+  const autoReferencedAssets = lockedReferenceRows.map((row) => ({
+    id: Number(row.id) || null,
+    refId: Number(row.ref_id) || null,
+    characterId: row.node_type === 'character' ? Number(row.ref_id) || null : null,
+    kind: row.node_type === 'character' ? 'character' : row.node_type === 'scene' ? 'scene' : 'prop',
+    name: String(row.label || '').trim(),
+    imageUrl: row.image_url || row.thumbnail_url || null,
+      promptText: row.node_type === 'character'
+        ? ''
+        : [row.asset_prompt, row.environment_prompt].filter(Boolean).join('；'),
+    sceneViewKey: row.view_key || null,
+    viewKeys: row.node_type === 'character' ? ['front', 'side', 'back'] : [],
+    viewSetVersion: Number(row.view_set_version) || null,
+    versionNo: Number(row.version_no) || null,
+  }))
+  const effectiveReferencedAssets = [...referencedAssets, ...autoReferencedAssets]
+    .filter((asset, index, values) => values.findIndex((item) => `${item.kind}:${item.name}:${item.sceneViewKey || ''}` === `${asset.kind}:${asset.name}:${asset.sceneViewKey || ''}`) === index)
+  const effectiveMentionContext = normalizeStoryboardMentionContext({
+    referencedAssets: effectiveReferencedAssets,
+    tools: body.mentionTools || reference.tools,
+    voiceBindings: body.voiceBindings,
+    prompt: promptOverride || shot.visual_prompt,
+  })
+
+  const lockedCharacterRow = lockedReferenceRows.find((row) => row.node_type === 'character')
+  const lockedSceneRow = lockedReferenceRows.find((row) => row.node_type === 'scene')
+  let characterConstraint = null
+  if (Number(lockedCharacterRow?.ref_id)) {
+    const [characterRows] = await db.execute(
+      `SELECT name, appearance, costume
+       FROM characters
+       WHERE id = ? AND project_id = ? AND status <> 'archived' LIMIT 1`,
+      [Number(lockedCharacterRow.ref_id), Number(shot.project_id)],
+    )
+    characterConstraint = characterRows[0] || null
+  }
+  const continuityConstraints = buildVideoContinuityConstraints({
+    characterName: characterConstraint?.name || reference.characterName || shot.character_name,
+    characterAppearance: characterConstraint?.appearance,
+    characterCostume: characterConstraint?.costume,
+    isOpeningShot: Number(shot.sort_order) === 1,
+    sceneAssetPrompt: [lockedSceneRow?.asset_prompt, lockedSceneRow?.environment_prompt, lockedSceneRow?.image_prompt]
+      .filter(Boolean)
+      .join('；'),
+  })
+  const colorContinuityConstraints = buildColorContinuityConstraints({
+    visualStyle: shot.project_visual_style,
+    scenePrompt: [
+      lockedSceneRow?.asset_prompt,
+      lockedSceneRow?.environment_prompt,
+      lockedSceneRow?.image_prompt,
+    ].filter(Boolean).join('；'),
+    shotPrompt: [
+      shot.visual_prompt,
+      shot.composition,
+      shot.camera_angle,
+    ].filter(Boolean).join('；'),
+  })
+
+  const voiceRows = []
+  const referencedCharacterIds = [
+    shot.character_id,
+    ...mentionContext.assets
+     .filter((asset) => String(asset?.kind || asset?.type || asset?.nodeType || '').trim() === 'character')
+     .map((asset) => parseId(asset?.refId || asset?.characterId))
+      .filter(Boolean),
+  ].filter(Boolean).filter((id, index, values) => values.indexOf(id) === index)
+  if (referencedCharacterIds.length) {
+    const placeholders = referencedCharacterIds.map(() => '?').join(', ')
+    const [rows] = await db.execute(
+      `SELECT id AS character_id, name AS character_name,
+              voice_profile_key, reference_audio_url, reference_audio_storage_key, voice_locked
+       FROM characters
+       WHERE id IN (${placeholders}) AND project_id = ?`,
+      [...referencedCharacterIds, Number(shot.project_id)],
+    )
+    voiceRows.push(...rows)
+  }
+
+  const referenceAudioUrls = [...new Set(
+    voiceRows
+      .filter((row) => row.voice_locked && String(row.reference_audio_url || '').trim())
+      .map((row) => resolveReferenceAudioUrl(row))
+      .filter((url) => /^https?:\/\//i.test(url)),
+  )].slice(0, 3)
+  const referenceAudioPrompt = buildReferenceAudioPromptContext(voiceRows, referenceAudioUrls)
+  effectiveMentionContext.voices = [
+    ...effectiveMentionContext.voices,
+    ...voiceRows.map((row) => ({
+      characterId: Number(row.character_id) || null,
+      characterName: String(row.character_name || '').trim(),
+      voiceProfileKey: String(row.voice_profile_key || '').trim() || null,
+      voiceLocked: row.voice_locked === 1 || row.voice_locked === true,
+      referenceAudioUrl: resolveReferenceAudioUrl(row),
+    })),
+  ].filter((voice, index, values) => values.findIndex((item) => item.characterName === voice.characterName) === index)
+
+  const videoConfig = getVideoConfig()
+  const qualityReport = inspectStoryboardGenerationContext({
+    storyboard: shot,
+    assets: assetRows,
+    characterVoices: voiceRows,
+    requireConfirmedAssets: body.allowCandidateAssets !== true,
+    requirePublicAssets: videoConfig.provider !== 'wan',
+  })
+  if (!qualityReport.passed) {
+    const error = new Error(qualityReport.summary)
+    error.statusCode = 409
+    error.qualityReport = qualityReport
+    throw error
+  }
+
+  const transitionImages = [
+    frameReference.startFrameUrl,
+    frameReference.endFrameUrl,
+  ].filter(Boolean)
+  const videoModelName = String(body.modelName || videoConfig.defaultModel).trim()
+  assertVideoModelProvider(videoModelName, videoConfig)
+  if (
+    !/^minimax(?:-|$)/i.test(videoModelName)
+    && !['agnes', 'wan'].includes(videoConfig.provider)
+  ) {
+    const error = new Error('当前视频服务商不支持分镜多资产参考生成，请切换到已支持多参考图的视频模型。')
+    error.statusCode = 409
+    throw error
+  }
+  const imageLimit = /^minimax(?:-|$)/i.test(videoModelName)
+    ? 9
+    : isOfficialAgnesModel(videoModelName)
+      ? 5
+      : videoConfig.provider === 'agnes' || videoConfig.provider === 'wan' ? 9 : 1
+  const requestedDuration = normalizeStoryboardDurationSeconds(
+    body.durationSeconds === undefined ? shot.duration_seconds : body.durationSeconds,
+  )
+  const durationMin = videoConfig.provider === 'wan' ? 2 : 4
+  const durationLimit = videoConfig.provider === 'wan'
+    ? 30
+    : /^minimax(?:-|$)/i.test(videoModelName) ? 15 : 12
+  if (requestedDuration < durationMin || requestedDuration > durationLimit) {
+    const error = new Error(`${videoModelName} 单镜只支持 ${durationMin}-${durationLimit} 秒，本镜当前为 ${requestedDuration} 秒；请先调整分镜时长再生成。`)
+    error.statusCode = 400
+    throw error
+  }
+  const latestUsableImage = (rows) => [...rows]
+    .filter((row) => row.image_url || row.thumbnail_url)
+    .sort((left, right) => Number(right.version_no || 0) - Number(left.version_no || 0)
+      || Number(right.id || 0) - Number(left.id || 0))[0]
+  const selectedCharacterRows = hasCharacterBinding
+    ? characterAssetPackRows.length
+      ? [latestUsableImage(characterAssetPackRows)].filter(Boolean)
+      : [
+        latestUsableImage(characterBaseRows),
+        latestUsableImage(characterFaceRows),
+        ...requiredAngleRows,
+      ].filter(Boolean)
+    : []
+  const sceneAngleRows = lockedReferenceRows.filter((row) =>
+    row.node_type === 'scene'
+      && row.view_set_type === 'scene-nine-grid'
+      && String(row.view_key || '') === String(reference.sceneViewKey || ''),
+  )
+  const selectedSceneRow = latestUsableImage(sceneAngleRows) || latestUsableImage(scenePanoramaRows)
+  const requestedPropNames = new Set([
+    ...(Array.isArray(reference.propAssetNames) ? reference.propAssetNames : []),
+    ...(Array.isArray(reference.propAssetRefs) ? reference.propAssetRefs.map((item) => item?.name) : []),
+  ].map((name) => String(name || '').trim()).filter(Boolean))
+  const selectedPropRows = [...new Set(propReferenceRows
+    .filter((row) => !requestedPropNames.size || requestedPropNames.has(String(row.label || '').trim()))
+    .map((row) => Number(row.asset_node_id || row.ref_id || row.id)))]
+    .map((nodeId) => latestUsableImage(propReferenceRows.filter((row) =>
+      Number(row.asset_node_id || row.ref_id || row.id) === nodeId,
+    )))
+    .filter(Boolean)
+  const selectedAssetRows = [...selectedCharacterRows, selectedSceneRow, ...selectedPropRows]
+    .filter(Boolean)
+    .filter((row, index, rows) => rows.findIndex((item) => Number(item.id) === Number(row.id)) === index)
+  if (!selectedSceneRow || (hasCharacterBinding && !selectedCharacterRows.length)) {
+    const error = new Error('本镜缺少已确认的场景视角图或角色资产图，不能提交视频生成。')
+    error.statusCode = 409
+    throw error
+  }
+  if (selectedAssetRows.length > imageLimit) {
+    const error = new Error(`本镜已确认角色、场景和道具资产共需 ${selectedAssetRows.length} 张参考图，${videoModelName} 最多接收 ${imageLimit} 张；请拆分镜头或减少本镜资产引用。`)
+    error.statusCode = 409
+    throw error
+  }
+  const availableSlots = Math.max(0, imageLimit - selectedAssetRows.length)
+  const selectedTransitionImages = transitionImages.slice(0, availableSlots)
+  const referenceImages = [
+    ...selectedAssetRows.map((asset) => asset.image_url || asset.thumbnail_url),
+    ...selectedTransitionImages,
+  ].filter(Boolean)
+  const selectedTransitionStorageKeys = selectedTransitionImages.map((url) =>
+    url === frameReference.startFrameUrl ? frameReference.startFrameStorageKey : frameReference.endFrameStorageKey,
+  )
+  const everyReferenceHasStorageKey = selectedAssetRows.every((asset) => String(asset.storage_key || '').trim())
+    && selectedTransitionStorageKeys.every((key) => String(key || '').trim())
+  const referenceImageStorageKeys = everyReferenceHasStorageKey
+    ? [...selectedAssetRows.map((asset) => asset.storage_key), ...selectedTransitionStorageKeys]
+      .map((key) => String(key || '').trim())
+    : []
+  const referenceSnapshot = buildStoryboardReferenceSnapshot({
+    storyboard: shot,
+    referenceImages,
+    referencedAssets: effectiveReferencedAssets,
+  })
+  const referenceValidation = validateStoryboardReferenceSnapshot(referenceSnapshot)
+  if (!referenceValidation.passed) {
+    const error = new Error(`视频资产引用未就绪：${referenceValidation.blockers.join('；')}`)
+    error.statusCode = 409
+    error.qualityReport = {
+      passed: false,
+      blockers: referenceValidation.blockers.map((message) => ({
+        code: 'storyboard-reference-incomplete',
+        message,
+      })),
+      summary: '视频资产引用未就绪',
+    }
+    throw error
+  }
+
+  const [versionRows] = await db.execute(
+    `SELECT COALESCE(MAX(version_no), 0) AS maxVersion
+     FROM video_assets WHERE storyboard_id = ?`,
+    [storyboardId],
+  )
+
+  const motionMode = String(body.motionMode || 'PAN').trim() || 'PAN'
+  const requestedStartImageUrl = String(body.startImageUrl || body.startFrameUrl || '').trim()
+  const firstFrameUrl = frameReference.startFrameUrl || requestedStartImageUrl || null
+  const lastFrameUrl = firstFrameUrl ? frameReference.endFrameUrl || null : null
+  const videoReferenceImageGuide = videoConfig.provider === 'wan'
+    ? firstFrameUrl
+      ? '首帧锁定：以本次提交的首帧作为唯一画面起点，严格延续首帧中的角色身份、服装、场景结构、光线方向和构图关系；动作从首帧状态自然开始，不得重新设计角色或跳变空间。'
+      : '本镜未提交首帧：严格按文字中的角色身份、固定服装、场景结构和光线方向生成，不得新增未声明人物或道具；下一镜会以本镜尾帧作为严格首帧。'
+    : buildVideoReferenceImageGuide(
+      selectedAssetRows.map((asset) => ({
+        ...asset,
+        costume: asset.node_type === 'character' ? characterConstraint?.costume : asset.costume,
+      })),
+      selectedTransitionImages.length,
+    )
+  return createGenerationJob({
+    projectId: Number(shot.project_id),
+    jobType: 'video_image',
+    sourceId: storyboardId,
+    request: {
+      storyboardId,
+      imageAssetId: null,
+      imageUrl: null,
+      firstFrameUrl,
+      lastFrameUrl,
+      versionNo: Number(versionRows[0]?.maxVersion || 0) + 1,
+      motionMode,
+      durationSeconds: requestedDuration,
+      candidateCount: Math.max(1, Math.min(3, parseId(body.candidateCount) || 1)),
+      videoInspectionExpected: inferVideoCandidateExpectations({
+        durationSeconds: body.durationSeconds === undefined ? shot.duration_seconds : body.durationSeconds,
+        actionText: [promptOverride, shot.action_text, shot.acting_beat].filter(Boolean).join('\n'),
+        actingBeat: shot.acting_beat,
+        dialogueText: shot.dialogue_text,
+        audioDirection: [promptOverride, shot.audio_direction].filter(Boolean).join('\n'),
+        gazePlan: directionContract.gaze,
+        soundPlan: directionContract.sound,
+      }),
+      modelName: videoModelName,
+      videoProvider: videoConfig.provider,
+      generationMode: 'multi_reference',
+      referencedAssets: effectiveMentionContext.assets.map((asset) => ({
+        key: asset?.key || null,
+        kind: asset?.kind || null,
+        name: asset?.name || null,
+        imageUrl: asset?.imageUrl || null,
+        promptText: asset?.promptText || null,
+        appearance: asset?.appearance || null,
+        costume: asset?.costume || null,
+        sceneViewKey: asset?.sceneViewKey || null,
+        viewKeys: asset?.viewKeys || [],
+        versionNo: asset?.versionNo || null,
+        viewSetVersion: asset?.viewSetVersion || null,
+        voiceProfileKey: asset?.voiceProfileKey || null,
+        voiceLocked: asset?.voiceLocked === true,
+        referenceAudioUrl: asset?.referenceAudioUrl || null,
+      })),
+      referenceImages,
+      referenceImageStorageKeys,
+      referenceAudioUrls,
+      frameReferences: {
+        continuityEnabled,
+        sourceStoryboardId: frameReference.sourceStoryboardId,
+        sourceShotNo: frameReference.sourceShotNo,
+        startFrameUrl: frameReference.startFrameUrl,
+        startFrameStorageKey: frameReference.startFrameStorageKey,
+        endFrameUrl: frameReference.endFrameUrl,
+        endFrameStorageKey: frameReference.endFrameStorageKey,
+      },
+      imageRatio: String(body.imageRatio || body.aspectRatio || shot.aspect_ratio || '9:16').trim(),
+      storyboardAssetReference: referenceSnapshot,
+      promptSnapshot: buildTwoKeyframeVideoPrompt({
+        prompt: buildStoryboardVideoPromptParts({
+          prompt: promptOverride,
+          contextParts: [
+            videoReferenceImageGuide,
+            buildStoryboardDirectionPrompt({
+              gazePlan: directionContract.gaze,
+              soundPlan: directionContract.sound,
+            }),
+            buildStoryboardContinuityPrompt(frameReference),
+            continuityConstraints,
+            buildPromptTemplateContext('video'),
+            colorContinuityConstraints,
+            buildReferencedAssetPromptContext(effectiveMentionContext.assets),
+            referenceAudioPrompt,
+            buildMentionContextPrompt(effectiveMentionContext),
+          ],
+          legacyFieldParts: [
+            `景别：${shot.shot_type || '由视频模型根据镜头脚本判断'}`,
+            `机位：${shot.camera_angle || '由视频模型根据镜头脚本判断'}`,
+            `构图：${shot.composition || '由视频模型根据镜头脚本判断'}`,
+            `角色情绪与变化：${shot.emotional_change || ''}`,
+            `表演节拍：${shot.acting_beat || ''}`,
+            `结构化表演与音画同步：\n${buildStoryboardPerformancePrompt(reference.performance || shot)}`,
+            `声音与口型同步：${shot.audio_direction || ''}；对白必须逐字对应口型，按自然语速完成，不得提前、延后或用无声口型替代。`,
+            `镜头动作：${shot.action_text || ''}`,
+            `对白与声音：${shot.dialogue_text || ''}`,
+          ],
+        }).join('\n'),
+        shot,
+        startImage: firstFrameUrl ? { image_url: firstFrameUrl } : null,
+        endImage: lastFrameUrl ? { image_url: lastFrameUrl } : null,
+      }),
+      providerTasks: [],
+      autoConfirm: false,
     },
   })
 }
@@ -1511,8 +4155,36 @@ function normalizeSubShots(rawSubShots, context) {
       visualPrompt: String(item.visualPrompt || fallback[index]?.visualPrompt || context.storyboard.visual_prompt || '').trim(),
       startVisualPrompt: String(item.startVisualPrompt || fallback[index]?.startVisualPrompt || '').trim(),
       endVisualPrompt: String(item.endVisualPrompt || fallback[index]?.endVisualPrompt || '').trim(),
+      gazePlan: item.gazePlan || item.gaze_plan || context.storyboard.gaze_plan || null,
+      soundPlan: item.soundPlan || item.sound_plan || context.storyboard.sound_plan || null,
     }))
     .filter((item) => item.actionText || item.visualPrompt)
+}
+
+function buildSubShotDirectionReference(sourceReference, sourceShot, subShot) {
+  const reference = parseJsonObject(sourceReference) || {}
+  const performance = normalizeStoryboardPerformance({
+    ...sourceShot,
+    ...subShot,
+    gazePlan: subShot.gazePlan || reference.gazePlan || reference.performance?.gazePlan,
+    soundPlan: subShot.soundPlan || reference.soundPlan || reference.performance?.soundPlan,
+  })
+  const direction = validateStoryboardDirectionContract({
+    ...sourceShot,
+    ...subShot,
+    gazePlan: performance.gazePlan,
+    soundPlan: performance.soundPlan,
+  })
+  return {
+    ...reference,
+    gazePlan: direction.gaze,
+    soundPlan: direction.sound,
+    performance: {
+      ...performance,
+      gazePlan: direction.gaze,
+      soundPlan: direction.sound,
+    },
+  }
 }
 
 function resolveCharacterForDialogue(context, speakerName) {
@@ -1619,6 +4291,8 @@ function normalizeDialogueSubShots(rawSubShots, context) {
         visualPrompt: String(item.visualPrompt || fallback[index]?.visualPrompt || context.storyboard.visual_prompt || '').trim(),
         startVisualPrompt: String(item.startVisualPrompt || fallback[index]?.startVisualPrompt || '').trim(),
         endVisualPrompt: String(item.endVisualPrompt || fallback[index]?.endVisualPrompt || '').trim(),
+        gazePlan: item.gazePlan || item.gaze_plan || context.storyboard.gaze_plan || null,
+        soundPlan: item.soundPlan || item.sound_plan || context.storyboard.sound_plan || null,
       }
     })
     .filter((item) => item.characterId && item.dialogueText)
@@ -1716,6 +4390,7 @@ async function splitStoryboardIntoSubShots(userId, storyboardId) {
   try {
     await conn.beginTransaction()
     const shot = context.storyboard
+    const originalReference = shot.asset_reference_json || shot.assetReference || null
     const increment = subShots.length - 1
     await conn.execute(
       `UPDATE storyboards
@@ -1724,11 +4399,13 @@ async function splitStoryboardIntoSubShots(userId, storyboardId) {
       [increment, shot.scene_id, shot.sort_order],
     )
     const first = subShots[0]
+    const firstReference = buildSubShotDirectionReference(originalReference, shot, first)
     await conn.execute(
       `UPDATE storyboards
        SET shot_type = ?, camera_angle = ?, composition = ?, duration_seconds = ?,
            action_text = ?, dialogue_text = ?, visual_prompt = ?,
            start_visual_prompt = ?, end_visual_prompt = ?,
+           asset_reference_json = ?,
            image_url = ?, end_image_url = NULL, video_url = NULL,
            status = 'pending', updated_at = NOW()
        WHERE id = ?`,
@@ -1742,6 +4419,7 @@ async function splitStoryboardIntoSubShots(userId, storyboardId) {
         first.visualPrompt,
         first.startVisualPrompt,
         first.endVisualPrompt,
+        JSON.stringify(firstReference),
         shot.image_url || null,
         storyboardId,
       ],
@@ -1749,12 +4427,13 @@ async function splitStoryboardIntoSubShots(userId, storyboardId) {
     const baseShotNo = String(shot.shot_no || 'S').slice(0, 5)
     for (let index = 1; index < subShots.length; index += 1) {
       const item = subShots[index]
+      const itemReference = buildSubShotDirectionReference(originalReference, shot, item)
       await conn.execute(
         `INSERT INTO storyboards
           (scene_id, shot_no, shot_type, camera_angle, composition, duration_seconds,
            character_id, character_name, action_text, dialogue_text, visual_prompt,
-           start_visual_prompt, end_visual_prompt, sort_order, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+           start_visual_prompt, end_visual_prompt, asset_reference_json, sort_order, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
         [
           shot.scene_id,
           `${baseShotNo}-${index + 1}`.slice(0, 8),
@@ -1769,6 +4448,7 @@ async function splitStoryboardIntoSubShots(userId, storyboardId) {
           item.visualPrompt,
           item.startVisualPrompt,
           item.endVisualPrompt,
+          JSON.stringify(itemReference),
           Number(shot.sort_order || 0) + index,
         ],
       )
@@ -1882,6 +4562,7 @@ async function splitStoryboardDialogueTurns(userId, storyboardId) {
   try {
     await conn.beginTransaction()
     const shot = context.storyboard
+    const originalReference = shot.asset_reference_json || shot.assetReference || null
     const increment = subShots.length - 1
     await conn.execute(
       `UPDATE storyboards
@@ -1890,12 +4571,14 @@ async function splitStoryboardDialogueTurns(userId, storyboardId) {
       [increment, shot.scene_id, shot.sort_order],
     )
     const first = subShots[0]
+    const firstReference = buildSubShotDirectionReference(originalReference, shot, first)
     await conn.execute(
       `UPDATE storyboards
        SET shot_type = ?, camera_angle = ?, composition = ?, duration_seconds = ?,
            character_id = ?, character_name = ?,
            action_text = ?, dialogue_text = ?, visual_prompt = ?,
            start_visual_prompt = ?, end_visual_prompt = ?,
+           asset_reference_json = ?,
            image_url = ?, end_image_url = NULL, video_url = NULL,
            status = 'pending', updated_at = NOW()
        WHERE id = ?`,
@@ -1911,6 +4594,7 @@ async function splitStoryboardDialogueTurns(userId, storyboardId) {
         first.visualPrompt,
         first.startVisualPrompt,
         first.endVisualPrompt,
+        JSON.stringify(firstReference),
         shot.image_url || null,
         storyboardId,
       ],
@@ -1918,12 +4602,13 @@ async function splitStoryboardDialogueTurns(userId, storyboardId) {
     const baseShotNo = String(shot.shot_no || 'S').slice(0, 5)
     for (let index = 1; index < subShots.length; index += 1) {
       const item = subShots[index]
+      const itemReference = buildSubShotDirectionReference(originalReference, shot, item)
       await conn.execute(
         `INSERT INTO storyboards
           (scene_id, shot_no, shot_type, camera_angle, composition, duration_seconds,
            character_id, character_name, action_text, dialogue_text, visual_prompt,
-           start_visual_prompt, end_visual_prompt, sort_order, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+           start_visual_prompt, end_visual_prompt, asset_reference_json, sort_order, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
         [
           shot.scene_id,
           `${baseShotNo}-${index + 1}`.slice(0, 8),
@@ -1938,6 +4623,7 @@ async function splitStoryboardDialogueTurns(userId, storyboardId) {
           item.visualPrompt,
           item.startVisualPrompt,
           item.endVisualPrompt,
+          JSON.stringify(itemReference),
           Number(shot.sort_order || 0) + index,
         ],
       )
@@ -1968,7 +4654,7 @@ async function enqueueCharacterImageJob(userId, characterId, body = {}) {
     `SELECT c.*, p.user_id AS ownerId, p.visual_style AS project_visual_style
      FROM characters c
      INNER JOIN projects p ON p.id = c.project_id
-     WHERE c.id = ? LIMIT 1`,
+     WHERE c.id = ? AND c.status <> 'archived' LIMIT 1`,
     [characterId],
   )
   const character = rows[0]
@@ -2011,7 +4697,9 @@ async function enqueueCharacterImageJob(userId, characterId, body = {}) {
         appearance: character.appearance,
       },
       projectVisualStyle: character.project_visual_style,
-      referenceImageUrls: character.reference_image_url ? [character.reference_image_url] : [],
+      referenceImageUrls: resolveCharacterReferenceImageUrls(
+        character.reference_image_url ? [character.reference_image_url] : [],
+      ),
     },
   })
 }
@@ -2034,18 +4722,14 @@ async function enqueueLipSyncJob(userId, storyboardId, body = {}) {
     throw error
   }
 
+  const lipSyncConfig = getLipSyncConfig()
   const [imageRows] = await db.execute(
     `SELECT * FROM image_assets
      WHERE storyboard_id = ? AND status = 'confirmed'
      ORDER BY confirmed_at DESC, id DESC LIMIT 1`,
     [storyboardId],
   )
-  const image = imageRows[0]
-  if (!image) {
-    const error = new Error('请先确认当前分镜静帧，再生成口型视频')
-    error.statusCode = 409
-    throw error
-  }
+  const image = imageRows[0] || null
 
   const [audioRows] = await db.execute(
     `SELECT * FROM audio_assets
@@ -2059,7 +4743,7 @@ async function enqueueLipSyncJob(userId, storyboardId, body = {}) {
      LIMIT 1`,
     [storyboardId, shot.character_id],
   )
-  const audio = audioRows[0]
+  const audio = await ensureAudioAssetStorage(audioRows[0])
   if (!audio) {
     const error = new Error('请先为当前分镜确认中文对白音频，再生成口型视频')
     error.statusCode = 409
@@ -2087,6 +4771,17 @@ async function enqueueLipSyncJob(userId, storyboardId, body = {}) {
     [storyboardId],
   )
   const sourceVideo = sourceVideoRows[0] || null
+  const canUseSourceVideo = ['dashscope', 'latentsync'].includes(lipSyncConfig.provider)
+  if (!image && !(canUseSourceVideo && sourceVideo?.video_url)) {
+    const error = new Error('请先确认当前分镜静帧，再生成口型视频')
+    error.statusCode = 409
+    throw error
+  }
+  if (lipSyncConfig.provider === 'latentsync' && !sourceVideo?.video_url) {
+    const error = new Error('LatentSync 是视频后处理服务，请先生成并确认当前分镜视频')
+    error.statusCode = 409
+    throw error
+  }
 
   const [versionRows] = await db.execute(
     `SELECT COALESCE(MAX(version_no), 0) AS maxVersion
@@ -2094,7 +4789,6 @@ async function enqueueLipSyncJob(userId, storyboardId, body = {}) {
     [storyboardId],
   )
   const characterName = shot.resolved_character_name || shot.character_name || '人物'
-  const lipSyncConfig = getLipSyncConfig()
   const generationDurationSeconds = lipSyncConfig.provider === 'dashscope'
     ? resolveDashScopeLipSyncDuration(audio.duration_seconds, shot.duration_seconds)
     : resolveLipSyncDuration(audio.duration_seconds, shot.duration_seconds)
@@ -2113,8 +4807,8 @@ async function enqueueLipSyncJob(userId, storyboardId, body = {}) {
       storyboardId,
       characterId: Number(shot.character_id),
       characterName,
-      imageAssetId: Number(image.id),
-      imageUrl: image.image_url,
+      imageAssetId: image ? Number(image.id) : null,
+      imageUrl: image?.image_url || sourceVideo?.thumbnail_url || sourceVideo?.video_url || null,
       sourceVideoAssetId: sourceVideo ? Number(sourceVideo.id) : undefined,
       sourceVideoUrl: sourceVideo?.video_url || undefined,
       sourceVideoThumbnailUrl: sourceVideo?.thumbnail_url || undefined,
@@ -2277,6 +4971,9 @@ function createSmsRuntime() {
 }
 
 function getBootstrapSql() {
+  // 数据库采用“启动时自举”的方式：
+  // 服务启动会创建缺失的表，随后执行一组兼容性迁移。
+  // 这样本地开发不需要额外手动导入 schema.sql。
   return `
     CREATE TABLE IF NOT EXISTS users (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -2355,11 +5052,13 @@ function getBootstrapSql() {
     CREATE TABLE IF NOT EXISTS script_scenes (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       project_id BIGINT UNSIGNED NOT NULL,
+      episode_no INT UNSIGNED NOT NULL DEFAULT 1,
       outline_id BIGINT UNSIGNED DEFAULT NULL,
       scene_no INT UNSIGNED NOT NULL,
       title VARCHAR(200) DEFAULT NULL,
       summary TEXT,
       content LONGTEXT,
+      spatial_anchors_json LONGTEXT DEFAULT NULL,
       mood VARCHAR(200) DEFAULT NULL,
       location VARCHAR(200) DEFAULT NULL,
       time_of_day VARCHAR(40) DEFAULT NULL,
@@ -2369,7 +5068,8 @@ function getBootstrapSql() {
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
-      UNIQUE KEY uk_scenes_project_no (project_id, scene_no),
+      UNIQUE KEY uk_scenes_project_episode_no (project_id, episode_no, scene_no),
+      KEY idx_scenes_project_episode (project_id, episode_no, sort_order, id),
       KEY idx_scenes_outline_id (outline_id),
       CONSTRAINT fk_scenes_project_id FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
       CONSTRAINT fk_scenes_outline_id FOREIGN KEY (outline_id) REFERENCES story_outlines(id) ON DELETE SET NULL
@@ -2390,6 +5090,7 @@ function getBootstrapSql() {
       visual_prompt TEXT,
       start_visual_prompt TEXT,
       end_visual_prompt TEXT,
+      asset_reference_json LONGTEXT DEFAULT NULL,
       image_url VARCHAR(500) DEFAULT NULL,
       end_image_url VARCHAR(500) DEFAULT NULL,
       video_url VARCHAR(500) DEFAULT NULL,
@@ -2437,7 +5138,10 @@ function getBootstrapSql() {
       voice_style VARCHAR(160) DEFAULT NULL,
       voice_profile_key VARCHAR(80) DEFAULT NULL,
       voice_locked TINYINT(1) NOT NULL DEFAULT 0,
+      voice_design_json LONGTEXT DEFAULT NULL,
       reference_image_url VARCHAR(500) DEFAULT NULL,
+      reference_audio_url VARCHAR(500) DEFAULT NULL,
+      reference_audio_storage_key VARCHAR(500) DEFAULT NULL,
       status VARCHAR(20) NOT NULL DEFAULT 'draft',
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -2448,14 +5152,348 @@ function getBootstrapSql() {
       CONSTRAINT fk_characters_project_id FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+    CREATE TABLE IF NOT EXISTS story_bibles (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      project_id BIGINT UNSIGNED NOT NULL,
+      version_no INT UNSIGNED NOT NULL DEFAULT 1,
+      status VARCHAR(20) NOT NULL DEFAULT 'draft',
+      title VARCHAR(200) DEFAULT NULL,
+      logline TEXT,
+      audience TEXT,
+      emotional_promise TEXT,
+      world_rules_json LONGTEXT,
+      timeline_json LONGTEXT,
+      locations_json LONGTEXT,
+      characters_json LONGTEXT,
+      relationships_json LONGTEXT,
+      props_json LONGTEXT,
+      main_plot LONGTEXT,
+      subplots_json LONGTEXT,
+      foreshadowing_json LONGTEXT,
+      locked_facts_json LONGTEXT,
+      flexible_facts_json LONGTEXT,
+      visual_symbols_json LONGTEXT,
+      quality_report_json LONGTEXT,
+      locked_at DATETIME DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_story_bibles_project_id (project_id),
+      CONSTRAINT fk_story_bibles_project_id FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS season_structures (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      project_id BIGINT UNSIGNED NOT NULL,
+      story_bible_id BIGINT UNSIGNED DEFAULT NULL,
+      version_no INT UNSIGNED NOT NULL DEFAULT 1,
+      status VARCHAR(20) NOT NULL DEFAULT 'draft',
+      season_theme TEXT,
+      core_conflict TEXT,
+      structure_type VARCHAR(80) DEFAULT NULL,
+      episode_count INT UNSIGNED NOT NULL DEFAULT 1,
+      episodes_json LONGTEXT,
+      foreshadowing_plan_json LONGTEXT,
+      character_arcs_json LONGTEXT,
+      quality_report_json LONGTEXT,
+      locked_at DATETIME DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_season_structures_project_id (project_id),
+      CONSTRAINT fk_season_structures_project_id FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      CONSTRAINT fk_season_structures_story_bible_id FOREIGN KEY (story_bible_id) REFERENCES story_bibles(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS script_agent_activities (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      project_id BIGINT UNSIGNED NOT NULL,
+      user_id BIGINT UNSIGNED NOT NULL,
+      stage_key VARCHAR(32) NOT NULL,
+      action_key VARCHAR(80) NOT NULL,
+      agent_key VARCHAR(80) NOT NULL,
+      source VARCHAR(20) NOT NULL DEFAULT 'button',
+      status VARCHAR(32) NOT NULL DEFAULT 'running',
+      title VARCHAR(200) NOT NULL,
+      summary TEXT,
+      context_json LONGTEXT,
+      result_json LONGTEXT,
+      reaction_json LONGTEXT,
+      error_text TEXT,
+      idempotency_key VARCHAR(200) DEFAULT NULL,
+      started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      finished_at DATETIME DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_script_agent_activity_idempotency (project_id, idempotency_key),
+      KEY idx_script_agent_activity_project (project_id, id, created_at),
+      KEY idx_script_agent_activity_status (project_id, status),
+      CONSTRAINT fk_script_agent_activity_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      CONSTRAINT fk_script_agent_activity_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS agent_pipeline_runs (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      project_id BIGINT UNSIGNED NOT NULL,
+      user_id BIGINT UNSIGNED NOT NULL,
+      episode_no INT UNSIGNED NOT NULL DEFAULT 1,
+      status VARCHAR(32) NOT NULL DEFAULT 'queued',
+      current_stage VARCHAR(80) NOT NULL,
+      input_snapshot_json LONGTEXT,
+      output_snapshot_json LONGTEXT,
+      error_text TEXT,
+      idempotency_key VARCHAR(200) NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_agent_pipeline_run_idempotency (project_id, idempotency_key),
+      KEY idx_agent_pipeline_runs_project (project_id, id, updated_at),
+      KEY idx_agent_pipeline_runs_status (status),
+      CONSTRAINT fk_agent_pipeline_run_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      CONSTRAINT fk_agent_pipeline_run_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS agent_pipeline_executions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      pipeline_run_id BIGINT UNSIGNED NOT NULL,
+      stage_key VARCHAR(80) NOT NULL,
+      agent_key VARCHAR(80) NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'queued',
+      attempt INT UNSIGNED NOT NULL DEFAULT 1,
+      idempotency_key VARCHAR(240) NOT NULL,
+      input_snapshot_json LONGTEXT,
+      output_snapshot_json LONGTEXT,
+      blockers_json LONGTEXT,
+      error_text TEXT,
+      started_at DATETIME DEFAULT NULL,
+      finished_at DATETIME DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_agent_pipeline_execution_idempotency (idempotency_key),
+      KEY idx_agent_pipeline_execution_stage (pipeline_run_id, stage_key),
+      KEY idx_agent_pipeline_execution_run (pipeline_run_id, id),
+      CONSTRAINT fk_agent_pipeline_execution_run FOREIGN KEY (pipeline_run_id) REFERENCES agent_pipeline_runs(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS agent_pipeline_events (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      pipeline_run_id BIGINT UNSIGNED NOT NULL,
+      execution_id BIGINT UNSIGNED DEFAULT NULL,
+      stage_key VARCHAR(80) NOT NULL,
+      agent_key VARCHAR(80) NOT NULL,
+      attempt INT UNSIGNED NOT NULL DEFAULT 1,
+      status VARCHAR(32) NOT NULL,
+      payload_json LONGTEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_agent_pipeline_event_run (pipeline_run_id, id),
+      CONSTRAINT fk_agent_pipeline_event_run FOREIGN KEY (pipeline_run_id) REFERENCES agent_pipeline_runs(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS production_runs (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      project_id BIGINT UNSIGNED NOT NULL,
+      episode_no INT UNSIGNED NOT NULL DEFAULT 1,
+      platform VARCHAR(32) NOT NULL DEFAULT '抖音',
+      name VARCHAR(200) NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'waiting_approval',
+      current_stage VARCHAR(80) NOT NULL,
+      current_checkpoint VARCHAR(80) DEFAULT NULL,
+      pilot_mode VARCHAR(80) NOT NULL,
+      pilot_scene_count INT UNSIGNED NOT NULL DEFAULT 2,
+      budget DECIMAL(12,2) DEFAULT NULL,
+      candidate_policy_json LONGTEXT NOT NULL,
+      success_metrics_json LONGTEXT NOT NULL,
+      input_snapshot_json LONGTEXT,
+      output_snapshot_json LONGTEXT,
+      failure_code VARCHAR(80) DEFAULT NULL,
+      failure_text TEXT,
+      idempotency_key VARCHAR(200) DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_production_runs_idempotency (project_id, idempotency_key),
+      KEY idx_production_runs_project_episode (project_id, episode_no, id),
+      CONSTRAINT fk_production_runs_project_id FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS production_stage_runs (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      production_run_id BIGINT UNSIGNED NOT NULL,
+      stage_key VARCHAR(80) NOT NULL,
+      sequence_no INT UNSIGNED NOT NULL,
+      agent_key VARCHAR(80) NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'blocked',
+      input_snapshot_json LONGTEXT,
+      output_snapshot_json LONGTEXT,
+      error_text TEXT,
+      started_at DATETIME DEFAULT NULL,
+      finished_at DATETIME DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_production_stage_run (production_run_id, stage_key),
+      KEY idx_production_stage_run_order (production_run_id, sequence_no),
+      CONSTRAINT fk_production_stage_run FOREIGN KEY (production_run_id) REFERENCES production_runs(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS production_checkpoints (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      production_run_id BIGINT UNSIGNED NOT NULL,
+      checkpoint_key VARCHAR(80) NOT NULL,
+      stage_key VARCHAR(80) NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'blocked',
+      decision_note TEXT,
+      reviewed_at DATETIME DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_production_checkpoint (production_run_id, checkpoint_key),
+      CONSTRAINT fk_production_checkpoint FOREIGN KEY (production_run_id) REFERENCES production_runs(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS production_agent_executions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      production_run_id BIGINT UNSIGNED NOT NULL,
+      stage_key VARCHAR(80) NOT NULL,
+      agent_key VARCHAR(80) NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'pending',
+      model_name VARCHAR(100) DEFAULT NULL,
+      output_json LONGTEXT,
+      error_text TEXT,
+      started_at DATETIME DEFAULT NULL,
+      finished_at DATETIME DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_production_agent_execution_run (production_run_id, id),
+      CONSTRAINT fk_production_agent_execution FOREIGN KEY (production_run_id) REFERENCES production_runs(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS episode_blueprints (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      production_run_id BIGINT UNSIGNED NOT NULL,
+      project_id BIGINT UNSIGNED NOT NULL,
+      episode_no INT UNSIGNED NOT NULL,
+      version_no INT UNSIGNED NOT NULL DEFAULT 1,
+      status VARCHAR(32) NOT NULL DEFAULT 'draft',
+      blueprint_json LONGTEXT NOT NULL,
+      quality_report_json LONGTEXT,
+      approved_at DATETIME DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_episode_blueprint_version (production_run_id, version_no),
+      KEY idx_episode_blueprint_project (project_id, episode_no),
+      CONSTRAINT fk_episode_blueprint_run FOREIGN KEY (production_run_id) REFERENCES production_runs(id) ON DELETE CASCADE,
+      CONSTRAINT fk_episode_blueprint_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS production_emotion_beats (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      blueprint_id BIGINT UNSIGNED NOT NULL,
+      beat_key VARCHAR(80) NOT NULL,
+      phase VARCHAR(40) NOT NULL,
+      label VARCHAR(200) NOT NULL,
+      sequence_no INT UNSIGNED NOT NULL,
+      duration_seconds INT UNSIGNED NOT NULL DEFAULT 1,
+      emotion_start TEXT,
+      emotion_process TEXT,
+      emotion_end TEXT,
+      action_start TEXT,
+      action_process TEXT,
+      action_end TEXT,
+      dialogue_plan TEXT,
+      sound_plan TEXT,
+      continuity TEXT,
+      scene_no INT UNSIGNED DEFAULT NULL,
+      shot_count INT UNSIGNED NOT NULL DEFAULT 0,
+      status VARCHAR(32) NOT NULL DEFAULT 'draft',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_production_emotion_beats_order (blueprint_id, sequence_no),
+      CONSTRAINT fk_production_emotion_beat FOREIGN KEY (blueprint_id) REFERENCES episode_blueprints(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS asset_nodes (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      project_id BIGINT UNSIGNED NOT NULL,
+      node_type VARCHAR(20) NOT NULL,
+      ref_id BIGINT UNSIGNED DEFAULT NULL,
+      label VARCHAR(200) NOT NULL,
+      appearance_label VARCHAR(200) DEFAULT NULL,
+      prompt_text TEXT,
+      turnaround_prompt_text TEXT,
+      negative_prompt TEXT,
+      x DECIMAL(12,2) NOT NULL DEFAULT 0,
+      y DECIMAL(12,2) NOT NULL DEFAULT 0,
+      width INT UNSIGNED NOT NULL DEFAULT 220,
+      height INT UNSIGNED NOT NULL DEFAULT 260,
+      group_key VARCHAR(255) DEFAULT NULL,
+      character_identity_lock_json LONGTEXT DEFAULT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'active',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_asset_nodes_project_id (project_id),
+      KEY idx_asset_nodes_project_type (project_id, node_type),
+      CONSTRAINT fk_asset_nodes_project_id FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS project_workflow_states (
+      project_id BIGINT UNSIGNED NOT NULL,
+      parsed_script_fingerprint CHAR(64) DEFAULT NULL,
+      parsed_at DATETIME DEFAULT NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (project_id),
+      CONSTRAINT fk_project_workflow_state_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    CREATE TABLE IF NOT EXISTS asset_node_images (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      asset_node_id BIGINT UNSIGNED NOT NULL,
+      version_no INT UNSIGNED NOT NULL DEFAULT 1,
+      image_url TEXT NOT NULL,
+      storage_key VARCHAR(500) DEFAULT NULL,
+      thumbnail_url TEXT,
+      prompt_snapshot TEXT,
+      model_name VARCHAR(100) DEFAULT NULL,
+      view_set_type VARCHAR(40) NOT NULL DEFAULT 'single',
+      view_set_version INT UNSIGNED NOT NULL DEFAULT 1,
+      view_index INT UNSIGNED DEFAULT NULL,
+      view_key VARCHAR(40) DEFAULT NULL,
+      view_label VARCHAR(80) DEFAULT NULL,
+      source_image_id BIGINT UNSIGNED DEFAULT NULL,
+      source_image_url TEXT,
+      crop_json JSON DEFAULT NULL,
+      character_identity_lock_json LONGTEXT DEFAULT NULL,
+      identity_status VARCHAR(20) NOT NULL DEFAULT 'not_checked',
+      identity_reason TEXT DEFAULT NULL,
+      identity_similarity_score DECIMAL(5,2) DEFAULT NULL,
+      wardrobe_consistency_score DECIMAL(5,2) DEFAULT NULL,
+      vision_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+      vision_reason TEXT,
+      vision_checked_at DATETIME DEFAULT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'candidate',
+      confirmed_at DATETIME DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_asset_node_images_node_id (asset_node_id),
+      CONSTRAINT fk_asset_node_images_node_id FOREIGN KEY (asset_node_id) REFERENCES asset_nodes(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
     CREATE TABLE IF NOT EXISTS character_images (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       character_id BIGINT UNSIGNED NOT NULL,
       version_no INT UNSIGNED NOT NULL DEFAULT 1,
       image_url VARCHAR(500) NOT NULL,
+      storage_key VARCHAR(500) DEFAULT NULL,
       thumbnail_url VARCHAR(500) DEFAULT NULL,
       prompt_snapshot TEXT,
       model_name VARCHAR(100) DEFAULT NULL,
+      view_set_type VARCHAR(40) NOT NULL DEFAULT 'single',
       status VARCHAR(20) NOT NULL DEFAULT 'candidate',
       confirmed_at DATETIME DEFAULT NULL,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -2470,6 +5508,7 @@ function getBootstrapSql() {
       storyboard_id BIGINT UNSIGNED NOT NULL,
       version_no INT UNSIGNED NOT NULL DEFAULT 1,
       image_url VARCHAR(500) NOT NULL,
+      storage_key VARCHAR(500) DEFAULT NULL,
       thumbnail_url VARCHAR(500) DEFAULT NULL,
       prompt_snapshot TEXT,
       frame_role VARCHAR(20) NOT NULL DEFAULT 'primary',
@@ -2489,9 +5528,12 @@ function getBootstrapSql() {
     CREATE TABLE IF NOT EXISTS video_assets (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       storyboard_id BIGINT UNSIGNED NOT NULL,
-      image_asset_id BIGINT UNSIGNED NOT NULL,
+      image_asset_id BIGINT UNSIGNED DEFAULT NULL,
       version_no INT UNSIGNED NOT NULL DEFAULT 1,
       video_url TEXT NOT NULL,
+      storage_key VARCHAR(500) DEFAULT NULL,
+      end_frame_url TEXT DEFAULT NULL,
+      end_frame_storage_key VARCHAR(500) DEFAULT NULL,
       thumbnail_url TEXT DEFAULT NULL,
       motion_mode VARCHAR(64) DEFAULT NULL,
       duration_seconds INT UNSIGNED DEFAULT NULL,
@@ -2555,6 +5597,7 @@ function getBootstrapSql() {
       version_no INT UNSIGNED NOT NULL DEFAULT 1,
       title VARCHAR(160) NOT NULL,
       audio_url TEXT NOT NULL,
+      storage_key VARCHAR(500) DEFAULT NULL,
       duration_seconds INT UNSIGNED DEFAULT NULL,
       voice_name VARCHAR(100) DEFAULT NULL,
       model_name VARCHAR(100) DEFAULT NULL,
@@ -2579,6 +5622,8 @@ function getBootstrapSql() {
       project_id BIGINT UNSIGNED NOT NULL,
       status VARCHAR(20) NOT NULL DEFAULT 'completed',
       video_url TEXT NOT NULL,
+      storage_key VARCHAR(500) DEFAULT NULL,
+      subtitle_storage_key VARCHAR(500) DEFAULT NULL,
       cover_url TEXT DEFAULT NULL,
       duration_seconds INT UNSIGNED DEFAULT NULL,
       config_json LONGTEXT,
@@ -2656,6 +5701,8 @@ function getBootstrapSql() {
 }
 
 async function createDatabasePool() {
+  // 先用管理员连接创建数据库，再创建真正指向项目库的连接池。
+  // mysql2/promise 返回 Promise 风格 API，适合当前 async/await 代码。
   if (!/^[A-Za-z0-9_]+$/.test(DB_NAME)) {
     throw new Error(`数据库名不安全，请检查 DB_NAME：${DB_NAME}`)
   }
@@ -2691,7 +5738,7 @@ async function createDatabasePool() {
   })
 
   await ensureDemoUser(pool)
-  await runLightMigrations(pool)
+  if (appRuntimeRole.runsMigrations) await runLightMigrations(pool)
   return pool
 }
 
@@ -2703,7 +5750,149 @@ async function createDatabasePool() {
  * @returns {Promise<void>}
  */
 async function runLightMigrations(pool) {
+  const tableColumns = [
+    {
+      table: 'script_scenes',
+      column: 'episode_no',
+      sql: 'ALTER TABLE script_scenes ADD COLUMN episode_no INT UNSIGNED NOT NULL DEFAULT 1 AFTER project_id',
+    },
+    {
+      table: 'script_scenes',
+      column: 'spatial_anchors_json',
+      sql: 'ALTER TABLE script_scenes ADD COLUMN spatial_anchors_json LONGTEXT DEFAULT NULL AFTER content',
+    },
+    {
+      table: 'asset_nodes',
+      column: 'turnaround_prompt_text',
+      sql: 'ALTER TABLE asset_nodes ADD COLUMN turnaround_prompt_text TEXT DEFAULT NULL AFTER prompt_text',
+    },
+    {
+      table: 'asset_nodes',
+      column: 'environment_prompt_text',
+      sql: 'ALTER TABLE asset_nodes ADD COLUMN environment_prompt_text TEXT DEFAULT NULL AFTER turnaround_prompt_text',
+    },
+    {
+      table: 'asset_nodes',
+      column: 'character_identity_lock_json',
+      sql: 'ALTER TABLE asset_nodes ADD COLUMN character_identity_lock_json LONGTEXT DEFAULT NULL AFTER group_key',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'storage_key',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN storage_key VARCHAR(500) DEFAULT NULL AFTER image_url',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'view_set_type',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN view_set_type VARCHAR(40) NOT NULL DEFAULT \'single\' AFTER model_name',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'view_set_version',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN view_set_version INT UNSIGNED NOT NULL DEFAULT 1 AFTER view_set_type',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'view_index',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN view_index INT UNSIGNED DEFAULT NULL AFTER view_set_version',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'view_key',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN view_key VARCHAR(40) DEFAULT NULL AFTER view_index',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'view_label',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN view_label VARCHAR(80) DEFAULT NULL AFTER view_key',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'vision_status',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN vision_status VARCHAR(20) NOT NULL DEFAULT \'pending\' AFTER view_label',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'vision_reason',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN vision_reason TEXT DEFAULT NULL AFTER vision_status',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'vision_checked_at',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN vision_checked_at DATETIME DEFAULT NULL AFTER vision_reason',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'source_image_id',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN source_image_id BIGINT UNSIGNED DEFAULT NULL AFTER view_label',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'source_image_url',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN source_image_url TEXT DEFAULT NULL AFTER source_image_id',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'crop_json',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN crop_json JSON DEFAULT NULL AFTER source_image_url',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'character_identity_lock_json',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN character_identity_lock_json LONGTEXT DEFAULT NULL AFTER crop_json',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'identity_status',
+      sql: "ALTER TABLE asset_node_images ADD COLUMN identity_status VARCHAR(20) NOT NULL DEFAULT 'not_checked' AFTER character_identity_lock_json",
+    },
+    {
+      table: 'asset_node_images',
+      column: 'identity_reason',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN identity_reason TEXT DEFAULT NULL AFTER identity_status',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'identity_similarity_score',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN identity_similarity_score DECIMAL(5,2) DEFAULT NULL AFTER identity_reason',
+    },
+    {
+      table: 'asset_node_images',
+      column: 'wardrobe_consistency_score',
+      sql: 'ALTER TABLE asset_node_images ADD COLUMN wardrobe_consistency_score DECIMAL(5,2) DEFAULT NULL AFTER identity_similarity_score',
+    },
+  ]
+  for (const migration of tableColumns) {
+    try {
+      await pool.execute(migration.sql)
+    } catch (error) {
+      if (error?.errno && ![1060, 1061, 1146].includes(error.errno)) {
+        console.warn(`[migration] ${migration.table}.${migration.column} skipped:`, error.message)
+      }
+    }
+  }
+
   const migrations = [
+    {
+      table: 'script_scenes',
+      column: 'uk_scenes_project_episode_no',
+      sql: 'ALTER TABLE script_scenes ADD UNIQUE KEY uk_scenes_project_episode_no (project_id, episode_no, scene_no)',
+    },
+    {
+      table: 'script_scenes',
+      column: 'uk_scenes_project_no',
+      sql: 'ALTER TABLE script_scenes DROP INDEX uk_scenes_project_no',
+    },
+    {
+      table: 'asset_nodes',
+      column: 'group_key',
+      sql: 'ALTER TABLE asset_nodes MODIFY COLUMN group_key VARCHAR(255) DEFAULT NULL',
+    },
+    {
+      table: 'agent_pipeline_executions',
+      column: 'stage_index',
+      sql: 'ALTER TABLE agent_pipeline_executions DROP INDEX uk_agent_pipeline_execution_stage',
+    },
     {
       table: 'projects',
       column: 'visual_style',
@@ -2746,6 +5935,11 @@ async function runLightMigrations(pool) {
     },
     {
       table: 'storyboards',
+      column: 'asset_reference_json',
+      sql: 'ALTER TABLE storyboards ADD COLUMN asset_reference_json LONGTEXT DEFAULT NULL AFTER end_visual_prompt',
+    },
+    {
+      table: 'storyboards',
       column: 'character_id_index',
       sql: 'ALTER TABLE storyboards ADD KEY idx_storyboards_character_id (character_id)',
     },
@@ -2771,6 +5965,11 @@ async function runLightMigrations(pool) {
     },
     {
       table: 'characters',
+      column: 'voice_design_json',
+      sql: 'ALTER TABLE characters ADD COLUMN voice_design_json LONGTEXT DEFAULT NULL AFTER voice_locked',
+    },
+    {
+      table: 'characters',
       column: 'voice_locked',
       sql: 'ALTER TABLE characters ADD COLUMN voice_locked TINYINT(1) NOT NULL DEFAULT 0',
     },
@@ -2778,6 +5977,31 @@ async function runLightMigrations(pool) {
       table: 'characters',
       column: 'voice_profile_key_index',
       sql: 'ALTER TABLE characters ADD KEY idx_characters_voice_profile_key (voice_profile_key)',
+    },
+    {
+      table: 'characters',
+      column: 'appearance_locked',
+      sql: 'ALTER TABLE characters ADD COLUMN appearance_locked TINYINT(1) NOT NULL DEFAULT 0',
+    },
+    {
+      table: 'characters',
+      column: 'reference_image_storage_key',
+      sql: 'ALTER TABLE characters ADD COLUMN reference_image_storage_key VARCHAR(500) DEFAULT NULL',
+    },
+    {
+      table: 'characters',
+      column: 'reference_audio_url',
+      sql: 'ALTER TABLE characters ADD COLUMN reference_audio_url VARCHAR(500) DEFAULT NULL',
+    },
+    {
+      table: 'characters',
+      column: 'reference_audio_storage_key',
+      sql: 'ALTER TABLE characters ADD COLUMN reference_audio_storage_key VARCHAR(500) DEFAULT NULL',
+    },
+    {
+      table: 'character_images',
+      column: 'storage_key',
+      sql: 'ALTER TABLE character_images ADD COLUMN storage_key VARCHAR(500) DEFAULT NULL AFTER image_url',
     },
     {
       table: 'image_assets',
@@ -2841,6 +6065,31 @@ async function runLightMigrations(pool) {
     },
     {
       table: 'video_assets',
+      column: 'image_asset_id_nullable',
+      sql: 'ALTER TABLE video_assets MODIFY COLUMN image_asset_id BIGINT UNSIGNED DEFAULT NULL',
+    },
+    {
+      table: 'video_assets',
+      column: 'storage_key',
+      sql: 'ALTER TABLE video_assets ADD COLUMN storage_key VARCHAR(500) DEFAULT NULL AFTER video_url',
+    },
+    {
+      table: 'audio_assets',
+      column: 'storage_key',
+      sql: 'ALTER TABLE audio_assets ADD COLUMN storage_key VARCHAR(500) DEFAULT NULL AFTER audio_url',
+    },
+    {
+      table: 'export_records',
+      column: 'storage_key',
+      sql: 'ALTER TABLE export_records ADD COLUMN storage_key VARCHAR(500) DEFAULT NULL AFTER video_url',
+    },
+    {
+      table: 'export_records',
+      column: 'subtitle_storage_key',
+      sql: 'ALTER TABLE export_records ADD COLUMN subtitle_storage_key VARCHAR(500) DEFAULT NULL AFTER storage_key',
+    },
+    {
+      table: 'video_assets',
       column: 'audio_asset_id',
       sql: 'ALTER TABLE video_assets ADD COLUMN audio_asset_id BIGINT UNSIGNED DEFAULT NULL AFTER model_name',
     },
@@ -2856,6 +6105,16 @@ async function runLightMigrations(pool) {
     },
     {
       table: 'video_assets',
+      column: 'end_frame_url',
+      sql: 'ALTER TABLE video_assets ADD COLUMN end_frame_url TEXT DEFAULT NULL AFTER storage_key',
+    },
+    {
+      table: 'video_assets',
+      column: 'end_frame_storage_key',
+      sql: 'ALTER TABLE video_assets ADD COLUMN end_frame_storage_key VARCHAR(500) DEFAULT NULL AFTER end_frame_url',
+    },
+    {
+      table: 'video_assets',
       column: 'audio_asset_id_index',
       sql: 'ALTER TABLE video_assets ADD KEY idx_video_assets_audio_asset_id (audio_asset_id)',
     },
@@ -2864,14 +6123,175 @@ async function runLightMigrations(pool) {
       column: 'generation_job_id_index',
       sql: 'ALTER TABLE video_assets ADD KEY idx_video_assets_generation_job_id (generation_job_id)',
     },
+    {
+      table: 'video_assets',
+      column: 'quality_report_json',
+      sql: 'ALTER TABLE video_assets ADD COLUMN quality_report_json LONGTEXT DEFAULT NULL AFTER generation_job_id',
+    },
+    {
+      table: 'production_runs',
+      column: 'user_id',
+      sql: 'ALTER TABLE production_runs ADD COLUMN user_id BIGINT UNSIGNED NOT NULL DEFAULT 1 AFTER project_id',
+    },
+    {
+      table: 'production_stage_runs',
+      column: 'stage_key',
+      sql: "ALTER TABLE production_stage_runs ADD COLUMN stage_key VARCHAR(80) NOT NULL DEFAULT 'planning' AFTER production_run_id",
+    },
+    {
+      table: 'production_stage_runs',
+      column: 'sequence_no',
+      sql: 'ALTER TABLE production_stage_runs ADD COLUMN sequence_no INT UNSIGNED NOT NULL DEFAULT 1 AFTER stage_key',
+    },
+    {
+      table: 'production_stage_runs',
+      column: 'agent_key',
+      sql: "ALTER TABLE production_stage_runs ADD COLUMN agent_key VARCHAR(80) NOT NULL DEFAULT 'script-agent' AFTER sequence_no",
+    },
+    {
+      table: 'production_stage_runs',
+      column: 'status',
+      sql: "ALTER TABLE production_stage_runs ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'blocked' AFTER agent_key",
+    },
+    {
+      table: 'production_stage_runs',
+      column: 'input_snapshot_json',
+      sql: 'ALTER TABLE production_stage_runs ADD COLUMN input_snapshot_json LONGTEXT AFTER status',
+    },
+    {
+      table: 'production_stage_runs',
+      column: 'output_snapshot_json',
+      sql: 'ALTER TABLE production_stage_runs ADD COLUMN output_snapshot_json LONGTEXT AFTER input_snapshot_json',
+    },
+    {
+      table: 'production_stage_runs',
+      column: 'error_text',
+      sql: 'ALTER TABLE production_stage_runs ADD COLUMN error_text TEXT AFTER output_snapshot_json',
+    },
+    {
+      table: 'production_stage_runs',
+      column: 'started_at',
+      sql: 'ALTER TABLE production_stage_runs ADD COLUMN started_at DATETIME DEFAULT NULL AFTER error_text',
+    },
+    {
+      table: 'production_stage_runs',
+      column: 'finished_at',
+      sql: 'ALTER TABLE production_stage_runs ADD COLUMN finished_at DATETIME DEFAULT NULL AFTER started_at',
+    },
+    {
+      table: 'production_checkpoints',
+      column: 'checkpoint_key',
+      sql: "ALTER TABLE production_checkpoints ADD COLUMN checkpoint_key VARCHAR(80) NOT NULL DEFAULT 'story-bible' AFTER production_run_id",
+    },
+    {
+      table: 'production_checkpoints',
+      column: 'stage_key',
+      sql: "ALTER TABLE production_checkpoints ADD COLUMN stage_key VARCHAR(80) NOT NULL DEFAULT 'planning' AFTER checkpoint_key",
+    },
+    {
+      table: 'production_checkpoints',
+      column: 'status',
+      sql: "ALTER TABLE production_checkpoints ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'blocked' AFTER stage_key",
+    },
+    {
+      table: 'production_checkpoints',
+      column: 'decision_note',
+      sql: 'ALTER TABLE production_checkpoints ADD COLUMN decision_note TEXT AFTER status',
+    },
+    {
+      table: 'production_checkpoints',
+      column: 'reviewed_at',
+      sql: 'ALTER TABLE production_checkpoints ADD COLUMN reviewed_at DATETIME DEFAULT NULL AFTER decision_note',
+    },
+    {
+      table: 'production_agent_executions',
+      column: 'stage_key',
+      sql: "ALTER TABLE production_agent_executions ADD COLUMN stage_key VARCHAR(80) NOT NULL DEFAULT 'planning' AFTER production_run_id",
+    },
+    {
+      table: 'production_agent_executions',
+      column: 'agent_key',
+      sql: "ALTER TABLE production_agent_executions ADD COLUMN agent_key VARCHAR(80) NOT NULL DEFAULT 'script-agent' AFTER stage_key",
+    },
+    {
+      table: 'production_agent_executions',
+      column: 'status',
+      sql: "ALTER TABLE production_agent_executions ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'pending' AFTER agent_key",
+    },
+    {
+      table: 'production_agent_executions',
+      column: 'model_name',
+      sql: 'ALTER TABLE production_agent_executions ADD COLUMN model_name VARCHAR(100) DEFAULT NULL AFTER status',
+    },
+    {
+      table: 'production_agent_executions',
+      column: 'output_json',
+      sql: 'ALTER TABLE production_agent_executions ADD COLUMN output_json LONGTEXT AFTER model_name',
+    },
+    {
+      table: 'production_agent_executions',
+      column: 'error_text',
+      sql: 'ALTER TABLE production_agent_executions ADD COLUMN error_text TEXT AFTER output_json',
+    },
+    {
+      table: 'production_agent_executions',
+      column: 'started_at',
+      sql: 'ALTER TABLE production_agent_executions ADD COLUMN started_at DATETIME DEFAULT NULL AFTER error_text',
+    },
+    {
+      table: 'production_agent_executions',
+      column: 'finished_at',
+      sql: 'ALTER TABLE production_agent_executions ADD COLUMN finished_at DATETIME DEFAULT NULL AFTER started_at',
+    },
+    {
+      table: 'episode_blueprints',
+      column: 'project_id',
+      sql: 'ALTER TABLE episode_blueprints ADD COLUMN project_id BIGINT UNSIGNED NOT NULL DEFAULT 1 AFTER production_run_id',
+    },
+    {
+      table: 'episode_blueprints',
+      column: 'episode_no',
+      sql: 'ALTER TABLE episode_blueprints ADD COLUMN episode_no INT UNSIGNED NOT NULL DEFAULT 1 AFTER project_id',
+    },
+    {
+      table: 'episode_blueprints',
+      column: 'version_no',
+      sql: 'ALTER TABLE episode_blueprints ADD COLUMN version_no INT UNSIGNED NOT NULL DEFAULT 1 AFTER episode_no',
+    },
+    {
+      table: 'episode_blueprints',
+      column: 'status',
+      sql: "ALTER TABLE episode_blueprints ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'draft' AFTER version_no",
+    },
+    {
+      table: 'episode_blueprints',
+      column: 'blueprint_json',
+      sql: 'ALTER TABLE episode_blueprints ADD COLUMN blueprint_json LONGTEXT NOT NULL AFTER status',
+    },
+    {
+      table: 'episode_blueprints',
+      column: 'quality_report_json',
+      sql: 'ALTER TABLE episode_blueprints ADD COLUMN quality_report_json LONGTEXT AFTER blueprint_json',
+    },
+    {
+      table: 'episode_blueprints',
+      column: 'approved_at',
+      sql: 'ALTER TABLE episode_blueprints ADD COLUMN approved_at DATETIME DEFAULT NULL AFTER quality_report_json',
+    },
+    {
+      table: 'production_emotion_beats',
+      column: 'blueprint_id',
+      sql: 'ALTER TABLE production_emotion_beats ADD COLUMN blueprint_id BIGINT UNSIGNED NOT NULL DEFAULT 1 AFTER id',
+    },
   ]
   for (const m of migrations) {
     try {
       await pool.execute(m.sql)
     } catch (e) {
-      // Duplicate column / table missing 等情况都吞掉
+      // Duplicate / already-applied idempotent DDL 等情况都吞掉。
       // 1060 = Duplicate column name
-      if (e && e.errno && ![1060, 1061].includes(e.errno)) {
+      // 1091 = DROP INDEX/COLUMN target already absent
+      if (e && e.errno && ![1060, 1061, 1091].includes(e.errno)) {
         // eslint-disable-next-line no-console
         console.warn(`[migration] ${m.table}.${m.column} skipped:`, e.message)
       }
@@ -2946,6 +6366,7 @@ async function runLightMigrations(pool) {
       thumbnail_url VARCHAR(500) DEFAULT NULL,
       prompt_snapshot TEXT,
       model_name VARCHAR(100) DEFAULT NULL,
+      view_set_type VARCHAR(40) NOT NULL DEFAULT 'single',
       status VARCHAR(20) NOT NULL DEFAULT 'candidate',
       confirmed_at DATETIME DEFAULT NULL,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -3013,6 +6434,7 @@ async function runLightMigrations(pool) {
       start_offset_seconds DECIMAL(10,3) NOT NULL DEFAULT 0,
       title VARCHAR(160) NOT NULL,
       audio_url TEXT NOT NULL,
+      storage_key VARCHAR(500) DEFAULT NULL,
       duration_seconds INT UNSIGNED DEFAULT NULL,
       voice_name VARCHAR(100) DEFAULT NULL,
       model_name VARCHAR(100) DEFAULT NULL,
@@ -3041,6 +6463,8 @@ async function runLightMigrations(pool) {
       project_id BIGINT UNSIGNED NOT NULL,
       status VARCHAR(20) NOT NULL DEFAULT 'completed',
       video_url TEXT NOT NULL,
+      storage_key VARCHAR(500) DEFAULT NULL,
+      subtitle_storage_key VARCHAR(500) DEFAULT NULL,
       cover_url TEXT DEFAULT NULL,
       duration_seconds INT UNSIGNED DEFAULT NULL,
       config_json LONGTEXT,
@@ -3160,7 +6584,7 @@ function json(res, statusCode, payload) {
   res.writeHead(statusCode, {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Content-Type': 'application/json; charset=utf-8',
   })
   res.end(JSON.stringify(payload))
@@ -3170,22 +6594,26 @@ function success(res, data = {}, message = 'success') {
   json(res, 200, { code: 0, message, data })
 }
 
-function fail(res, code, message, statusCode = 400) {
-  json(res, statusCode, { code, message, data: null })
+function fail(res, code, message, statusCode = 400, extra = undefined) {
+  json(res, statusCode, { code, message, data: extra || null })
 }
 
-function parseBody(req) {
+function parseBody(req, maxLength = 1_000_000) {
   return new Promise((resolve, reject) => {
     let body = ''
+    let settled = false
 
     req.on('data', (chunk) => {
+      if (settled) return
       body += chunk
-      if (body.length > 1_000_000) {
+      if (body.length > maxLength) {
+        settled = true
         reject(new Error('Request body too large'))
       }
     })
 
     req.on('end', () => {
+      if (settled) return
       try {
         resolve(body ? JSON.parse(body) : {})
       } catch {
@@ -3464,11 +6892,14 @@ function getModelSettingFallbackValues() {
     AI_MODEL_STORYBOARD: aiConfig.storyboardModel,
     AI_MODEL_CHARACTER: aiConfig.characterModel,
     AI_TIMEOUT_MS: String(aiConfig.timeoutMs),
+    AI_LONG_TASK_TIMEOUT_MS: String(aiConfig.longTaskTimeoutMs),
     AI_FALLBACK_TO_MOCK: String(aiConfig.fallbackToMock),
 
     FRAME_PROVIDER: frameConfig.provider,
     FRAME_BASE_URL: frameConfig.baseUrl,
     FRAME_API_KEY: frameConfig.apiKey,
+    ARK_API_KEY: process.env.ARK_API_KEY || '',
+    VOLCENGINE_API_KEY: process.env.VOLCENGINE_API_KEY || '',
     BIGMODEL_API_KEY: process.env.BIGMODEL_API_KEY || '',
     FRAME_MODEL: frameConfig.defaultModel,
     FRAME_FALLBACK_MODELS: frameConfig.fallbackModels.join(','),
@@ -3483,6 +6914,8 @@ function getModelSettingFallbackValues() {
     VIDEO_SIZE: videoConfig.size,
     VIDEO_WATERMARK_ENABLED: String(videoConfig.watermarkEnabled),
     VIDEO_FALLBACK_TO_MOCK: String(videoConfig.fallbackToMock),
+    VIDEO_CREATE_RATE_LIMIT_MAX_REQUESTS: String(videoConfig.createRateLimitMaxRequests),
+    VIDEO_CREATE_RATE_LIMIT_WINDOW_MS: String(videoConfig.createRateLimitWindowMs),
     VIDEO_IMAGE_UPLOAD_BASE_URL: videoConfig.imageUploadBaseUrl,
     VIDEO_IMAGE_UPLOAD_API_KEY: videoConfig.imageUploadApiKey,
     LIP_SYNC_PROVIDER: lipSyncConfig.provider,
@@ -3507,9 +6940,16 @@ async function getPersistedModelSettingMap(pool = db) {
 }
 
 async function applyPersistedModelSettings(pool) {
+  const envOverrides = new Set(
+    String(process.env.MODEL_SETTINGS_ENV_OVERRIDES || '')
+      .split(',')
+      .map((key) => key.trim())
+      .filter(Boolean),
+  )
   try {
     const settings = await getPersistedModelSettingMap(pool)
     for (const [key, value] of settings) {
+      if (envOverrides.has(key)) continue
       if (MODEL_SETTING_FIELD_MAP.has(key)) process.env[key] = String(value ?? '')
     }
   } catch (error) {
@@ -3756,10 +7196,12 @@ function projectRow(row) {
       ? {
           exportId: Number(row.latest_export_id),
           videoUrl: row.latest_export_video_url || null,
+          coverUrl: row.latest_export_cover_url || null,
           durationSeconds: Number(row.latest_export_duration_seconds) || null,
           createdAt: row.latest_export_created_at || null,
         }
       : null,
+    coverUrl: row.latest_export_cover_url || row.latest_project_frame_url || null,
   }
   if (hasProgressAggregates) {
     result.progressPercent = progress.percent
@@ -3768,6 +7210,1748 @@ function projectRow(row) {
     result.progressComplete = progress.isComplete
   }
   return result
+}
+
+function projectDeletionConfirmationName(project) {
+  const name = String(project?.name || '').trim()
+  return name || `未命名项目 PF-${String(project?.id || '').padStart(3, '0')}`
+}
+
+function decodeAudioDataUrl(value) {
+  const match = String(value || '').match(/^data:(audio\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/i)
+  if (!match) throw new Error('参考音频格式无效')
+  const mimeType = match[1].toLowerCase()
+  const bytes = Buffer.from(match[2].replace(/\s+/g, ''), 'base64')
+  if (!bytes.length || bytes.length > 15 * 1024 * 1024) {
+    throw new Error('参考音频不能为空且不能超过 15MB')
+  }
+  return { mimeType, bytes }
+}
+
+function jsonArray(value) {
+  if (Array.isArray(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function storyBibleRow(row) {
+  return {
+    id: Number(row.id),
+    projectId: Number(row.project_id),
+    versionNo: Number(row.version_no || 1),
+    status: row.status || 'draft',
+    title: row.title || '',
+    logline: row.logline || '',
+    audience: row.audience || '',
+    emotionalPromise: row.emotional_promise || '',
+    worldRules: jsonArray(row.world_rules_json),
+    timeline: jsonArray(row.timeline_json),
+    locations: jsonArray(row.locations_json),
+    characters: jsonArray(row.characters_json),
+    relationships: jsonArray(row.relationships_json),
+    props: jsonArray(row.props_json),
+    mainPlot: row.main_plot || '',
+    subplots: jsonArray(row.subplots_json),
+    foreshadowing: jsonArray(row.foreshadowing_json),
+    lockedFacts: jsonArray(row.locked_facts_json),
+    flexibleFacts: jsonArray(row.flexible_facts_json),
+    visualSymbols: jsonArray(row.visual_symbols_json),
+    qualityReport: row.quality_report_json ? JSON.parse(row.quality_report_json) : null,
+    lockedAt: row.locked_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function seasonStructureRow(row) {
+  return {
+    id: Number(row.id),
+    projectId: Number(row.project_id),
+    storyBibleId: row.story_bible_id ? Number(row.story_bible_id) : null,
+    versionNo: Number(row.version_no || 1),
+    status: row.status || 'draft',
+    seasonTheme: row.season_theme || '',
+    coreConflict: row.core_conflict || '',
+    structureType: row.structure_type || '',
+    episodeCount: Number(row.episode_count || 1),
+    episodes: jsonArray(row.episodes_json),
+    foreshadowingPlan: jsonArray(row.foreshadowing_plan_json),
+    characterArcs: jsonArray(row.character_arcs_json),
+    qualityReport: row.quality_report_json ? JSON.parse(row.quality_report_json) : null,
+    lockedAt: row.locked_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function scriptAgentActivityRow(row) {
+  return {
+    id: Number(row.id),
+    projectId: Number(row.project_id),
+    userId: Number(row.user_id),
+    stageKey: row.stage_key || 'script',
+    actionKey: row.action_key || '',
+    agentKey: row.agent_key || 'script-agent',
+    source: row.source || 'button',
+    status: row.status || 'running',
+    title: row.title || '',
+    summary: row.summary || '',
+    context: parseJsonObject(row.context_json),
+    result: parseJsonObject(row.result_json),
+    reaction: parseJsonObject(row.reaction_json),
+    errorText: row.error_text || '',
+    idempotencyKey: row.idempotency_key || null,
+    startedAt: row.started_at || null,
+    finishedAt: row.finished_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function agentPipelineExecutionRow(row) {
+  return {
+    id: Number(row.id),
+    pipelineRunId: Number(row.pipeline_run_id),
+    stageKey: row.stage_key,
+    agentKey: row.agent_key,
+    status: row.status,
+    attempt: Number(row.attempt || 1),
+    idempotencyKey: row.idempotency_key,
+    inputSnapshot: parseJsonObject(row.input_snapshot_json),
+    outputSnapshot: parseJsonObject(row.output_snapshot_json),
+    blockers: jsonArray(row.blockers_json),
+    errorText: row.error_text || '',
+    startedAt: row.started_at || null,
+    finishedAt: row.finished_at || null,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+  }
+}
+
+function agentPipelineRunRow(row) {
+  return {
+    id: Number(row.id),
+    projectId: Number(row.project_id),
+    userId: Number(row.user_id),
+    episodeNo: Number(row.episode_no || 1),
+    status: row.status || 'queued',
+    currentStage: row.current_stage || AGENT_PIPELINE_STAGES[0].key,
+    inputSnapshot: parseJsonObject(row.input_snapshot_json),
+    outputSnapshot: row.output_snapshot_json ? parseJsonObject(row.output_snapshot_json) : null,
+    errorText: row.error_text || '',
+    idempotencyKey: row.idempotency_key,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+  }
+}
+
+function agentPipelineEventRow(row) {
+  return {
+    id: Number(row.id),
+    pipelineRunId: Number(row.pipeline_run_id),
+    executionId: row.execution_id == null ? null : Number(row.execution_id),
+    stageKey: row.stage_key,
+    agentKey: row.agent_key,
+    attempt: Number(row.attempt || 1),
+    status: row.status,
+    payload: parseJsonObject(row.payload_json),
+    createdAt: row.created_at || null,
+  }
+}
+
+async function loadAgentPipelineView(runId, userId) {
+  const [runRows] = await db.execute(
+    `SELECT *
+     FROM agent_pipeline_runs
+     WHERE id = ? AND user_id = ?
+     LIMIT 1`,
+    [runId, userId],
+  )
+  if (!runRows[0]) return null
+  const [executionRows] = await db.execute(
+    `SELECT *
+     FROM agent_pipeline_executions
+     WHERE pipeline_run_id = ?
+     ORDER BY id ASC`,
+    [runId],
+  )
+  const [eventRows] = await db.execute(
+    `SELECT *
+     FROM agent_pipeline_events
+     WHERE pipeline_run_id = ?
+     ORDER BY id ASC`,
+    [runId],
+  )
+  return {
+    run: agentPipelineRunRow(runRows[0]),
+    executions: executionRows.map(agentPipelineExecutionRow),
+    events: eventRows.map(agentPipelineEventRow),
+  }
+}
+
+function createDbAgentPipelineStore(pipelineRunId) {
+  return {
+    async findByIdempotencyKey(idempotencyKey) {
+      const [rows] = await db.execute(
+        `SELECT *
+         FROM agent_pipeline_executions
+         WHERE idempotency_key = ?
+         LIMIT 1`,
+        [idempotencyKey],
+      )
+      return rows[0] ? agentPipelineExecutionRow(rows[0]) : null
+    },
+    async createExecution(input) {
+      const [result] = await db.execute(
+      `INSERT INTO agent_pipeline_executions
+          (pipeline_run_id, stage_key, agent_key, status, attempt, idempotency_key, input_snapshot_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          pipelineRunId,
+          input.stageKey,
+          input.agentKey,
+          input.status || 'queued',
+          Number(input.attempt || 1),
+          input.idempotencyKey,
+          JSON.stringify(input.inputSnapshot || {}),
+        ],
+      )
+      const [rows] = await db.execute(
+        `SELECT * FROM agent_pipeline_executions WHERE id = ? LIMIT 1`,
+        [result.insertId],
+      )
+      return agentPipelineExecutionRow(rows[0])
+    },
+    async updateExecution(id, patch) {
+      const updates = []
+      const params = []
+      const fields = [
+        ['status', 'status'],
+        ['attempt', 'attempt'],
+        ['outputSnapshot', 'output_snapshot_json'],
+        ['blockers', 'blockers_json'],
+        ['errorText', 'error_text'],
+        ['startedAt', 'started_at'],
+        ['finishedAt', 'finished_at'],
+      ]
+      for (const [key, column] of fields) {
+        if (patch[key] === undefined) continue
+        updates.push(`${column} = ?`)
+        if (key === 'outputSnapshot' || key === 'blockers') {
+          params.push(JSON.stringify(patch[key] || (key === 'blockers' ? [] : {})))
+        } else if (key === 'startedAt' || key === 'finishedAt') {
+          params.push(normalizeMysqlDateTime(patch[key]))
+        } else {
+          params.push(patch[key] || null)
+        }
+      }
+      if (updates.length) {
+        params.push(id)
+        await db.execute(
+          `UPDATE agent_pipeline_executions SET ${updates.join(', ')}, updated_at = NOW() WHERE id = ?`,
+          params,
+        )
+      }
+      const [rows] = await db.execute(
+        `SELECT * FROM agent_pipeline_executions WHERE id = ? LIMIT 1`,
+        [id],
+      )
+      return agentPipelineExecutionRow(rows[0])
+    },
+    async appendEvent(event) {
+      const [result] = await db.execute(
+        `INSERT INTO agent_pipeline_events
+          (pipeline_run_id, execution_id, stage_key, agent_key, attempt, status, payload_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          Number(event.pipelineRunId || pipelineRunId),
+          event.executionId || null,
+          event.stageKey,
+          event.agentKey,
+          Number(event.attempt || 1),
+          event.status,
+          JSON.stringify(event),
+        ],
+      )
+      return { id: Number(result.insertId), ...event }
+    },
+  }
+}
+
+async function updateAgentPipelineRun(runId, patch = {}) {
+  const updates = []
+  const params = []
+  for (const [key, column] of [
+    ['status', 'status'],
+    ['currentStage', 'current_stage'],
+    ['outputSnapshot', 'output_snapshot_json'],
+    ['errorText', 'error_text'],
+  ]) {
+    if (patch[key] === undefined) continue
+    updates.push(`${column} = ?`)
+    params.push(
+      key === 'outputSnapshot'
+        ? JSON.stringify(patch[key] || {})
+        : patch[key] || null,
+    )
+  }
+  if (!updates.length) return
+  params.push(runId)
+  await db.execute(
+    `UPDATE agent_pipeline_runs SET ${updates.join(', ')}, updated_at = NOW() WHERE id = ?`,
+    params,
+  )
+}
+
+function normalizeAgentPipelineInput(body = {}) {
+  const episodeNo = Math.max(1, Math.min(50, parseId(body.episodeNo) || 1))
+  const idempotencyKey = String(body.idempotencyKey || '').trim()
+  if (!idempotencyKey) throw new Error('请提供 Agent Pipeline 幂等键')
+  return {
+    episodeNo,
+    idempotencyKey,
+    regenerate: body.regenerate === true,
+  }
+}
+
+function normalizeAgentPipelineStageAction(body = {}) {
+  const stageKey = String(body.stageKey || '').trim()
+  const stage = getAgentPipelineStage(stageKey)
+  if (!stage || stageKey === 'asset-parse' || stageKey === 'storyboard') {
+    throw new Error('该阶段不能通过业务动作登记')
+  }
+  const idempotencyKey = String(body.idempotencyKey || '').trim()
+  if (!idempotencyKey) throw new Error('请提供 Agent 阶段动作幂等键')
+  return {
+    stageKey,
+    idempotencyKey,
+    status: String(body.status || 'waiting_approval').trim(),
+    inputSnapshot: body.inputSnapshot && typeof body.inputSnapshot === 'object' ? body.inputSnapshot : {},
+    outputSnapshot: body.outputSnapshot && typeof body.outputSnapshot === 'object' ? body.outputSnapshot : {},
+    blockers: Array.isArray(body.blockers) ? body.blockers : [],
+    errorText: String(body.errorText || '').trim(),
+  }
+}
+
+async function registerAgentPipelineStageAction(run, input) {
+  const stage = getAgentPipelineStage(input.stageKey)
+  const existing = await createDbAgentPipelineStore(run.id).findByIdempotencyKey(input.idempotencyKey)
+  if (existing) return existing
+  const store = createDbAgentPipelineStore(run.id)
+  const executor = createAgentExecutor({
+    registry: {
+      get(key) {
+        if (key !== stage.agentKey) return null
+        return {
+          key,
+          execute: async () => ({
+            status: input.status,
+            outputSnapshot: input.outputSnapshot,
+            blockers: input.blockers,
+            errorText: input.errorText,
+          }),
+        }
+      },
+    },
+    store,
+  })
+  const result = await executor.execute({
+    projectId: run.projectId,
+    episodeNo: run.episodeNo,
+    pipelineId: String(run.id),
+    pipelineRunId: run.id,
+    stageKey: stage.key,
+    agentKey: stage.agentKey,
+    idempotencyKey: input.idempotencyKey,
+    inputSnapshot: input.inputSnapshot,
+  })
+  await updateAgentPipelineRun(run.id, {
+    status: result.status,
+    currentStage: stage.key,
+    outputSnapshot: {
+      ...(run.outputSnapshot || {}),
+      [stage.key]: result.outputSnapshot || {},
+    },
+    errorText: result.errorText || result.blockers?.map((item) => item.message).join('；') || '',
+  })
+  return result
+}
+
+async function acquireProjectAssetParserLock(projectId) {
+  const connection = await db.getConnection()
+  const lockName = `projectdream:asset-parser:${Number(projectId)}`
+  try {
+    const [rows] = await connection.execute(
+      'SELECT GET_LOCK(?, 60) AS acquired',
+      [lockName],
+    )
+    if (Number(rows[0]?.acquired) !== 1) {
+      throw new Error('资产解析正在进行，等待项目锁超时；本次没有写入新的资产节点')
+    }
+    let released = false
+    return {
+      async release() {
+        if (released) return
+        released = true
+        try {
+          await connection.execute('SELECT RELEASE_LOCK(?) AS released', [lockName])
+        } finally {
+          connection.release()
+        }
+      },
+    }
+  } catch (error) {
+    connection.release()
+    throw error
+  }
+}
+
+async function persistParsedCharacters(projectId, project, outline, sceneRows, generatedResult = null) {
+  const [storyBibleRows] = await db.execute(
+    `SELECT * FROM story_bibles WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+    [projectId],
+  )
+  const storyBible = storyBibleRows[0] ? storyBibleRow(storyBibleRows[0]) : null
+  const aiResult = generatedResult || await aiGenerateCharacters({
+    project: {
+      name: project.name,
+      category: project.category,
+      visualStyle: project.visual_style,
+      narrativeVision: project.narrative_vision,
+    },
+    outline,
+    scenes: sceneRows,
+    storyBible,
+  })
+  const safeCharacters = aiResult.characters
+    .map((item, index) => ({
+      name: String(item?.name || `角色 ${index + 1}`).trim(),
+      roleTag: String(item?.role_tag || (index === 0 ? '主角' : '配角')).trim(),
+      personality: String(item?.personality || '性格鲜明，行为动机与剧情目标一致。').trim(),
+      appearance: String(item?.appearance || '具有清晰可辨的脸部、发型、体态与服装特征。').trim(),
+      costume: normalizeCharacterCostume(item) || null,
+      voiceSetting: String(item?.voice_setting || '').trim() || null,
+      ageGroup: String(item?.age_group || '').trim() || null,
+      gender: String(item?.gender || '').trim() || null,
+      voiceStyle: String(item?.voice_style || '').trim() || null,
+    }))
+    .filter((item) => item.name)
+
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    for (const item of safeCharacters) {
+      const [existingRows] = await connection.execute(
+        `SELECT id FROM characters WHERE project_id = ? AND name = ? ORDER BY id ASC LIMIT 1`,
+        [projectId, item.name],
+      )
+      if (existingRows[0]) {
+        await connection.execute(
+          `UPDATE characters
+           SET role_tag = COALESCE(NULLIF(?, ''), role_tag),
+               personality = COALESCE(NULLIF(?, ''), personality),
+               appearance = COALESCE(NULLIF(?, ''), appearance),
+               costume = COALESCE(NULLIF(?, ''), costume),
+               voice_setting = COALESCE(NULLIF(?, ''), voice_setting),
+               age_group = COALESCE(NULLIF(?, ''), age_group),
+               gender = COALESCE(NULLIF(?, ''), gender),
+               voice_style = COALESCE(NULLIF(?, ''), voice_style),
+               updated_at = NOW()
+           WHERE id = ?`,
+          [
+            item.roleTag,
+            item.personality,
+            item.appearance,
+            item.costume,
+            item.voiceSetting,
+            item.ageGroup,
+            item.gender,
+            item.voiceStyle,
+            existingRows[0].id,
+          ],
+        )
+      } else {
+        await connection.execute(
+          `INSERT INTO characters
+            (project_id, name, role_tag, personality, appearance, voice_setting,
+             costume, age_group, gender, voice_style, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+          [
+            projectId,
+            item.name,
+            item.roleTag,
+            item.personality,
+            item.appearance,
+            item.costume,
+            item.voiceSetting,
+            item.ageGroup,
+            item.gender,
+            item.voiceStyle,
+          ],
+        )
+      }
+    }
+    await archiveStaleCharacterRecords(connection, projectId, safeCharacters)
+    await repairNarrativeRoleCharacterRecords(connection, projectId, outline, sceneRows)
+    await connection.commit()
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+
+  const [characterRows] = await db.execute(
+    `SELECT * FROM characters WHERE project_id = ? AND status <> 'archived' ORDER BY id ASC`,
+    [projectId],
+  )
+  const parserLock = await acquireProjectAssetParserLock(projectId)
+  try {
+  const desiredCharacterKeys = []
+  const desiredSceneKeys = []
+  const desiredPropKeys = []
+  const sceneCharacterNames = characterRows.map((character) => character.name).filter(Boolean)
+  for (const [index, character] of characterRows.entries()) {
+    const characterScenes = sceneRows.filter((scene) => [
+      scene.title,
+      scene.summary,
+      scene.content,
+      scene.location,
+    ].some((value) => String(value || '').includes(character.name)))
+    const basePrompt = buildScriptCharacterPrompt({
+      character,
+      scenes: characterScenes,
+      projectVisualStyle: project?.visual_style || '',
+      projectCategory: project?.category || '',
+    })
+    const temporalStates = extractTemporalStates(characterScenes, character.name)
+    const variants = temporalStates.length ? temporalStates : ['当前状态']
+    for (const [variantIndex, stateLabel] of variants.entries()) {
+      const variantPrompt = buildTemporalVariantPrompt(basePrompt.prompt, stateLabel)
+      const groupKey = buildTemporalAssetGroupKey({
+        nodeType: 'character',
+        refId: character.id,
+        promptText: variantPrompt,
+      })
+      const nodeLabel = variants.length > 1 ? `${character.name} · ${stateLabel}` : character.name
+      desiredCharacterKeys.push({
+        refId: character.id,
+        groupKey,
+      })
+    await db.execute(
+      `INSERT INTO asset_nodes
+        (project_id, node_type, ref_id, label, appearance_label, prompt_text, turnaround_prompt_text,
+         x, y, width, height, group_key, status)
+       SELECT ?, 'character', ?, ?, ?, ?, ?, ?, ?, 220, 260, ?, 'active'
+       WHERE NOT EXISTS (
+         SELECT 1 FROM asset_nodes
+         WHERE project_id = ? AND node_type = 'character' AND ref_id = ? AND group_key = ? AND status <> 'archived'
+       )`,
+      [
+        projectId,
+        character.id,
+        nodeLabel,
+        stateLabel,
+        variantPrompt,
+        basePrompt.turnaroundPrompt,
+        80 + ((index + variantIndex) % 4) * 260,
+        80 + Math.floor((index + variantIndex) / 4) * 320,
+        groupKey,
+        projectId,
+        character.id,
+        groupKey,
+      ],
+    )
+    await db.execute(
+      `UPDATE asset_nodes
+       SET prompt_text = ?,
+           turnaround_prompt_text = ?,
+           updated_at = NOW()
+       WHERE project_id = ? AND node_type = 'character' AND ref_id = ? AND group_key = ? AND status <> 'archived'`,
+      [variantPrompt, basePrompt.turnaroundPrompt, projectId, character.id, groupKey],
+    )
+    }
+  }
+  for (const [index, scene] of sceneRows.entries()) {
+    if (!String(scene.title || '').trim()) continue
+    const scenePrompt = buildScriptScenePrompt({
+      scene,
+      projectVisualStyle: project?.visual_style || '',
+      projectCategory: project?.category || '',
+      characterNames: sceneCharacterNames,
+    })
+    const inferredLocation = inferSceneLocation(scene)
+    const inferredTimeOfDay = inferSceneTimeOfDay(scene)
+    // 场景状态只能来自场景标题、地点和明确时间字段。
+    // 场景正文可能提到“父亲五年前的事故”，不能据此把当前空间归到过去时空。
+    const sceneState = resolveTemporalState([
+      scene.title,
+      scene.location,
+      scene.time_of_day,
+    ].filter(Boolean).join(' '))
+    const sceneLabel = buildSceneDisplayLabel(scene)
+    const sceneGroupKey = buildTemporalAssetGroupKey({
+      nodeType: 'scene',
+      refId: scene.id,
+      promptText: `${scenePrompt}\n本资产时空状态：${sceneState.label}`,
+    })
+    desiredSceneKeys.push({
+      refId: scene.id,
+      groupKey: sceneGroupKey,
+    })
+    await db.execute(
+      `INSERT INTO asset_nodes
+        (project_id, node_type, ref_id, label, appearance_label, prompt_text, x, y, width, height, group_key, status)
+       SELECT ?, 'scene', ?, ?, ?, ?, ?, ?, 260, 220, ?, 'active'
+       WHERE NOT EXISTS (
+         SELECT 1 FROM asset_nodes
+         WHERE project_id = ? AND node_type = 'scene' AND ref_id = ? AND group_key = ? AND status <> 'archived'
+       )`,
+      [
+        projectId,
+        scene.id,
+        sceneLabel,
+        [inferredLocation, inferredTimeOfDay].filter(Boolean).join(' · ') || sceneState.label,
+        scenePrompt,
+        80 + (index % 3) * 300,
+        520 + Math.floor(index / 3) * 280,
+        sceneGroupKey,
+        projectId,
+        scene.id,
+        sceneGroupKey,
+      ],
+    )
+    await db.execute(
+      `UPDATE asset_nodes
+       SET prompt_text = ?,
+           environment_prompt_text = ?,
+           appearance_label = ?,
+           updated_at = NOW()
+       WHERE project_id = ? AND node_type = 'scene' AND ref_id = ? AND group_key = ? AND status <> 'archived'`,
+      [
+        scenePrompt,
+        buildSceneEnvironmentPrompt({
+          scene,
+          projectVisualStyle: project?.visual_style || '',
+          projectCategory: project?.category || '',
+          characterNames: sceneCharacterNames,
+        }),
+        [inferredLocation, inferredTimeOfDay].filter(Boolean).join(' · ') || null,
+        projectId,
+        scene.id,
+        sceneGroupKey,
+      ],
+    )
+  }
+  // storyBible.props is the structured output of the story/asset Agent. Turn
+  // it into real prop nodes so storyboard binding can resolve exact node IDs.
+  const propAssets = normalizePropAssets(storyBible?.props || [])
+  for (const [index, prop] of propAssets.entries()) {
+    const groupKey = buildPropAssetGroupKey({ projectId, name: prop.name })
+    desiredPropKeys.push({ refId: null, groupKey })
+    await db.execute(
+      `INSERT INTO asset_nodes
+        (project_id, node_type, ref_id, label, appearance_label, prompt_text,
+         x, y, width, height, group_key, status)
+       SELECT ?, 'prop', NULL, ?, ?, ?, ?, ?, 220, 220, ?, 'active'
+       WHERE NOT EXISTS (
+         SELECT 1 FROM asset_nodes
+         WHERE project_id = ? AND node_type = 'prop' AND group_key = ? AND status <> 'archived'
+       )`,
+      [
+        projectId,
+        prop.name,
+        prop.purpose,
+        prop.prompt,
+        80 + (index % 4) * 260,
+        1060 + Math.floor(index / 4) * 300,
+        groupKey,
+        projectId,
+        groupKey,
+      ],
+    )
+    await db.execute(
+      `UPDATE asset_nodes
+       SET label = ?, appearance_label = ?, prompt_text = ?, negative_prompt = ?, updated_at = NOW()
+       WHERE project_id = ? AND node_type = 'prop' AND group_key = ? AND status <> 'archived'`,
+      [
+        prop.name,
+        prop.purpose,
+        prop.prompt,
+        '人物、手持、完整场景、文字、水印、拼贴、重复道具、塑料感、错误结构、悬浮',
+        projectId,
+        groupKey,
+      ],
+    )
+  }
+  const [existingNodes] = await db.execute(
+    `SELECT n.id, n.node_type, n.ref_id, n.group_key, n.status,
+            (SELECT COUNT(*) FROM asset_node_images ai WHERE ai.asset_node_id = n.id) AS image_count
+     FROM asset_nodes n
+     WHERE n.project_id = ?`,
+    [projectId],
+  )
+  const syncPlan = buildAssetParserSyncPlan({
+    existingNodes,
+    characterNodes: desiredCharacterKeys,
+    sceneNodes: desiredSceneKeys,
+    propNodes: desiredPropKeys,
+  })
+  if (syncPlan.archiveIds.length) {
+    await db.execute(
+      `UPDATE asset_nodes
+       SET status = 'archived', updated_at = NOW()
+       WHERE project_id = ? AND id IN (${syncPlan.archiveIds.map(() => '?').join(',')})`,
+      [projectId, ...syncPlan.archiveIds],
+    )
+  }
+  return {
+    characterCount: characterRows.length,
+    sceneCount: sceneRows.length,
+    propCount: propAssets.length,
+    assetNodeCount: desiredCharacterKeys.length + desiredSceneKeys.length + desiredPropKeys.length,
+    archivedAssetNodeCount: syncPlan.archiveIds.length,
+  }
+  } finally {
+    await parserLock.release()
+  }
+}
+
+async function archiveStaleCharacterRecords(executor, projectId, currentCharacters) {
+  const [existingRows] = await executor.execute(
+    `SELECT id, name, status
+     FROM characters
+     WHERE project_id = ?`,
+    [projectId],
+  )
+  const syncPlan = buildCharacterRecordSyncPlan({
+    existingCharacters: existingRows,
+    currentCharacters,
+  })
+  if (!syncPlan.archiveIds.length) return syncPlan
+  await executor.execute(
+    `UPDATE characters
+     SET status = 'archived', updated_at = NOW()
+     WHERE project_id = ? AND id IN (${syncPlan.archiveIds.map(() => '?').join(',')})`,
+    [projectId, ...syncPlan.archiveIds],
+  )
+  return syncPlan
+}
+
+async function executeAssetParserAgent(context) {
+  const [projectRows] = await db.execute(
+    `SELECT * FROM projects WHERE id = ? LIMIT 1`,
+    [context.projectId],
+  )
+  const project = projectRows[0]
+  if (!project) {
+    return { status: 'blocked', blockers: [{ code: 'project-missing', message: '项目不存在，无法解析资产' }] }
+  }
+  const [sceneRows] = await db.execute(
+    `SELECT * FROM script_scenes
+     WHERE project_id = ? AND (content IS NOT NULL AND TRIM(content) <> '')
+     ORDER BY episode_no ASC, sort_order ASC, scene_no ASC, id ASC`,
+    [context.projectId],
+  )
+  if (!sceneRows.length) {
+    return {
+      status: 'blocked',
+      blockers: [{ code: 'script-required', message: '当前项目还没有可解析的剧本正文，请先完成剧本生成' }],
+    }
+  }
+  const [allSceneRows] = await db.execute(
+    `SELECT id, episode_no, scene_no, title, summary, content
+     FROM script_scenes WHERE project_id = ?
+     ORDER BY episode_no ASC, sort_order ASC, scene_no ASC, id ASC`,
+    [context.projectId],
+  )
+  if (allSceneRows.some((scene) => !String(scene.content || '').trim())) {
+    return { status: 'blocked', blockers: [{ code: 'script-incomplete', message: '仍有场景正文未生成或未保存，不能完成资产解析' }] }
+  }
+  const [outlineRows] = await db.execute(
+    `SELECT * FROM story_outlines WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+    [context.projectId],
+  )
+  const result = await persistParsedCharacters(context.projectId, project, outlineRows[0] || null, sceneRows)
+  await persistParsedScriptFingerprint(context.projectId)
+  return {
+    status: 'waiting_approval',
+    outputSnapshot: {
+      ...result,
+      sourceSceneIds: sceneRows.map((scene) => Number(scene.id)),
+      sourceScriptCount: sceneRows.length,
+    },
+    blockers: [{ code: 'asset-approval-required', message: '角色、场景已解析，请在资产管理中确认后继续生成分镜' }],
+  }
+}
+
+async function executeStoryboardAgent(context) {
+  const workflowGates = await getProjectWorkflowReadiness(Number(context.projectId))
+  if (!workflowGates.storyboard.allowed) {
+    return { status: 'blocked', blockers: [{ code: workflowGates.storyboard.code, message: workflowGates.storyboard.reason }] }
+  }
+  const sourceSceneIds = Array.isArray(context.inputSnapshot?.sourceSceneIds)
+    ? context.inputSnapshot.sourceSceneIds
+      .map((id) => Number(id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+    : []
+  const sceneScope = sourceSceneIds.length
+    ? `s.id IN (${sourceSceneIds.map(() => '?').join(', ')})`
+    : 's.episode_no = ?'
+  const sceneScopeParams = sourceSceneIds.length ? sourceSceneIds : [context.episodeNo]
+  const [sceneRows] = await db.execute(
+    `SELECT s.*, p.user_id AS ownerId, p.name AS projectName, p.category,
+            p.narrative_vision, p.visual_style
+     FROM script_scenes s
+     INNER JOIN projects p ON p.id = s.project_id
+     WHERE s.project_id = ? AND ${sceneScope}
+       AND s.content IS NOT NULL AND TRIM(s.content) <> ''
+     ORDER BY s.sort_order ASC, s.id ASC`,
+    [context.projectId, ...sceneScopeParams],
+  )
+  if (!sceneRows.length) {
+    return {
+      status: 'blocked',
+      blockers: [{ code: 'episode-script-required', message: `第 ${context.episodeNo} 集还没有可生成分镜的剧本正文` }],
+    }
+  }
+  const [characterRows] = await db.execute(
+    `SELECT c.id, c.name, c.role_tag, c.personality, c.appearance, c.voice_setting, c.age_group, c.gender,
+            c.voice_profile_key, c.voice_locked, c.reference_image_url, c.status,
+            COALESCE((SELECT MAX(ci.version_no) FROM character_images ci
+                      WHERE ci.character_id = c.id AND ci.status = 'confirmed'), 1) AS asset_version,
+            (SELECT ci.id FROM character_images ci
+             WHERE ci.character_id = c.id AND ci.status = 'confirmed'
+             ORDER BY ci.version_no DESC, ci.id DESC LIMIT 1) AS confirmed_image_id
+     FROM characters c WHERE c.project_id = ? AND c.status <> 'archived' ORDER BY c.id ASC`,
+    [context.projectId],
+  )
+  const [assetRows] = await db.execute(
+    `SELECT an.id AS asset_node_id, an.node_type, an.ref_id, an.label,
+            an.prompt_text AS asset_prompt,
+            ai.id AS image_id, ai.version_no, ai.view_set_version, ai.view_index, ai.view_key,
+            ai.view_set_type, ai.status, ai.vision_status
+     FROM asset_nodes an
+     LEFT JOIN asset_node_images ai
+       ON ai.asset_node_id = an.id
+      AND ai.status = 'confirmed'
+      AND (ai.vision_status = 'passed'
+           OR (an.node_type = 'scene' AND ai.vision_status = 'skipped'))
+     WHERE an.project_id = ? AND an.status <> 'archived'
+     ORDER BY an.id ASC, ai.id ASC`,
+    [context.projectId],
+  )
+  let sceneCount = 0
+  let shotCount = 0
+  const storyboardIds = []
+  const preparedScenes = []
+  const memoryBySceneId = new Map()
+  const allRagDocuments = []
+  for (const scene of sceneRows) {
+    const assetCatalog = buildStoryboardAssetCatalog(assetRows, scene.id)
+    const projectKnowledgeChunks = buildProjectKnowledgeChunks({
+      scene,
+      characters: characterRows,
+      assetCatalog,
+    })
+    const ragDocuments = buildRagDocuments({
+      projectId: context.projectId,
+      episodeNo: scene.episode_no || context.episodeNo,
+      chunks: projectKnowledgeChunks,
+    })
+    memoryBySceneId.set(Number(scene.id), { assetCatalog })
+    allRagDocuments.push(...ragDocuments)
+  }
+  const uniqueRagDocuments = [...new Map(
+    allRagDocuments.map((document) => [
+      JSON.stringify(document.metadata),
+      document,
+    ]),
+  ).values()]
+  const [episodeSceneCountRows] = await db.execute(
+    `SELECT COUNT(*) AS total
+     FROM script_scenes
+     WHERE project_id = ? AND episode_no = ?
+       AND content IS NOT NULL AND TRIM(content) <> ''`,
+    [context.projectId, context.episodeNo],
+  )
+  const isCompleteEpisodeSnapshot = !sourceSceneIds.length
+    || Number(episodeSceneCountRows[0]?.total || 0) === sceneRows.length
+  const ragIndex = await indexRagDocuments(uniqueRagDocuments, {
+    replaceScopes: isCompleteEpisodeSnapshot,
+  })
+  if (ragIndex.degraded) {
+    console.warn('[rag] storyboard memory snapshot sync degraded', {
+      projectId: context.projectId,
+      episodeNo: context.episodeNo,
+      errorCode: ragIndex.errorCode,
+    })
+  }
+  for (const scene of sceneRows) {
+    const assetCatalog = memoryBySceneId.get(Number(scene.id))?.assetCatalog || {
+      scenes: [],
+      props: [],
+      tools: [],
+    }
+    const [existingRows] = await db.execute(
+      `SELECT * FROM storyboards WHERE scene_id = ? ORDER BY sort_order ASC, id ASC`,
+      [scene.id],
+    )
+    if (existingRows.length && !context.regenerate) {
+      const boundShots = existingRows.map((shot) => ({
+        shot,
+        binding: bindStoryboardShotAssets({
+          shot,
+          sceneId: Number(scene.id),
+          characters: characterRows,
+          assetRows,
+        }),
+      }))
+      const existingBlockers = boundShots.flatMap(({ binding }) => binding.blockers)
+      if (existingBlockers.length) {
+        const error = new Error(`分镜资产引用门禁未通过：${existingBlockers.join('；')}`)
+        error.statusCode = 409
+        throw error
+      }
+      preparedScenes.push({ scene, shots: boundShots })
+      sceneCount += 1
+      shotCount += existingRows.length
+      storyboardIds.push(...existingRows.map((shot) => Number(shot.id)).filter((id) => id > 0))
+      continue
+    }
+    const ragQuery = await queryRagDocuments({
+      projectId: context.projectId,
+      episodeId: scene.episode_no || context.episodeNo,
+      query: [scene.title, scene.summary, scene.content].filter(Boolean).join(' '),
+    })
+    if (ragQuery.degraded) {
+      console.warn('[rag] storyboard context degraded', {
+        projectId: context.projectId,
+        episodeNo: context.episodeNo,
+        errorCode: ragQuery.errorCode,
+      })
+    }
+    const aiResult = await aiGenerateStoryboards({
+      sceneId: Number(scene.id),
+      scene,
+      scriptContent: scene.content,
+      outline: null,
+      project: {
+        name: scene.projectName,
+        visualStyle: scene.visual_style,
+        category: scene.category,
+        narrativeVision: scene.narrative_vision,
+      },
+      characters: characterRows,
+      assetCatalog,
+      ragContext: ragQuery.items,
+    })
+    const durationContract = validateStoryboardDurationContracts(aiResult.shots, { requireVisibleTimeline: true })
+    if (!durationContract.passed) {
+      const error = new Error(`分镜时长规划校验未通过：${durationContract.blockers.join('；')}`)
+      error.statusCode = 422
+      throw error
+    }
+    const boundShots = aiResult.shots.map((shot) => ({
+      shot,
+      binding: bindStoryboardShotAssets({
+        shot,
+        sceneId: Number(scene.id),
+      characters: characterRows,
+      assetRows,
+      }),
+    }))
+    const blockers = boundShots.flatMap(({ binding }) => binding.blockers)
+    if (blockers.length) {
+      const error = new Error(`分镜资产引用门禁未通过：${blockers.join('；')}`)
+      error.statusCode = 409
+      throw error
+    }
+    preparedScenes.push({ scene, shots: boundShots })
+    sceneCount += 1
+    shotCount += aiResult.shots.length
+  }
+
+  if (shotCount === 0) return resolveStoryboardStageResult({ episodeNo: context.episodeNo, sceneCount })
+
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    for (const prepared of preparedScenes) {
+      await connection.execute(`DELETE FROM storyboards WHERE scene_id = ?`, [prepared.scene.id])
+      for (let index = 0; index < prepared.shots.length; index += 1) {
+        const { shot, binding } = prepared.shots[index]
+        const reference = binding.assetReference
+        const previousShot = prepared.shots[index - 1]?.shot || null
+        const usesContinuity = shouldUseStoryboardContinuity({
+          tools: shot.tools,
+          prompt: [shot.visual_prompt, shot.start_visual_prompt].filter(Boolean).join('\n'),
+          assetReference: reference,
+        })
+        reference.continuityFromShot = usesContinuity && previousShot
+          ? String(previousShot.shot_no || '').trim() || null
+          : null
+        const [result] = await connection.execute(
+          `INSERT INTO storyboards
+            (scene_id, shot_no, shot_type, camera_angle, composition, duration_seconds,
+             character_id, character_name, action_text, dialogue_text, visual_prompt,
+             start_visual_prompt, end_visual_prompt, asset_reference_json, sort_order, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+          [
+            prepared.scene.id,
+            shot.shot_no,
+            shot.shot_type,
+            shot.camera_angle,
+            shot.composition,
+            normalizeStoryboardDurationSeconds(shot.duration_seconds),
+            matchCharacterId(reference.characterName, characterRows),
+            reference.characterName,
+            shot.action_text,
+            shot.dialogue_text,
+             buildStoryboardMentionedPrompt(shot.visual_prompt, reference),
+            shot.start_visual_prompt || null,
+            shot.end_visual_prompt || null,
+            JSON.stringify(reference),
+            index,
+          ],
+        )
+        storyboardIds.push(Number(result.insertId))
+      }
+      await connection.execute(
+        `UPDATE script_scenes SET status = 'storyboard_ready', updated_at = NOW() WHERE id = ?`,
+        [prepared.scene.id],
+      )
+    }
+    await connection.commit()
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+  await db.execute(
+    `UPDATE projects SET status = 'storyboarding', updated_at = NOW() WHERE id = ?`,
+    [context.projectId],
+  )
+  const boundShotCount = preparedScenes.reduce((total, prepared) => total + prepared.shots.length, 0)
+  const characterReferenceCount = preparedScenes.reduce(
+    (total, prepared) => total + prepared.shots.filter(({ binding }) => Boolean(binding.assetReference.characterId)).length,
+    0,
+  )
+  const sceneViewReferenceCount = preparedScenes.reduce(
+    (total, prepared) => total + prepared.shots.filter(({ binding }) => Boolean(binding.assetReference.sceneViewKey)).length,
+    0,
+  )
+  const stageResult = resolveStoryboardStageResult({ episodeNo: context.episodeNo, sceneCount, shotCount, storyboardIds })
+  stageResult.outputSnapshot.boundShotCount = boundShotCount
+  stageResult.outputSnapshot.characterReferenceCount = characterReferenceCount
+  stageResult.outputSnapshot.sceneViewReferenceCount = sceneViewReferenceCount
+  return stageResult
+}
+
+async function executeStoryAgent(context) {
+  const [projectRows] = await db.execute(
+    `SELECT * FROM projects WHERE id = ? LIMIT 1`,
+    [context.projectId],
+  )
+  const project = projectRows[0]
+  if (!project) {
+    return { status: 'blocked', blockers: [{ code: 'project-missing', message: '项目不存在，无法生成故事设定' }] }
+  }
+  const idea = String(context.inputSnapshot?.idea || project.narrative_vision || '').trim()
+  if (!idea) {
+    return { status: 'blocked', blockers: [{ code: 'idea-required', message: '当前项目还没有创意，无法生成故事设定' }] }
+  }
+  const generated = await generateStoryBible(project, {
+    idea,
+    episodeCount: Math.max(1, Math.min(50, Number(context.inputSnapshot?.episodeCount || 1))),
+  })
+  const bible = normalizeStoryBibleInput(generated)
+  const report = evaluateStoryBible(bible)
+  const row = await persistStoryBible(context.projectId, bible, report, false)
+  return {
+    status: 'waiting_approval',
+    outputSnapshot: {
+      versionNo: Number(row.version_no),
+      characterCount: bible.characters.length,
+      locationCount: bible.locations.length,
+      storyBibleId: Number(row.id),
+    },
+    blockers: [{ code: 'story-agent-approval-required', message: '故事设定已生成，请检查并确认后继续分集大纲' }],
+  }
+}
+
+async function executeSeasonAgent(context) {
+  const [projectRows] = await db.execute(
+    `SELECT * FROM projects WHERE id = ? LIMIT 1`,
+    [context.projectId],
+  )
+  const project = projectRows[0]
+  const [bibleRows] = await db.execute(
+    `SELECT * FROM story_bibles WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+    [context.projectId],
+  )
+  if (!project || !bibleRows[0]) {
+    return { status: 'blocked', blockers: [{ code: 'story-bible-required', message: '请先生成并确认故事设定' }] }
+  }
+  const bible = storyBibleRow(bibleRows[0])
+  const generated = await generateSeasonStructure(project, bible, {
+    episodeCount: Math.max(1, Math.min(50, Number(context.inputSnapshot?.episodeCount || bible.episodeCount || 1))),
+  })
+  const season = normalizeSeasonStructureInput(generated)
+  const report = evaluateSeasonStructure(season)
+  const row = await persistSeasonStructure(
+    context.projectId,
+    Number(bibleRows[0].id),
+    season,
+    report,
+    false,
+  )
+  return {
+    status: 'waiting_approval',
+    outputSnapshot: {
+      versionNo: Number(row.version_no),
+      episodeCount: season.episodes.length,
+      seasonStructureId: Number(row.id),
+    },
+    blockers: [{ code: 'season-agent-approval-required', message: '分集大纲已生成，请检查每集冲突与结尾钩子' }],
+  }
+}
+
+async function executeScriptAgent(context) {
+  const [seasonRows] = await db.execute(
+    `SELECT * FROM season_structures WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+    [context.projectId],
+  )
+  if (!seasonRows[0]) {
+    return { status: 'blocked', blockers: [{ code: 'season-required', message: '请先生成并确认分集大纲' }] }
+  }
+  const season = jsonArray(seasonRows[0].episodes_json)
+  const scenesSpec = seasonEpisodeSceneSpecs(season)
+  const [existingScriptRows] = await db.execute(
+    `SELECT episode_no, scene_no, title, summary, content, location, time_of_day,
+            estimated_duration
+     FROM script_scenes
+     WHERE project_id = ?
+     ORDER BY episode_no ASC, sort_order ASC, scene_no ASC, id ASC`,
+    [context.projectId],
+  )
+  const extractedScriptScenes = extractSceneSpecsFromScriptScenes(existingScriptRows)
+  const effectiveScenesSpec = extractedScriptScenes.length ? extractedScriptScenes : scenesSpec
+  if (!effectiveScenesSpec.length) {
+    return { status: 'blocked', blockers: [{ code: 'season-empty', message: '分集大纲没有可转换的场景，请先补充分集内容' }] }
+  }
+  const [existingRows] = await db.execute(
+    `SELECT COUNT(*) AS total FROM script_scenes WHERE project_id = ?`,
+    [context.projectId],
+  )
+  if (Number(existingRows[0]?.total || 0) > 0) {
+    if (!context.inputSnapshot?.regenerate) {
+      return { status: 'blocked', blockers: [{ code: 'script-exists', message: '项目已有剧本场景，重新生成前需要明确确认覆盖' }] }
+    }
+    return { status: 'blocked', blockers: [{ code: 'regenerate-guard', message: '为避免误删已有分镜，剧本覆盖重生成仍需走现有确认接口' }] }
+  }
+  const connection = await db.getConnection()
+  const insertedIds = []
+  try {
+    await connection.beginTransaction()
+    for (let index = 0; index < effectiveScenesSpec.length; index += 1) {
+      const spec = effectiveScenesSpec[index]
+      const [result] = await connection.execute(
+        `INSERT INTO script_scenes
+          (project_id, episode_no, outline_id, scene_no, title, summary, spatial_anchors_json, location, time_of_day,
+           estimated_duration, sort_order, status)
+         VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+        [
+          context.projectId,
+          Number(spec.episode_no || spec.episodeNo || context.episodeNo || 1),
+          spec.scene_no || index + 1,
+          spec.title || `场景 ${index + 1}`,
+          spec.summary || '',
+          spec.spatial_anchors ? JSON.stringify(spec.spatial_anchors) : null,
+          spec.location || null,
+          spec.time_of_day || null,
+          spec.estimated_duration || 120,
+          index,
+        ],
+      )
+      insertedIds.push(Number(result.insertId))
+    }
+    await connection.execute(
+      `UPDATE projects SET status = 'scripting', updated_at = NOW() WHERE id = ?`,
+      [context.projectId],
+    )
+    await connection.commit()
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+  const [rows] = await db.execute(
+    `SELECT * FROM script_scenes WHERE project_id = ? ORDER BY episode_no ASC, sort_order ASC, scene_no ASC, id ASC`,
+    [context.projectId],
+  )
+  const generated = rows.map(sceneRow)
+  return {
+    status: 'waiting_approval',
+    outputSnapshot: {
+      sceneCount: generated.length,
+      sceneIds: generated.map((scene) => Number(scene.id)),
+    },
+    blockers: [{ code: 'script-agent-approval-required', message: '剧本场景已生成，请检查后逐场生成正文' }],
+  }
+}
+
+const agentRegistry = createAgentRegistry([
+  {
+    key: 'story-agent',
+    label: '故事设定 Agent',
+    description: '把创意整理为可确认的故事圣经',
+    execute: executeStoryAgent,
+  },
+  {
+    key: 'season-agent',
+    label: '分集大纲 Agent',
+    description: '把故事设定拆解为分集冲突和结尾钩子',
+    execute: executeSeasonAgent,
+  },
+  {
+    key: 'script-agent',
+    label: '剧本正文 Agent',
+    description: '把分集大纲生成可编辑的剧本场景列表',
+    execute: executeScriptAgent,
+  },
+  {
+    key: 'asset-parser-agent',
+    label: '资产解析 Agent',
+    description: '从确认版剧本提取角色、场景和资产节点',
+    execute: executeAssetParserAgent,
+  },
+    {
+      key: 'storyboard-agent',
+      label: '分镜脚本 Agent',
+      description: '读取剧本与资产上下文生成当前集分镜脚本',
+      execute: executeStoryboardAgent,
+    },
+    {
+      key: 'character-agent',
+      label: '角色锁定 Agent',
+      description: '登记完整角色资产板或兼容旧版三视图的确认阶段',
+      execute: async (context) => {
+        const [rows] = await db.execute(
+          `SELECT COUNT(*) AS total,
+                  SUM(CASE
+                    WHEN EXISTS (
+                      SELECT 1 FROM asset_node_images pack_image
+                      WHERE pack_image.asset_node_id = an.id
+                        AND pack_image.view_set_type = 'character-asset-pack'
+                        AND pack_image.status = 'confirmed'
+                        AND pack_image.vision_status = 'passed'
+                    ) OR COALESCE(locked_views.confirmed_views, 0) >= 3
+                    THEN 1 ELSE 0 END
+                  ) AS locked,
+                  SUM(CASE WHEN EXISTS (
+                    SELECT 1 FROM asset_node_images pack_image
+                    WHERE pack_image.asset_node_id = an.id
+                      AND pack_image.view_set_type = 'character-asset-pack'
+                      AND pack_image.status = 'confirmed'
+                      AND pack_image.vision_status = 'passed'
+                  ) THEN 1 ELSE 0 END) AS asset_boards
+           FROM asset_nodes an
+           LEFT JOIN (
+           SELECT asset_node_id, COUNT(DISTINCT view_key) AS confirmed_views
+             FROM (
+               SELECT ai.*,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY ai.asset_node_id, ai.view_key
+                        ORDER BY ai.view_set_version DESC, ai.id DESC
+                      ) AS rn
+               FROM asset_node_images ai
+               WHERE ai.view_set_type = 'character-turnaround'
+             ) latest_views
+             WHERE latest_views.rn = 1
+               AND latest_views.status = 'confirmed'
+               AND latest_views.vision_status = 'passed'
+             GROUP BY latest_views.asset_node_id
+           ) locked_views ON locked_views.asset_node_id = an.id
+           WHERE an.project_id = ? AND an.node_type = 'character' AND an.status <> 'archived'`,
+          [context.projectId],
+        )
+        const total = Number(rows[0]?.total || 0)
+        const locked = Number(rows[0]?.locked || 0)
+        return {
+          status: 'waiting_approval',
+          outputSnapshot: { total, locked, assetBoards: Number(rows[0]?.asset_boards || 0) },
+          blockers: [{
+            code: 'character-lock-approval-required',
+            message: total && locked < total ? '角色资产板或三视图尚未全部确认，请在资产画布中完成角色锁定' : '角色锁定结果已登记，请确认后继续',
+          }],
+        }
+      },
+    },
+    {
+      key: 'scene-agent',
+      label: '场景锁定 Agent',
+      description: '登记场景全景基准和九宫格空间锁定阶段',
+      execute: async (context) => {
+        const [rows] = await db.execute(
+          `SELECT COUNT(*) AS total,
+                  SUM(CASE WHEN COALESCE(locked_views.confirmed_views, 0) >= 9 THEN 1 ELSE 0 END) AS locked
+           FROM asset_nodes an
+           LEFT JOIN (
+           SELECT asset_node_id, COUNT(DISTINCT view_key) AS confirmed_views
+             FROM (
+               SELECT ai.*,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY ai.asset_node_id, ai.view_key
+                        ORDER BY ai.view_set_version DESC, ai.id DESC
+                      ) AS rn
+               FROM asset_node_images ai
+               WHERE ai.view_set_type = 'scene-nine-grid'
+                 AND ai.status = 'confirmed'
+                 AND ai.vision_status IN ('passed', 'skipped')
+             ) latest_views
+             WHERE latest_views.rn = 1
+             GROUP BY latest_views.asset_node_id
+           ) locked_views ON locked_views.asset_node_id = an.id
+           WHERE an.project_id = ? AND an.node_type = 'scene' AND an.status <> 'archived'`,
+          [context.projectId],
+        )
+        const total = Number(rows[0]?.total || 0)
+        const locked = Number(rows[0]?.locked || 0)
+        return {
+          status: 'waiting_approval',
+          outputSnapshot: { total, locked },
+          blockers: [{
+            code: 'scene-lock-approval-required',
+            message: total && locked < total ? '场景九宫格尚未全部确认，请先确认全景并完成空间锁定' : '场景锁定结果已登记，请确认后继续',
+          }],
+        }
+      },
+    },
+    {
+      key: 'voice-agent',
+      label: '音色绑定 Agent',
+      description: '登记本集角色对白的音色绑定状态',
+      execute: async (context) => {
+        const [shotRows] = await db.execute(
+          `SELECT s.character_name, s.dialogue_text
+           FROM storyboards s
+           INNER JOIN script_scenes sc ON sc.id = s.scene_id
+           WHERE sc.project_id = ? AND sc.episode_no = ?
+             AND s.dialogue_text IS NOT NULL AND TRIM(s.dialogue_text) <> ''`,
+          [context.projectId, context.episodeNo],
+        )
+        const [characterRows] = await db.execute(
+          `SELECT c.*, vp.profile_key AS active_voice_profile_key
+           FROM characters c
+           LEFT JOIN voice_profiles vp
+             ON vp.profile_key = c.voice_profile_key AND vp.status = 'active'
+           WHERE c.project_id = ? AND c.status <> 'archived'`,
+          [context.projectId],
+        )
+        const characters = characterRows.map((row) => ({
+          ...characterRow(row),
+          voiceProfileKey: row.active_voice_profile_key || '',
+        }))
+        const speakers = getDialogueSpeakerNames(
+          shotRows.map((row) => ({ characterName: row.character_name, dialogueText: row.dialogue_text })),
+          characters.map((character) => character.name),
+        )
+        const characterByName = new Map(characters.map((character) => [character.name, character]))
+        const bound = speakers.filter((name) =>
+          isCharacterVoiceReady(characterByName.get(name)),
+        ).length
+        return {
+          status: 'waiting_approval',
+          outputSnapshot: { speakers: speakers.length, bound },
+          blockers: [{
+            code: 'voice-approval-required',
+            message: speakers.length && bound < speakers.length ? '本集仍有对白角色未绑定有效音色，请在分镜创作页处理' : '本集对白角色音色均已绑定，请确认后继续',
+          }],
+        }
+      },
+    },
+    {
+      key: 'video-agent',
+      label: '视频生成 Agent',
+      description: '登记本集视频生成任务状态',
+      execute: async (context) => {
+        const [rows] = await db.execute(
+          `SELECT COUNT(*) AS shots,
+                  COUNT(DISTINCT CASE WHEN va.id IS NOT NULL THEN s.id END) AS generated
+           FROM storyboards s
+           INNER JOIN script_scenes sc ON sc.id = s.scene_id
+           LEFT JOIN video_assets va ON va.storyboard_id = s.id AND va.status IN ('candidate', 'confirmed')
+           WHERE sc.project_id = ? AND sc.episode_no = ?`,
+          [context.projectId, context.episodeNo],
+        )
+        return {
+          status: 'waiting_approval',
+          outputSnapshot: { shots: Number(rows[0]?.shots || 0), generated: Number(rows[0]?.generated || 0) },
+          blockers: [{ code: 'video-approval-required', message: '视频任务状态已登记，请在分镜创作页确认生成结果' }],
+        }
+      },
+    },
+    {
+      key: 'quality-agent',
+      label: '质检 Agent',
+      description: '登记本集视频结果质检阶段',
+      execute: async (context) => ({
+        status: 'waiting_approval',
+        outputSnapshot: { episodeNo: context.episodeNo, checked: false },
+        blockers: [{ code: 'quality-approval-required', message: '请确认视频预览和质检结果后继续导出' }],
+      }),
+    },
+    {
+      key: 'delivery-agent',
+      label: '交付 Agent',
+      description: '登记本地导出交付阶段',
+      execute: async (context) => ({
+        status: 'waiting_approval',
+        outputSnapshot: { episodeNo: context.episodeNo, exported: false },
+        blockers: [{ code: 'delivery-approval-required', message: '请在本地导出页面完成导出后确认交付' }],
+      }),
+    },
+])
+
+async function executePipelineStage(run, stageKey, previousOutputs = {}) {
+  const stage = getAgentPipelineStage(stageKey)
+  if (!stage) throw new Error(`未知 Agent Pipeline 阶段：${stageKey}`)
+  const store = createDbAgentPipelineStore(run.id)
+  const executor = createAgentExecutor({ registry: agentRegistry, store })
+  const result = await executor.execute({
+    projectId: run.projectId,
+    episodeNo: run.episodeNo,
+    pipelineId: String(run.id),
+    pipelineRunId: run.id,
+    stageKey: stage.key,
+    agentKey: stage.agentKey,
+    idempotencyKey: `pipeline-${run.id}:${stage.key}`,
+    inputSnapshot: {
+      ...run.inputSnapshot,
+      previousOutputs,
+    },
+    previousOutputs,
+    regenerate: Boolean(run.inputSnapshot?.regenerate),
+  })
+  await updateAgentPipelineRun(run.id, {
+    status: result.status,
+    currentStage: result.status === 'completed'
+      ? stageKey === 'asset-parse' ? 'storyboard' : 'completed'
+      : stageKey,
+    outputSnapshot: {
+      ...run.outputSnapshot,
+      [stage.key]: result.outputSnapshot || {},
+    },
+    errorText: result.errorText || result.blockers?.map((item) => item.message).join('；') || '',
+  })
+  return result
+}
+
+async function resumeQueuedAgentPipelines() {
+  return drainQueuedAgentPipelines({
+    db,
+    execute: async (row) => {
+      const run = agentPipelineRunRow(row)
+      return executePipelineStage(run, run.currentStage, run.outputSnapshot || {})
+    },
+  })
+}
+
+function productionRunRow(row) {
+  return {
+    id: Number(row.id),
+    projectId: Number(row.project_id),
+    projectName: row.project_name || null,
+    episodeNo: Number(row.episode_no || 1),
+    platform: row.platform || '抖音',
+    name: row.name || `第 ${Number(row.episode_no || 1)} 集黄金样片`,
+    status: row.status || 'created',
+    currentStage: row.current_stage || PRODUCTION_RUN_STAGES[0]?.key || '',
+    currentCheckpoint: row.current_checkpoint || null,
+    pilotMode: row.pilot_mode || 'two-scenes-golden-sample',
+    pilotSceneCount: Number(row.pilot_scene_count || 2),
+    budget: row.budget === null || row.budget === undefined ? null : Number(row.budget),
+    candidatePolicy: parseJsonObject(row.candidate_policy_json),
+    successMetrics: jsonArray(row.success_metrics_json),
+    inputSnapshot: parseJsonObject(row.input_snapshot_json),
+    outputSnapshot: row.output_snapshot_json ? parseJsonObject(row.output_snapshot_json) : null,
+    failureCode: row.failure_code || null,
+    failureText: row.failure_text || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function parseJsonObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function productionStageRow(row) {
+  return {
+    id: Number(row.id),
+    stageKey: row.stage_key,
+    sequenceNo: Number(row.sequence_no || 0),
+    agentKey: row.agent_key,
+    status: row.status,
+    inputSnapshot: row.input_snapshot_json ? parseJsonObject(row.input_snapshot_json) : null,
+    outputSnapshot: row.output_snapshot_json ? parseJsonObject(row.output_snapshot_json) : null,
+    errorText: row.error_text || null,
+    startedAt: row.started_at || null,
+    finishedAt: row.finished_at || null,
+  }
+}
+
+function productionCheckpointRow(row) {
+  return {
+    id: Number(row.id),
+    checkpointKey: row.checkpoint_key,
+    stageKey: row.stage_key,
+    status: row.status,
+    decisionNote: row.decision_note || null,
+    reviewedAt: row.reviewed_at || null,
+  }
+}
+
+function productionBlueprintRow(row, emotionBeats = []) {
+  return {
+    id: Number(row.id),
+    productionRunId: Number(row.production_run_id),
+    projectId: Number(row.project_id),
+    episodeNo: Number(row.episode_no || 1),
+    versionNo: Number(row.version_no || 1),
+    status: row.status || 'draft',
+    blueprint: parseJsonObject(row.blueprint_json),
+    qualityReport: row.quality_report_json ? parseJsonObject(row.quality_report_json) : null,
+    emotionBeats,
+    approvedAt: row.approved_at || null,
+  }
+}
+
+async function loadProductionRunView(runId, userId = null) {
+  const ownerClause = userId === null ? '' : ' AND p.user_id = ?'
+  const ownerParams = userId === null ? [runId] : [runId, userId]
+  const [runRows] = await db.execute(
+    `SELECT pr.*, p.name AS project_name
+     FROM production_runs pr
+     INNER JOIN projects p ON p.id = pr.project_id
+     WHERE pr.id = ?${ownerClause} LIMIT 1`,
+    ownerParams,
+  )
+  if (!runRows[0]) return null
+  const run = productionRunRow(runRows[0])
+  const [stageRows] = await db.execute(
+    `SELECT * FROM production_stage_runs WHERE production_run_id = ? ORDER BY sequence_no ASC, id ASC`,
+    [runId],
+  )
+  const [checkpointRows] = await db.execute(
+    `SELECT * FROM production_checkpoints WHERE production_run_id = ? ORDER BY id ASC`,
+    [runId],
+  )
+  const [executionRows] = await db.execute(
+    `SELECT id, agent_key, status, model_name, output_json
+     FROM production_agent_executions WHERE production_run_id = ? ORDER BY id ASC`,
+    [runId],
+  )
+  const [blueprintRows] = await db.execute(
+    `SELECT * FROM episode_blueprints
+     WHERE production_run_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+    [runId],
+  )
+  let blueprint = null
+  if (blueprintRows[0]) {
+    const [beatRows] = await db.execute(
+      `SELECT * FROM production_emotion_beats WHERE blueprint_id = ? ORDER BY sequence_no ASC, id ASC`,
+      [blueprintRows[0].id],
+    )
+    blueprint = productionBlueprintRow(blueprintRows[0], beatRows.map((row) => ({
+      id: row.beat_key,
+      beatKey: row.beat_key,
+      phase: row.phase,
+      label: row.label,
+      sequenceNo: Number(row.sequence_no || 0),
+      durationSeconds: Number(row.duration_seconds || 0),
+      emotionStart: row.emotion_start || '',
+      emotionProcess: row.emotion_process || '',
+      emotionEnd: row.emotion_end || '',
+      actionStart: row.action_start || '',
+      actionProcess: row.action_process || '',
+      actionEnd: row.action_end || '',
+      dialoguePlan: row.dialogue_plan || '',
+      soundPlan: row.sound_plan || '',
+      continuity: row.continuity || '',
+      sceneNo: row.scene_no === null ? null : Number(row.scene_no),
+      shotCount: Number(row.shot_count || 0),
+      status: row.status || 'draft',
+    })))
+  }
+  return {
+    run,
+    stages: stageRows.map(productionStageRow),
+    checkpoints: checkpointRows.map(productionCheckpointRow),
+    agentExecutions: executionRows.map((row) => ({
+      id: Number(row.id),
+      agentKey: row.agent_key,
+      status: row.status,
+      modelName: row.model_name || null,
+      output: row.output_json ? parseJsonObject(row.output_json) : null,
+    })),
+    blueprint,
+  }
+}
+
+async function loadProductionStorySources(projectId) {
+  const [bibleRows] = await db.execute(
+    `SELECT * FROM story_bibles WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+    [projectId],
+  )
+  const [seasonRows] = await db.execute(
+    `SELECT * FROM season_structures WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+    [projectId],
+  )
+  return {
+    bible: bibleRows[0] ? storyBibleRow(bibleRows[0]) : {},
+    season: seasonRows[0] ? seasonStructureRow(seasonRows[0]) : {},
+  }
+}
+
+async function loadProductionScriptSource(projectId, episodeNo) {
+  const [rows] = await db.execute(
+    `SELECT sb.id AS storyboard_id, ss.scene_no, ss.title AS scene_title,
+            sb.shot_no, sb.shot_type, sb.duration_seconds, sb.action_text,
+            sb.dialogue_text, sb.visual_prompt, sb.start_visual_prompt, sb.end_visual_prompt
+     FROM storyboards sb
+     INNER JOIN script_scenes ss ON ss.id = sb.scene_id
+     WHERE ss.project_id = ? AND ss.episode_no = ?
+     ORDER BY ss.episode_no ASC, ss.scene_no ASC, sb.sort_order ASC, sb.id ASC`,
+    [projectId, episodeNo],
+  )
+  return buildProductionScriptSource(rows, { projectId, episodeNo })
+}
+
+async function persistProductionBlueprint({
+  runId,
+  projectId,
+  episodeNo,
+  blueprint,
+  qualityReport,
+  versionNo = null,
+} = {}) {
+  const resolvedVersion = versionNo || await db.execute(
+    `SELECT COALESCE(MAX(version_no), 0) + 1 AS next_version
+     FROM episode_blueprints WHERE production_run_id = ?`,
+    [runId],
+  ).then(([rows]) => Number(rows[0]?.next_version || 1))
+  const [result] = await db.execute(
+    `INSERT INTO episode_blueprints
+      (production_run_id, project_id, episode_no, version_no, status, blueprint_json, quality_report_json)
+     VALUES (?, ?, ?, ?, 'draft', ?, ?)`,
+    [runId, projectId, episodeNo, resolvedVersion, JSON.stringify(blueprint), JSON.stringify(qualityReport)],
+  )
+  const [rows] = await db.execute(`SELECT * FROM episode_blueprints WHERE id = ? LIMIT 1`, [result.insertId])
+  return rows[0]
+}
+
+function storyBibleDbValues(bible) {
+  return [
+    bible.status || 'draft',
+    bible.title || null,
+    bible.logline || null,
+    bible.audience || null,
+    bible.emotionalPromise || null,
+    JSON.stringify(bible.worldRules || []),
+    JSON.stringify(bible.timeline || []),
+    JSON.stringify(bible.locations || []),
+    JSON.stringify(bible.characters || []),
+    JSON.stringify(bible.relationships || []),
+    JSON.stringify(bible.props || []),
+    bible.mainPlot || null,
+    JSON.stringify(bible.subplots || []),
+    JSON.stringify(bible.foreshadowing || []),
+    JSON.stringify(bible.lockedFacts || []),
+    JSON.stringify(bible.flexibleFacts || []),
+    JSON.stringify(bible.visualSymbols || []),
+    JSON.stringify(bible.qualityReport || null),
+    bible.lockedAt || null,
+  ]
+}
+
+function seasonStructureDbValues(season) {
+  return [
+    season.status || 'draft',
+    season.seasonTheme || null,
+    season.coreConflict || null,
+    season.structureType || null,
+    Number(season.episodeCount || season.episodes?.length || 1),
+    JSON.stringify(season.episodes || []),
+    JSON.stringify(season.foreshadowingPlan || []),
+    JSON.stringify(season.characterArcs || []),
+    JSON.stringify(season.qualityReport || null),
+    season.lockedAt || null,
+  ]
+}
+
+async function persistStoryBible(projectId, bible, report, locked = false) {
+  const [versionRows] = await db.execute(
+    `SELECT COALESCE(MAX(version_no), 0) AS maxVersion FROM story_bibles WHERE project_id = ?`,
+    [projectId],
+  )
+  const versionNo = Number(versionRows[0]?.maxVersion || 0) + 1
+  const values = storyBibleDbValues({
+    ...bible,
+    status: locked ? 'locked' : 'draft',
+    qualityReport: report,
+    lockedAt: locked ? new Date() : null,
+  })
+  const [result] = await db.execute(
+    `INSERT INTO story_bibles
+      (project_id, version_no, status, title, logline, audience, emotional_promise,
+       world_rules_json, timeline_json, locations_json, characters_json, relationships_json,
+       props_json, main_plot, subplots_json, foreshadowing_json, locked_facts_json,
+       flexible_facts_json, visual_symbols_json, quality_report_json, locked_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [projectId, versionNo, ...values],
+  )
+  const [rows] = await db.execute(`SELECT * FROM story_bibles WHERE id = ?`, [result.insertId])
+  return rows[0]
+}
+
+async function persistSeasonStructure(projectId, storyBibleId, season, report, locked = false) {
+  const [versionRows] = await db.execute(
+    `SELECT COALESCE(MAX(version_no), 0) AS maxVersion FROM season_structures WHERE project_id = ?`,
+    [projectId],
+  )
+  const versionNo = Number(versionRows[0]?.maxVersion || 0) + 1
+  const values = seasonStructureDbValues({
+    ...season,
+    status: locked ? 'locked' : 'draft',
+    qualityReport: report,
+    lockedAt: locked ? new Date() : null,
+  })
+  const [result] = await db.execute(
+    `INSERT INTO season_structures
+      (project_id, story_bible_id, version_no, status, season_theme, core_conflict,
+       structure_type, episode_count, episodes_json, foreshadowing_plan_json,
+       character_arcs_json, quality_report_json, locked_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [projectId, storyBibleId, versionNo, ...values],
+  )
+  const [rows] = await db.execute(`SELECT * FROM season_structures WHERE id = ?`, [result.insertId])
+  return rows[0]
 }
 
 function outlineRow(row) {
@@ -3800,14 +8984,24 @@ function outlineRow(row) {
 }
 
 function sceneRow(row) {
+  let spatialAnchors = row.spatial_anchors_json || row.spatial_anchors || null
+  if (typeof spatialAnchors === 'string') {
+    try {
+      spatialAnchors = JSON.parse(spatialAnchors)
+    } catch {
+      spatialAnchors = null
+    }
+  }
   return {
     id: row.id,
     projectId: row.project_id || row.projectId,
+    episodeNo: row.episode_no || row.episodeNo || 1,
     outlineId: row.outline_id || row.outlineId,
     sceneNo: row.scene_no || row.sceneNo,
     title: row.title,
     summary: row.summary,
     content: row.content,
+    spatialAnchors,
     mood: row.mood,
     location: row.location,
     timeOfDay: row.time_of_day || row.timeOfDay,
@@ -3820,6 +9014,14 @@ function sceneRow(row) {
 }
 
 function storyboardRow(row) {
+  let assetReference = row.asset_reference_json || row.assetReference || null
+  if (typeof assetReference === 'string') {
+    try {
+      assetReference = JSON.parse(assetReference)
+    } catch {
+      assetReference = null
+    }
+  }
   return {
     id: row.id,
     sceneId: row.scene_id || row.sceneId,
@@ -3832,12 +9034,18 @@ function storyboardRow(row) {
     characterName: row.character_name || row.characterName,
     actionText: row.action_text || row.actionText,
     dialogueText: row.dialogue_text || row.dialogueText,
-    visualPrompt: row.visual_prompt || row.visualPrompt,
+    visualPrompt: sanitizeStoryboardPrompt(row.visual_prompt || row.visualPrompt, {
+      characterNames: [row.character_name || row.characterName],
+    }),
+    performance: assetReference?.performance || null,
+    gazePlan: assetReference?.gazePlan || assetReference?.performance?.gazePlan || null,
+    soundPlan: assetReference?.soundPlan || assetReference?.performance?.soundPlan || null,
     startVisualPrompt: row.start_visual_prompt || row.startVisualPrompt || '',
     endVisualPrompt: row.end_visual_prompt || row.endVisualPrompt || '',
+    assetReference,
     imageUrl: row.image_url || row.imageUrl,
     endImageUrl: row.end_image_url || row.endImageUrl || '',
-    videoUrl: row.video_url || row.videoUrl,
+    videoUrl: normalizeGeneratedMediaUrl(row.video_url || row.videoUrl, PUBLIC_BASE_URL),
     sortOrder: row.sort_order || row.sortOrder,
     status: row.status,
     createdAt: row.created_at || row.createdAt,
@@ -3919,19 +9127,71 @@ function buildTwoKeyframeVideoPrompt({ prompt, shot, startImage, endImage }) {
   return parts.filter(Boolean).join(' ')
 }
 
+function buildReferenceAudioPromptContext(voiceRows = [], referenceAudioUrls = []) {
+  const rows = (Array.isArray(voiceRows) ? voiceRows : [])
+    .filter((row) => row.voice_locked && resolveReferenceAudioUrl(row))
+  const lines = rows.flatMap((row) => {
+    const url = resolveReferenceAudioUrl(row)
+    const index = referenceAudioUrls.indexOf(url)
+    if (index < 0) return []
+    return [`音色@${String(row.character_name || '当前角色').trim()} 使用 <Audio ${index + 1}>；对白文本必须逐字使用本镜已写入的台词；人物发声、停顿、重音、情绪和嘴型动作必须与对白时序严格同步，禁止无声说话、错配台词或口型滞后；官方 Agnes 将参考音频用于声音特征、节奏和情绪参考。`]
+  })
+  return lines.length
+    ? `官方 Agnes 参考音频绑定：\n${lines.join('\n')}`
+    : ''
+}
+
+function inferStorageKeyFromUrl(value) {
+  try {
+    const parsed = new URL(String(value || '').trim())
+    const pathname = decodeURIComponent(parsed.pathname).replace(/^\/+/, '')
+    return parsed.hostname.includes('.cos.') && pathname ? pathname : ''
+  } catch {
+    return ''
+  }
+}
+
+function resolveReferenceAudioUrl(row = {}) {
+  const key = String(row.reference_audio_storage_key || row.referenceAudioStorageKey || '').trim()
+    || inferStorageKeyFromUrl(row.reference_audio_url || row.referenceAudioUrl)
+  if (key) {
+    try {
+      return objectStorage.createSignedUrl({
+        key,
+        expiresInSeconds: Math.max(
+          900,
+          Number(process.env.VIDEO_REFERENCE_AUDIO_SIGNED_URL_TTL_SECONDS) || 3600,
+        ),
+      })
+    } catch {
+      // Keep the historical URL for old/non-COS records.
+    }
+  }
+  return String(row.reference_audio_url || row.referenceAudioUrl || '').trim()
+}
+
 function videoAssetRow(row) {
+  const storageKey = row.storage_key || row.storageKey || null
   return {
     id: row.id,
     storyboardId: row.storyboard_id || row.storyboardId,
     imageAssetId: row.image_asset_id || row.imageAssetId,
     versionNo: row.version_no || row.versionNo,
-    videoUrl: row.video_url || row.videoUrl,
-    thumbnailUrl: row.thumbnail_url || row.thumbnailUrl,
+    videoUrl: storageKey
+      ? resolveObjectStorageUrl(storageKey, row.video_url || row.videoUrl)
+      : normalizeGeneratedMediaUrl(row.video_url || row.videoUrl, PUBLIC_BASE_URL),
+    storageKey,
+    endFrameUrl: row.end_frame_storage_key
+      ? resolveObjectStorageUrl(row.end_frame_storage_key, row.end_frame_url)
+      : normalizeGeneratedMediaUrl(row.end_frame_url || row.endFrameUrl, PUBLIC_BASE_URL),
+    endFrameStorageKey: row.end_frame_storage_key || row.endFrameStorageKey || null,
+    thumbnailUrl: normalizeGeneratedMediaUrl(row.thumbnail_url || row.thumbnailUrl, PUBLIC_BASE_URL),
     motionMode: row.motion_mode || row.motionMode,
     durationSeconds: row.duration_seconds || row.durationSeconds,
     modelName: row.model_name || row.modelName,
     audioAssetId: row.audio_asset_id || row.audioAssetId || null,
     generationJobId: row.generation_job_id || row.generationJobId || null,
+    qualityReport: safeJsonParse(row.quality_report_json || row.qualityReportJson, null),
     sourceType: row.source_type || row.sourceType || 'generated_video',
     status: row.status,
     confirmedAt: row.confirmed_at || row.confirmedAt,
@@ -3940,6 +9200,7 @@ function videoAssetRow(row) {
 }
 
 function audioAssetRow(row) {
+  const storageKey = row.storage_key || row.storageKey || null
   return {
     id: row.id,
     projectId: row.project_id || row.projectId,
@@ -3954,7 +9215,10 @@ function audioAssetRow(row) {
     versionNo: row.version_no || row.versionNo,
     startOffsetSeconds: Number(row.start_offset_seconds ?? row.startOffsetSeconds ?? 0),
     title: resolveAudioSourceTitle(row),
-    audioUrl: row.audio_url || row.audioUrl,
+    audioUrl: storageKey
+      ? resolveObjectStorageUrl(storageKey, row.audio_url || row.audioUrl)
+      : row.audio_url || row.audioUrl,
+    storageKey,
     durationSeconds: row.duration_seconds || row.durationSeconds,
     voiceName: row.voice_name || row.voiceName,
     modelName: row.model_name || row.modelName,
@@ -3974,11 +9238,21 @@ function exportRecordRow(row) {
     config = null
   }
 
+  const storageKey = row.storage_key || row.storageKey || null
+  const subtitleStorageKey = row.subtitle_storage_key || row.subtitleStorageKey || null
+  if (config && subtitleStorageKey) {
+    config.subtitleFile = resolveObjectStorageUrl(subtitleStorageKey, config.subtitleFile || null)
+  }
+
   return {
     id: row.id,
     projectId: row.project_id || row.projectId,
     status: row.status,
-    videoUrl: row.video_url || row.videoUrl,
+    videoUrl: storageKey
+      ? resolveObjectStorageUrl(storageKey, row.video_url || row.videoUrl)
+      : row.video_url || row.videoUrl,
+    storageKey,
+    subtitleStorageKey,
     coverUrl: row.cover_url || row.coverUrl,
     durationSeconds: row.duration_seconds || row.durationSeconds,
     config,
@@ -3991,16 +9265,6 @@ function exportRecordRow(row) {
 }
 
 const FINAL_EDIT_AUDIO_TRACKS = ['dialogue', 'narration', 'music', 'sfx']
-
-function parseJsonObject(value, fallback = {}) {
-  if (!value) return fallback
-  try {
-    const parsed = typeof value === 'string' ? JSON.parse(value) : value
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback
-  } catch {
-    return fallback
-  }
-}
 
 function clampVolume(value, fallback = 100) {
   const n = Number(value)
@@ -4038,10 +9302,37 @@ function normalizeFinalEditDraft(rawDraft, context = {}) {
     if (allowedStoryboardIds.size && !allowedStoryboardIds.has(storyboardId)) continue
     if (seenStoryboardIds.has(storyboardId)) continue
     seenStoryboardIds.add(storyboardId)
+    const transitionType = ['cut', 'fade', 'dip', 'push'].includes(String(item?.transition?.type || '').trim().toLowerCase())
+      ? String(item.transition.type).trim().toLowerCase()
+      : 'cut'
+    const sourceItem = contextItems.find((candidate) => parseId(candidate.storyboardId) === storyboardId)
+    const sourceDuration = Math.max(
+      0.25,
+      Number(sourceItem?.sourceDurationSeconds || sourceItem?.durationSeconds || 4) || 4,
+    )
+    const trimStartSeconds = Math.max(
+      0,
+      Math.min(Number(item?.trimStartSeconds) || 0, Math.max(0, sourceDuration - 0.25)),
+    )
+    const trimEndSeconds = Math.max(
+      trimStartSeconds + 0.25,
+      Math.min(Number(item?.trimEndSeconds) || sourceDuration, sourceDuration),
+    )
     videoClips.push({
       storyboardId,
       enabled: item?.enabled !== false,
       order: parseId(item?.order) || index + 1,
+      videoAssetId: parseId(item?.videoAssetId) || null,
+      trimStartSeconds: Number(trimStartSeconds.toFixed(3)),
+      trimEndSeconds: Number(trimEndSeconds.toFixed(3)),
+      transition: {
+        type: transitionType,
+        durationSeconds: transitionType === 'cut'
+          ? 0
+          : Number(Math.max(0.04, Math.min(2, Number(item?.transition?.durationSeconds) || 0.18)).toFixed(3)),
+        manual: item?.transition?.manual === true,
+      },
+      transitionManual: item?.transition?.manual === true,
     })
   }
 
@@ -4077,6 +9368,7 @@ async function fetchFinalEditDraft(projectId) {
 
 function buildFinalEditValidation(videoItems, audioTracks, audioMix, projectCompleteness) {
   const enabledVideoItems = videoItems.filter((item) => item.enabled !== false)
+  const confirmedVideoCount = videoItems.filter((item) => item.sourceType === 'video' && Boolean(item.videoUrl)).length
   const availableAudioTrackCount = FINAL_EDIT_AUDIO_TRACKS.filter(
     (trackKey) => (audioTracks[trackKey] || []).length > 0,
   ).length
@@ -4086,7 +9378,7 @@ function buildFinalEditValidation(videoItems, audioTracks, audioMix, projectComp
 
   const totalStoryboardCount = Number(projectCompleteness?.totalStoryboardCount || 0)
   const missingStoryboardSceneCount = Number(projectCompleteness?.missingStoryboardSceneCount || 0)
-  const missingVideoCount = Math.max(totalStoryboardCount - videoItems.length, 0)
+  const missingVideoCount = Math.max(totalStoryboardCount - confirmedVideoCount, 0)
   const blockingIssues = []
   const warningIssues = []
 
@@ -4140,7 +9432,7 @@ function buildFinalEditValidation(videoItems, audioTracks, audioMix, projectComp
     availableAudioTrackCount,
     enabledAudioTrackCount,
     totalStoryboardCount,
-    confirmedVideoCount: videoItems.length,
+    confirmedVideoCount,
     missingVideoCount,
     missingStoryboardSceneCount,
     blockingIssues,
@@ -4498,7 +9790,9 @@ function characterRow(row) {
     voiceStyle: row.voice_style || row.voiceStyle || null,
     voiceProfileKey: row.voice_profile_key || row.voiceProfileKey || null,
     voiceLocked: Boolean(row.voice_locked ?? row.voiceLocked),
+    voiceDesign: safeJsonParse(row.voice_design_json || row.voiceDesignJson, null),
     referenceImageUrl: row.reference_image_url || row.referenceImageUrl,
+    referenceAudioUrl: resolveReferenceAudioUrl(row) || null,
     status: row.status,
     createdAt: row.created_at || row.createdAt,
     updatedAt: row.updated_at || row.updatedAt,
@@ -4537,7 +9831,10 @@ function characterVoiceCastRow(row, profiles) {
     traits: recommendation.traits,
     selectedProfile,
     recommendations: recommendation.items,
-    ready: Boolean(character.voiceLocked && selectedProfile),
+    ready: isCharacterVoiceReady({
+      ...character,
+      voiceProfileKey: selectedProfile?.profileKey || '',
+    }, selectedProfile),
   }
 }
 
@@ -4784,19 +10081,640 @@ async function applyCharacterRenamePlan(connection, plan, characterId) {
   }
 }
 
+function resolveObjectStorageUrl(storageKey, fallback = null) {
+  if (!storageKey) return fallback
+  try {
+    return objectStorage.createSignedUrl({ key: storageKey })
+  } catch {
+    return fallback
+  }
+}
+
+function isNarrativeRoleOnlyName(value) {
+  return /^(?:主角|男主角|女主角|男主|女主|第一主角|核心人物|主人公)$/u.test(
+    String(value || '').trim(),
+  )
+}
+
+function inferProtagonistCharacterName(outline, scenes = []) {
+  const source = [
+    outline?.premise,
+    outline?.logline,
+    outline?.raw_json,
+    ...scenes.flatMap((scene) => [scene?.title, scene?.summary, scene?.content]),
+  ].filter(Boolean).join('\n')
+  return source.match(/(?:主角|主人公|男主角|女主角)[^。\n：:]{0,12}[：:是为叫，、]?\s*([\u4e00-\u9fa5]{2,8})/u)?.[1]?.trim()
+    || source.match(/(?:程序员|合规专员|收到死者邮件的)[，,：:、\s]*([\u4e00-\u9fa5]{2,8})/u)?.[1]?.trim()
+    || null
+}
+
+async function repairNarrativeRoleCharacterRecords(executor, projectId, outline, sceneRows) {
+  const protagonistName = inferProtagonistCharacterName(outline, sceneRows)
+  if (!protagonistName) return null
+  const [roleRows] = await executor.execute(
+    `SELECT id FROM characters
+     WHERE project_id = ? AND status <> 'archived' AND name IN ('主角', '男主角', '女主角', '男主', '女主')
+     ORDER BY id ASC`,
+    [projectId],
+  )
+  if (!roleRows.length) return null
+  const [realRows] = await executor.execute(
+    `SELECT id FROM characters
+     WHERE project_id = ? AND name = ? AND status <> 'archived'
+     ORDER BY id ASC LIMIT 1`,
+    [projectId, protagonistName],
+  )
+  const targetId = Number(realRows[0]?.id || 0)
+  if (!targetId) return null
+  for (const roleRow of roleRows) {
+    const roleId = Number(roleRow.id)
+    if (roleId === targetId) continue
+    await executor.execute(`UPDATE storyboards SET character_id = ?, character_name = ? WHERE character_id = ?`, [
+      targetId,
+      protagonistName,
+      roleId,
+    ])
+    await executor.execute(`UPDATE asset_nodes SET ref_id = ?, label = ?, group_key = CONCAT('character-', ?) WHERE ref_id = ? AND node_type = 'character'`, [
+      targetId,
+      protagonistName,
+      targetId,
+      roleId,
+    ])
+    await executor.execute(`UPDATE audio_assets SET character_id = ? WHERE character_id = ?`, [targetId, roleId])
+    await executor.execute(`UPDATE characters SET status = 'archived', updated_at = NOW() WHERE id = ?`, [roleId])
+  }
+  return { targetId, protagonistName, repairedCount: roleRows.length }
+}
+
 function characterImageRow(row) {
+  const imageUrl = row.storage_key
+    ? resolveObjectStorageUrl(row.storage_key, row.image_url || row.imageUrl)
+    : row.image_url || row.imageUrl
+  const thumbnailUrl = row.storage_key
+    ? resolveObjectStorageUrl(row.storage_key, row.thumbnail_url || row.thumbnailUrl || imageUrl)
+    : row.thumbnail_url || row.thumbnailUrl
   return {
     id: row.id,
     characterId: row.character_id || row.characterId,
     versionNo: row.version_no || row.versionNo,
-    imageUrl: row.image_url || row.imageUrl,
-    thumbnailUrl: row.thumbnail_url || row.thumbnailUrl,
+    imageUrl,
+    thumbnailUrl,
+    storageKey: row.storage_key || row.storageKey || null,
     promptSnapshot: row.prompt_snapshot || row.promptSnapshot,
     modelName: row.model_name || row.modelName,
     status: row.status,
     confirmedAt: row.confirmed_at || row.confirmedAt,
     createdAt: row.created_at || row.createdAt,
   }
+}
+
+function withResolvedAssetNodeImageUrls(row) {
+  const imageUrl = row.storage_key
+    ? resolveObjectStorageUrl(row.storage_key, row.image_url)
+    : row.image_url
+  // 历史记录可能保存了已经过期的模型缩略图。优先使用持久化对象，
+  // 没有 storage_key 时才保留旧字段，兼容过去的外部图片记录。
+  const thumbnailUrl = row.storage_key
+    ? resolveObjectStorageUrl(row.storage_key, row.thumbnail_url || row.image_url || imageUrl)
+    : row.thumbnail_url || row.image_url
+  return { ...row, image_url: imageUrl, thumbnail_url: thumbnailUrl }
+}
+
+function hasDurableAssetNodeImage(row) {
+  if (!row?.storage_key) return Boolean(row?.image_url || row?.thumbnail_url)
+  if (objectStorage.provider !== 'local') return true
+  try {
+    return Boolean(objectStorage.resolveLocalPath(row.storage_key))
+  } catch {
+    return false
+  }
+}
+
+function assetNodeImageDto(row) {
+  const resolved = withResolvedAssetNodeImageUrls(row)
+  return assetNodeImageRow({
+    ...resolved,
+    vision_status: row.vision_status ?? row.visionStatus ?? 'pending',
+    vision_reason: row.vision_reason ?? row.visionReason ?? null,
+    vision_checked_at: row.vision_checked_at ?? row.visionCheckedAt ?? null,
+    // 不把已知不存在的本地对象继续暴露给前端，前端会显示“待重新生成”。
+    image_url: hasDurableAssetNodeImage(row) ? resolved.image_url : null,
+    thumbnail_url: hasDurableAssetNodeImage(row) ? resolved.thumbnail_url : null,
+  })
+}
+
+async function fetchAssetNodeForUser(nodeId, userId) {
+  const [rows] = await db.execute(
+    `SELECT n.*, p.user_id AS ownerId, p.visual_style AS project_visual_style,
+            p.category AS project_category
+     FROM asset_nodes n
+     INNER JOIN projects p ON p.id = n.project_id
+     WHERE n.id = ? AND n.status <> 'archived' LIMIT 1`,
+    [nodeId],
+  )
+  const node = rows[0]
+  if (!node || Number(node.ownerId) !== Number(userId)) return null
+
+  if (node.node_type === 'scene' && !node.ref_id) {
+    const [sceneRows] = await db.execute(
+      `SELECT id, scene_no, title, summary, content, location, time_of_day
+       FROM script_scenes
+       WHERE project_id = ?
+       ORDER BY episode_no ASC, scene_no ASC, id ASC`,
+      [node.project_id],
+    )
+    const matchedScene = findSceneNodeMatch(node, sceneRows)
+    if (matchedScene) {
+      const promptText = buildScriptScenePrompt({
+        scene: matchedScene,
+        projectVisualStyle: node.project_visual_style || '',
+        projectCategory: node.project_category || '',
+      })
+      await db.execute(
+        `UPDATE asset_nodes
+         SET ref_id = ?, prompt_text = ?, appearance_label = COALESCE(NULLIF(appearance_label, ''), ?),
+             updated_at = NOW()
+         WHERE id = ?`,
+        [
+          matchedScene.id,
+          promptText,
+          [matchedScene.location, matchedScene.time_of_day].filter(Boolean).join(' · ') || null,
+          node.id,
+        ],
+      )
+      node.ref_id = Number(matchedScene.id)
+      node.prompt_text = promptText
+      node.appearance_label = node.appearance_label
+        || [matchedScene.location, matchedScene.time_of_day].filter(Boolean).join(' · ')
+        || null
+    }
+  }
+
+  if (
+    node.node_type === 'scene'
+    && node.ref_id
+    && (!String(node.prompt_text || '').trim()
+      || String(node.prompt_text || '').trim() === '场景空间结构待补充：请描述地点、时代、建筑结构、主要物件位置、门窗方向、光线方向和剧情功能。')
+  ) {
+    const [sceneRows] = await db.execute(
+      `SELECT id, scene_no, title, summary, content, location, time_of_day
+       FROM script_scenes
+       WHERE id = ? AND project_id = ? LIMIT 1`,
+      [node.ref_id, node.project_id],
+    )
+    if (sceneRows[0]) {
+      const [projectRows] = await db.execute(
+        `SELECT visual_style, category FROM projects WHERE id = ? LIMIT 1`,
+        [node.project_id],
+      )
+      const promptText = buildScriptScenePrompt({
+        scene: sceneRows[0],
+        projectVisualStyle: projectRows[0]?.visual_style || '',
+        projectCategory: projectRows[0]?.category || '',
+      })
+      await db.execute(
+        `UPDATE asset_nodes SET prompt_text = ?, updated_at = NOW() WHERE id = ?`,
+        [promptText, node.id],
+      )
+      node.prompt_text = promptText
+    }
+  }
+
+  let character = null
+  if (node.node_type === 'character' && node.ref_id) {
+    const [characterRows] = await db.execute(
+      `SELECT id, name, role_tag, personality, appearance, costume, age_group, gender,
+              appearance_locked, reference_image_url, reference_image_storage_key
+       FROM characters
+       WHERE id = ? AND project_id = ? AND status <> 'archived' LIMIT 1`,
+      [node.ref_id, node.project_id],
+    )
+    character = characterRows[0] || null
+  }
+  return { node, character }
+}
+
+async function ensureSceneSpatialAnchors(scene) {
+  return resolveSceneSpaceManifest({
+    scene,
+    extract: extractSceneSpaceAnchorsWithAgent,
+    persist: async (manifest) => {
+      await db.execute(
+        `UPDATE script_scenes SET spatial_anchors_json = ?, updated_at = NOW() WHERE id = ?`,
+        [JSON.stringify(manifest), scene.id],
+      )
+    },
+  })
+}
+
+async function enqueueAssetNodeImageJob(userId, nodeId, body = {}) {
+  const resolved = await fetchAssetNodeForUser(nodeId, userId)
+  if (!resolved) return null
+  const { node, character } = resolved
+  let effectivePromptText = String(node.prompt_text || '').trim()
+  let sceneSpatialAnchors = null
+  let projectCharacterNames = []
+  if (node.node_type === 'scene' && node.ref_id && !effectivePromptText) {
+    const [projectRows] = await db.execute(
+      `SELECT visual_style, category FROM projects WHERE id = ? LIMIT 1`,
+      [node.project_id],
+    )
+    const [characterRows] = await db.execute(
+      `SELECT name FROM characters WHERE project_id = ? AND status <> 'archived'`,
+      [node.project_id],
+    )
+    projectCharacterNames = characterRows.map((row) => row.name).filter(Boolean)
+    const [sceneRows] = await db.execute(
+      `SELECT id, scene_no, title, summary, content, spatial_anchors_json, location, time_of_day
+       FROM script_scenes WHERE id = ? AND project_id = ? LIMIT 1`,
+      [node.ref_id, node.project_id],
+    )
+    if (sceneRows[0]) {
+      effectivePromptText = buildScriptScenePrompt({
+        scene: sceneRows[0],
+        projectVisualStyle: projectRows[0]?.visual_style || '',
+        projectCategory: projectRows[0]?.category || '',
+        characterNames: projectCharacterNames,
+      })
+      await db.execute(
+        `UPDATE asset_nodes SET prompt_text = ?, updated_at = NOW() WHERE id = ?`,
+        [effectivePromptText, nodeId],
+      )
+      node.prompt_text = effectivePromptText
+    }
+  }
+  if (node.node_type === 'scene' && node.ref_id) {
+    const [projectRows] = await db.execute(
+      `SELECT visual_style, category FROM projects WHERE id = ? LIMIT 1`,
+      [node.project_id],
+    )
+    const [sceneRows] = await db.execute(
+      `SELECT id, scene_no, title, summary, content, spatial_anchors_json, location, time_of_day
+       FROM script_scenes WHERE id = ? AND project_id = ? LIMIT 1`,
+      [node.ref_id, node.project_id],
+    )
+    if (!projectCharacterNames.length) {
+      const [characterRows] = await db.execute(
+        `SELECT name FROM characters WHERE project_id = ? AND status <> 'archived'`,
+        [node.project_id],
+      )
+      projectCharacterNames = characterRows.map((row) => row.name).filter(Boolean)
+    }
+    if (sceneRows[0]) {
+      const manifest = await ensureSceneSpatialAnchors(sceneRows[0])
+      sceneSpatialAnchors = manifest
+      sceneRows[0].spatial_anchors = manifest
+      const environmentPromptText = buildSceneEnvironmentPrompt({
+        scene: sceneRows[0],
+        projectVisualStyle: projectRows[0]?.visual_style || '',
+        projectCategory: projectRows[0]?.category || '',
+        characterNames: projectCharacterNames,
+      })
+      // 每次全景生成都从当前绑定场景刷新环境层，避免沿用旧版混入人物动作的提示词。
+      await db.execute(
+        `UPDATE asset_nodes SET environment_prompt_text = ?, updated_at = NOW() WHERE id = ?`,
+        [environmentPromptText, nodeId],
+      )
+      node.environment_prompt_text = environmentPromptText
+    }
+  }
+  const frameConfig = getFrameConfig()
+  const requestedViewType = String(body.viewType || '').trim()
+  if (node.node_type === 'character'
+    && !['', 'single', 'character-asset-pack'].includes(requestedViewType)) {
+    const error = new Error('角色资产统一生成完整资产板；独立脸部特写和三视图链路已停用')
+    error.statusCode = 409
+    error.code = 'CHARACTER_ASSET_PACK_REQUIRED'
+    throw error
+  }
+  if (['prop', 'material'].includes(String(node.node_type))
+    && requestedViewType === 'prop-turnaround') {
+    const error = new Error('道具资产统一使用完整单图；独立多视图链路已停用')
+    error.statusCode = 409
+    error.code = 'PROP_SINGLE_IMAGE_REQUIRED'
+    throw error
+  }
+  const assetPackEnabled = node.node_type === 'character'
+    && ['character-asset-pack', 'single', ''].includes(requestedViewType)
+  const requestedAssetPackModel = assetPackEnabled
+    ? String(body.modelName || frameConfig.assetPackModel || frameConfig.defaultModel).trim()
+    : ''
+  const [versionRows] = await db.execute(
+    `SELECT COALESCE(MAX(version_no), 0) AS maxVersion
+     FROM asset_node_images WHERE asset_node_id = ?`,
+    [nodeId],
+  )
+  const versionNo = Number(versionRows[0]?.maxVersion || 0) + 1
+  const promptNode = {
+    ...node,
+    promptText: resolveAssetNodeGenerationPrompt({
+      node: {
+        ...node,
+        promptText: effectivePromptText,
+      },
+       requestedViewType: requestedViewType || 'single',
+      promptOverride: body.prompt,
+    }),
+  }
+  const requestedViewKey = String(body.viewKey || '').trim()
+  const sceneAngle = getSceneNineGridAngles().find((angle) => angle.key === requestedViewKey)
+  if (requestedViewType === 'scene-nine-grid' && requestedViewKey && !sceneAngle) {
+    const error = new Error(`无效的场景九宫格视角：${requestedViewKey}`)
+    error.statusCode = 400
+    throw error
+  }
+  let referenceImageUrl = String(body.referenceImageUrl || '').trim()
+  let baseReferenceImageUrl = ''
+  let baseReferenceStorageKey = ''
+  let baseReferenceImageId = null
+  let panoramaImageId = null
+  let panoramaImageUrl = ''
+  let panoramaStorageKey = ''
+  let identityLockSnapshot = parseCharacterIdentityLock(node.character_identity_lock_json)
+  let identityReferenceImageIds = []
+  let identityReferenceImageUrls = []
+  let identityReferenceStorageKeys = []
+  if (['character-turnaround', 'character-face-closeup'].includes(requestedViewType) && node.node_type === 'character') {
+    const [imageRows] = await db.execute(
+      `SELECT * FROM asset_node_images
+       WHERE asset_node_id = ?
+       ORDER BY id DESC`,
+      [nodeId],
+    )
+    const existingImages = imageRows.map(assetNodeImageDto)
+    const gate = validateCharacterViewGeneration({
+      nodeType: node.node_type,
+      viewType: requestedViewType,
+      images: existingImages,
+    })
+    if (!gate.ready) {
+      const error = new Error(gate.message)
+      error.statusCode = 409
+      error.code = gate.code
+      throw error
+    }
+    const baseImage = getCharacterBaseReferenceImage(existingImages)
+    baseReferenceImageId = Number(baseImage?.id) || null
+    baseReferenceImageUrl = String(baseImage?.imageUrl || baseImage?.thumbnailUrl || '').trim()
+    baseReferenceStorageKey = String(baseImage?.storageKey || '').trim()
+    const referenceSet = resolveCharacterReferenceSet(existingImages)
+    identityReferenceImageIds = referenceSet.imageIds
+    identityReferenceImageUrls = referenceSet.imageUrls
+    identityReferenceStorageKeys = referenceSet.storageKeys
+    identityLockSnapshot = identityLockSnapshot || buildCharacterIdentityLockSnapshot({
+      character: character || { id: node.ref_id, name: node.label },
+      baseImage,
+      referenceSet,
+    })
+  }
+  if (requestedViewType === 'prop-turnaround' && ['prop', 'material'].includes(node.node_type)) {
+    const [imageRows] = await db.execute(
+      `SELECT * FROM asset_node_images WHERE asset_node_id = ? ORDER BY id DESC`,
+      [nodeId],
+    )
+    const existingImages = imageRows.map(assetNodeImageDto)
+    const baseImage = existingImages.find((image) =>
+      image.viewSetType === 'single' && image.status === 'confirmed' && image.visionStatus === 'passed',
+    )
+    if (!baseImage) {
+      const error = new Error('请先生成并确认道具基础图，再生成道具多视角')
+      error.statusCode = 409
+      error.code = 'PROP_BASE_IMAGE_REQUIRED'
+      throw error
+    }
+    baseReferenceImageUrl = String(baseImage.imageUrl || baseImage.thumbnailUrl || '').trim()
+    baseReferenceStorageKey = String(baseImage.storageKey || '').trim()
+  }
+  let sceneReferenceStorageKey = ''
+  if (requestedViewType === 'scene-nine-grid' && node.node_type === 'scene') {
+    const explicitPanoramaId = parseId(body.referenceImageId)
+    const panoramaQuery = explicitPanoramaId
+      ? `SELECT id, storage_key, image_url
+         FROM asset_node_images
+         WHERE id = ? AND asset_node_id = ? AND view_set_type = 'single'
+           AND status IN ('candidate', 'confirmed')
+           AND (vision_status IN ('passed', 'skipped') OR vision_status IS NULL)
+         LIMIT 1`
+      : `SELECT id, storage_key, image_url
+         FROM asset_node_images
+         WHERE asset_node_id = ? AND view_set_type = 'single' AND status = 'confirmed'
+           AND (vision_status IN ('passed', 'skipped') OR vision_status IS NULL)
+         ORDER BY id DESC LIMIT 1`
+    const [panoramaRows] = await db.execute(
+      panoramaQuery,
+      explicitPanoramaId ? [explicitPanoramaId, nodeId] : [nodeId],
+    )
+    if (explicitPanoramaId && !panoramaRows[0]) {
+      const error = new Error('指定的场景全景母图不存在、未通过视觉检查或不属于当前节点')
+      error.statusCode = 409
+      error.code = 'SCENE_PANORAMA_REFERENCE_INVALID'
+      throw error
+    }
+    panoramaImageId = Number(panoramaRows[0]?.id) || null
+    sceneReferenceStorageKey = String(panoramaRows[0]?.storage_key || '').trim()
+    panoramaStorageKey = sceneReferenceStorageKey
+    panoramaImageUrl = String(panoramaRows[0]?.image_url || '').trim()
+    referenceImageUrl = referenceImageUrl || panoramaImageUrl
+    if (!panoramaImageId) {
+      const error = new Error('请先确认场景全景基准图，再生成九个独立场景视角')
+      error.statusCode = 409
+      error.code = 'SCENE_PANORAMA_REQUIRED'
+      throw error
+    }
+    if (!requestedViewKey) {
+      const [existingViewRows] = await db.execute(
+        `SELECT MAX(view_count) AS view_count
+         FROM (
+           SELECT view_set_version, COUNT(DISTINCT view_key) AS view_count
+           FROM asset_node_images
+           WHERE asset_node_id = ? AND view_set_type = 'scene-nine-grid'
+             AND view_key IS NOT NULL AND source_image_id = ?
+             AND status IN ('candidate', 'confirmed')
+             AND vision_status IN ('passed', 'skipped')
+           GROUP BY view_set_version
+         ) AS complete_batches`,
+        [nodeId, panoramaImageId],
+      )
+      if (Number(existingViewRows[0]?.view_count || 0) >= 9) {
+        const error = new Error('九宫格九个独立视角已生成；请在对应视角卡片中单独重试，不要重复生成整组')
+        error.statusCode = 409
+        error.code = 'SCENE_NINE_GRID_ALREADY_GENERATED'
+        throw error
+      }
+    }
+  }
+  const requestedCharacterViewKeys = requestedViewType === 'character-turnaround'
+    ? (Array.isArray(body.viewKeys) && body.viewKeys.length
+        ? body.viewKeys
+        : ['front', 'side', 'back'])
+      .map((key) => String(key || '').trim())
+      .filter((key, index, keys) => ['front', 'side', 'back'].includes(key) && keys.indexOf(key) === index)
+    : []
+  const isCharacterTurnaroundBatch = requestedViewType === 'character-turnaround' && !requestedViewKey
+  // character-asset-pack is the batch board contract, not a camera view.
+  // It has its own generation prompt below and must not fall through the
+  // single-view prompt builder, whose unsupported-view fallback has no base.
+  const viewPrompt = requestedViewType
+    && !['single', 'character-asset-pack'].includes(requestedViewType)
+    && !isCharacterTurnaroundBatch
+    ? buildAssetNodeViewPrompt({
+        node: promptNode,
+        character,
+        projectVisualStyle: node.project_visual_style,
+        appearanceLocked: Boolean(character?.appearance_locked),
+        viewType: requestedViewType,
+        viewKey: String(body.viewKey || '').trim(),
+        referenceImageUrl,
+        baseReferenceImageUrl,
+      })
+    : null
+  const sceneAnglePrompt = requestedViewType === 'scene-nine-grid' && requestedViewKey && sceneAngle
+    ? buildSceneNineGridAnglePrompt({
+        angle: requestedViewKey,
+        panorama: panoramaImageUrl || panoramaStorageKey,
+        spatialAnchors: sceneSpatialAnchors,
+      })
+    : null
+  const generationPrompt = assetPackEnabled
+    ? buildCharacterAssetPackPrompt({
+        character: character || { name: node.label },
+        projectVisualStyle: node.project_visual_style,
+      }) + `\n角色节点原始约束（只补充外貌事实，不改变资产板布局）：\n${String(effectivePromptText || '').trim()}`
+    : sceneAnglePrompt || viewPrompt?.prompt || buildAssetNodeGenerationPrompt({
+    node: promptNode,
+    character,
+    projectVisualStyle: node.project_visual_style,
+    appearanceLocked: Boolean(character?.appearance_locked),
+  })
+  const identityPrompt = ['character-turnaround', 'character-face-closeup'].includes(requestedViewType)
+    && node.node_type === 'character'
+    ? buildCharacterIdentityLockPrompt(
+      identityLockSnapshot || {},
+      viewPrompt?.viewLabel || requestedViewKey,
+    )
+    : ''
+  const effectiveGenerationPrompt = [generationPrompt, identityPrompt].filter(Boolean).join('\n')
+  if (!effectiveGenerationPrompt) {
+    const error = new Error('请先填写提示词：角色节点可以只靠身份约束生成，场景和道具节点必须写提示词')
+    error.statusCode = 400
+    throw error
+  }
+  const promptSnapshot = buildAssetNodePromptSnapshot({
+    node: promptNode,
+    character,
+    projectVisualStyle: node.project_visual_style,
+    appearanceLocked: Boolean(character?.appearance_locked),
+  })
+  return createGenerationJob({
+    projectId: Number(node.project_id),
+    jobType: 'asset_node_image',
+    sourceId: nodeId,
+    request: {
+      projectId: Number(node.project_id),
+      assetNodeId: nodeId,
+      nodeType: node.node_type,
+      label: node.label,
+      versionNo,
+      candidateCount: viewPrompt?.candidateCount || Math.max(1, Math.min(3, parseId(body.candidateCount) || 1)),
+      imageRatio: assetPackEnabled
+        ? '16:9'
+        : requestedViewType === 'character-face-closeup'
+        ? '1:1'
+        : node.node_type === 'character' ? '9:16' : null,
+      // The requested view set is the durable worker contract. In particular,
+      // a scene-nine-grid batch has no viewKey and therefore no viewPrompt;
+      // it must not fall back to generating another panorama.
+      viewType: requestedViewType || 'single',
+      viewIndex: sceneAngle?.index || viewPrompt?.viewIndex || null,
+      viewKey: sceneAngle?.key || viewPrompt?.viewKey || null,
+      viewLabel: sceneAngle?.label || viewPrompt?.viewLabel || null,
+      modelName: requestedAssetPackModel || String(body.modelName || frameConfig.defaultModel).trim(),
+      qualityAttempts: ['character-turnaround', 'character-face-closeup'].includes(requestedViewType)
+        ? characterDerivedQualityAttempts(body.qualityAttempts, 3)
+        : requestedViewType === 'scene-nine-grid'
+          ? sceneNineGridQualityAttempts(body.qualityAttempts, 5)
+        : 1,
+      prompt: effectiveGenerationPrompt,
+      sceneSpatialAnchors,
+      panoramaImageId,
+      panoramaImageUrl,
+      panoramaStorageKey,
+      // 三视图是纯白背景的角色资产单图，禁止继承节点上的剧情负面词，
+      // 避免把场景/风格上下文重新混入角色视角生成。
+      negativePrompt: viewPrompt || isCharacterTurnaroundBatch
+        ? ['character-turnaround', 'character-face-closeup'].includes(requestedViewType)
+          ? buildCharacterViewNegativePrompt(requestedViewKey, {
+              noFace: node.node_type === 'character'
+                && /正脸不呈现|不直接露脸|不出现正脸|脸部.*不可见/u.test(
+                  [character?.appearance, character?.costume, node.prompt_text].filter(Boolean).join('\n'),
+                ),
+            })
+          : [
+              '场景背景以外的人物主体',
+              '多人',
+              '拼贴',
+              '文字',
+              '水印',
+            ].join('，')
+        : String(node.negative_prompt || '').trim(),
+      // 保存真正发给图片模型的视图提示词；三视图/脸部特写不能只落库基础节点提示词。
+      promptSnapshot: effectiveGenerationPrompt,
+      baseReferenceImageUrl,
+      baseReferenceStorageKey,
+      deterministicFaceCrop: requestedViewType === 'character-face-closeup',
+      assetPackEnabled,
+      sourceImageId: ['character-turnaround', 'character-face-closeup'].includes(requestedViewType)
+        ? baseReferenceImageId
+        : null,
+      viewBatch: isCharacterTurnaroundBatch
+        ? requestedCharacterViewKeys.map((viewKey) => buildAssetNodeViewPrompt({
+            node: promptNode,
+            character,
+            projectVisualStyle: node.project_visual_style,
+            appearanceLocked: Boolean(character?.appearance_locked),
+            viewType: 'character-turnaround',
+            viewKey,
+            referenceImageUrl,
+            baseReferenceImageUrl,
+          }))
+        : null,
+      identityLockSnapshot,
+      identityReferenceImageIds,
+      identityReferenceImageStorageKeys: identityReferenceStorageKeys,
+      referenceImageUrls: identityReferenceImageUrls.length
+        ? identityReferenceImageUrls
+        : viewPrompt?.referenceImageUrls
+        || (baseReferenceImageUrl ? [baseReferenceImageUrl] : null)
+        || resolveCharacterReferenceImageUrls(
+          character?.reference_image_url ? [character.reference_image_url] : [],
+        ),
+      referenceImageStorageKeys: [
+        ...identityReferenceStorageKeys,
+        ...(baseReferenceStorageKey ? [baseReferenceStorageKey] : []),
+        ...(sceneReferenceStorageKey ? [sceneReferenceStorageKey] : []),
+      ].filter((key, index, values) => values.indexOf(key) === index),
+    },
+  })
+}
+
+function seasonEpisodeSceneSpecs(episodes = []) {
+  return episodes.map((episode, index) => ({
+    episode_no: index + 1,
+    scene_no: index + 1,
+    title: episode.title || `第 ${index + 1} 集`,
+    summary: [
+      episode.logline,
+      episode.openingHook ? `开场钩子：${episode.openingHook}` : '',
+      episode.goal ? `本集目标：${episode.goal}` : '',
+      episode.coreConflict ? `核心冲突：${episode.coreConflict}` : '',
+      episode.protagonistChoice ? `主角选择：${episode.protagonistChoice}` : '',
+      episode.irreversibleChange ? `不可逆变化：${episode.irreversibleChange}` : '',
+      episode.endingHook ? `结尾钩子：${episode.endingHook}` : '',
+    ].filter(Boolean).join('\n'),
+    location: null,
+    time_of_day: null,
+    estimated_duration: 120,
+  }))
 }
 
 function matchCharacterId(characterName, characters) {
@@ -4818,8 +10736,173 @@ function parseId(value) {
   return Number.isFinite(n) && n > 0 ? n : 0
 }
 
+function imageMimeType(filePath) {
+  const extension = path.extname(filePath).toLowerCase()
+  if (extension === '.png') return 'image/png'
+  if (extension === '.webp') return 'image/webp'
+  return 'image/jpeg'
+}
+
+async function persistGeneratedImageCandidate({
+  projectId,
+  ownerType,
+  ownerId,
+  versionNo,
+  candidateNo,
+  filePath,
+}) {
+  if (!filePath || !(await fileExists(filePath))) return { storageKey: null }
+
+  const bytes = await readFile(filePath)
+  if (!bytes.length) throw new Error('生成图片文件为空')
+  const extension = path.extname(filePath).toLowerCase() || '.jpg'
+  let storageKey
+  if (ownerType === 'character') {
+    storageKey = buildCharacterImageStorageKey({
+      projectId,
+      characterId: ownerId,
+      versionNo,
+      candidateNo,
+      extension,
+    })
+  } else if (ownerType === 'asset_node') {
+    storageKey = buildAssetNodeImageStorageKey({
+      projectId,
+      assetNodeId: ownerId,
+      versionNo,
+      candidateNo,
+      extension,
+    })
+  } else if (ownerType === 'storyboard') {
+    storageKey = buildGeneratedFrameStorageKey({
+      projectId,
+      storyboardId: ownerId,
+      versionNo,
+      candidateNo,
+      extension,
+    })
+  } else {
+    throw new Error(`unsupported generated image owner type: ${ownerType}`)
+  }
+  const stored = await objectStorage.putObject({
+    key: storageKey,
+    bytes,
+    contentType: imageMimeType(filePath),
+  })
+  return { storageKey, imageUrl: stored.url }
+}
+
+async function materializeSceneNineGridCrops({
+  sourcePath,
+  assetNodeId,
+  versionNo,
+  sourceImageId,
+  sourceImageUrl,
+}) {
+  if (!sourcePath || !(await fileExists(sourcePath))) {
+    throw new Error('九宫格供应商未返回可读取的母图文件，无法建立九个独立场景视角')
+  }
+
+  const source = {
+    sourceImageId: Number(sourceImageId) || null,
+    sourceImageUrl: String(sourceImageUrl || '').trim() || null,
+    viewSetVersion: Number(versionNo) || 1,
+    status: 'candidate',
+  }
+  const descriptors = buildSceneNineGridViewDescriptors(source)
+  const cropRoot = path.join(
+    GENERATED_FRAME_DIR,
+    `asset-node-${Number(assetNodeId)}-v${Number(versionNo)}-nine-grid`,
+  )
+  await mkdir(cropRoot, { recursive: true })
+
+  const files = []
+  for (const descriptor of descriptors) {
+    const outputPath = path.join(cropRoot, `${descriptor.viewIndex}-${descriptor.viewKey}.png`)
+    await runExternalCommand(FFMPEG_BIN, [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-y',
+      '-i',
+      sourcePath,
+      '-vf',
+      buildSceneNineGridCropFilter(descriptor.viewKey),
+      '-frames:v',
+      '1',
+      '-c:v',
+      'png',
+      outputPath,
+    ])
+    if (!(await fileExists(outputPath))) {
+      throw new Error(`九宫格 ${descriptor.viewLabel} 视角裁剪后没有产出图片`)
+    }
+    files.push({ descriptor, filePath: outputPath })
+  }
+  return files
+}
+
+async function materializeCharacterAssetPackCrops({ sourcePath, assetNodeId, versionNo }) {
+  if (!sourcePath || !(await fileExists(sourcePath))) {
+    throw new Error('角色资产板没有可读取的母图文件，无法拆分角色资产')
+  }
+  const cropRoot = path.join(
+    GENERATED_FRAME_DIR,
+    `asset-node-${Number(assetNodeId)}-v${Number(versionNo)}-character-pack`,
+  )
+  await mkdir(cropRoot, { recursive: true })
+  const files = []
+  for (const descriptor of buildCharacterAssetPackDescriptors()) {
+    const viewKey = descriptor.viewKey || 'base'
+    const outputPath = path.join(cropRoot, `${descriptor.viewIndex}-${viewKey}.png`)
+    await runExternalCommand(FFMPEG_BIN, [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-y',
+      '-i',
+      sourcePath,
+      '-vf',
+      buildCharacterAssetPackCropFilter(descriptor.viewKey || ''),
+      '-frames:v',
+      '1',
+      '-c:v',
+      'png',
+      outputPath,
+    ])
+    if (!(await fileExists(outputPath))) throw new Error(`角色资产板 ${descriptor.viewLabel} 拆分失败`)
+    files.push({ descriptor, filePath: outputPath })
+  }
+  return files
+}
+
 function buildMockImageUrl(storyboardId, index, versionNo) {
-  return `http://127.0.0.1:${PORT}/mock/image/${storyboardId}/${versionNo}/${index + 1}.svg`
+  return `${PUBLIC_BASE_URL}/mock/image/${storyboardId}/${versionNo}/${index + 1}.svg`
+}
+
+const PUBLIC_MOCK_ASSET_IMAGE_PATH = path.join(process.cwd(), 'public', 'images', 'login-hero-clean.png')
+
+async function readMockAssetImageBytes() {
+  try {
+    const bytes = await readFile(PUBLIC_MOCK_ASSET_IMAGE_PATH)
+    if (bytes.length) return bytes
+  } catch {
+    // Fall through to the existing mock SVG route if the optional placeholder is unavailable.
+  }
+  return null
+}
+
+async function materializeMockCharacterAssetPackBoard({ assetNodeId, versionNo }) {
+  const bytes = await readMockAssetImageBytes()
+  if (!bytes) throw new Error('本地 mock 资产板占位图不存在，无法拆分角色资产板')
+  const outputDir = path.join(
+    GENERATED_FRAME_DIR,
+    `asset-node-${Number(assetNodeId)}-v${Number(versionNo)}-character-pack`,
+  )
+  await mkdir(outputDir, { recursive: true })
+  const outputPath = path.join(outputDir, 'mock-character-asset-pack-board.png')
+  if (!(await fileExists(outputPath))) await writeFile(outputPath, bytes)
+  return outputPath
 }
 
 function buildMockThumbnailUrl(fullUrl) {
@@ -4827,19 +10910,30 @@ function buildMockThumbnailUrl(fullUrl) {
 }
 
 function buildGeneratedFramePublicBaseUrl() {
-  return `http://127.0.0.1:${PORT}/generated/frame`
+  return `${PUBLIC_BASE_URL}/generated/frame`
 }
 
 function buildGeneratedAudioPublicBaseUrl() {
-  return `http://127.0.0.1:${PORT}/generated/audio`
+  return `${PUBLIC_BASE_URL}/generated/audio`
+}
+
+function buildRequestGeneratedAudioBaseUrl(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim()
+  const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim()
+  const host = forwardedHost || String(req.headers.host || '').trim()
+  if (host) {
+    const protocol = forwardedProto || (req.socket.encrypted ? 'https' : 'http')
+    return `${protocol}://${host}/generated/audio`
+  }
+  return '/generated/audio'
 }
 
 function buildGeneratedVideoPublicBaseUrl() {
-  return `http://127.0.0.1:${PORT}/generated/video`
+  return `${PUBLIC_BASE_URL}/generated/video`
 }
 
 function buildGeneratedExportPublicBaseUrl() {
-  return `http://127.0.0.1:${PORT}/generated/export`
+  return `${PUBLIC_BASE_URL}/generated/export`
 }
 
 function buildMockImageSvg(storyboardId, versionNo, candidateNo) {
@@ -4890,7 +10984,7 @@ function buildMockVideoThumbnailUrl(imageUrl) {
 function buildMockAudioUrl(projectId, trackType, versionNo, candidateNo, source = {}) {
   const sceneId = parseId(source.sceneId) || 0
   const characterId = parseId(source.characterId) || 0
-  return `http://127.0.0.1:${PORT}/mock/audio/${projectId}/${sceneId}/${characterId}/${versionNo}/${trackType}/${candidateNo}.wav`
+  return `${PUBLIC_BASE_URL}/mock/audio/${projectId}/${sceneId}/${characterId}/${versionNo}/${trackType}/${candidateNo}.wav`
 }
 
 function normalizeAudioTrackType(value) {
@@ -4960,14 +11054,138 @@ async function fetchProjectForUser(projectId, userId) {
   return rows[0] || null
 }
 
+async function loadScriptAgentActivity(activityId, projectId, userId) {
+  const [rows] = await db.execute(
+    `SELECT *
+     FROM script_agent_activities
+     WHERE id = ? AND project_id = ? AND user_id = ?
+     LIMIT 1`,
+    [activityId, projectId, userId],
+  )
+  return rows[0] || null
+}
+
+async function listScriptAgentActivities(projectId, userId, limit = 40) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 40))
+  const [rows] = await db.execute(
+    `SELECT *
+     FROM script_agent_activities
+     WHERE project_id = ? AND user_id = ?
+     ORDER BY id DESC
+     LIMIT ${safeLimit}`,
+    [projectId, userId],
+  )
+  return rows.map(scriptAgentActivityRow)
+}
+
 async function fetchProjectById(projectId) {
   const [rows] = await db.execute(`SELECT * FROM projects WHERE id = ? LIMIT 1`, [projectId])
   return rows[0] || null
 }
 
-async function buildExportPackage(projectId) {
+async function getProjectWorkflowReadiness(projectId) {
+  const [scenes] = await db.execute(
+    `SELECT id, episode_no, scene_no, title, summary, content
+     FROM script_scenes WHERE project_id = ?
+     ORDER BY episode_no ASC, sort_order ASC, scene_no ASC, id ASC`,
+    [projectId],
+  )
+  const [stateRows] = await db.execute(
+    `SELECT parsed_script_fingerprint FROM project_workflow_states WHERE project_id = ? LIMIT 1`,
+    [projectId],
+  )
+  const [characters] = await db.execute(
+    `SELECT id FROM characters WHERE project_id = ? AND status <> 'archived'`,
+    [projectId],
+  )
+  const [assetRows] = await db.execute(
+    `SELECT n.id, n.node_type, n.ref_id, n.group_key, n.label,
+            MAX(CASE WHEN ai.status = 'confirmed'
+                      AND ai.image_url NOT LIKE '%/mock-assets/%'
+                      AND (ai.model_name IS NULL OR ai.model_name NOT LIKE 'mock-%')
+                      AND (ai.vision_status = 'passed'
+                           OR (n.node_type = 'scene' AND ai.vision_status = 'skipped')
+                           OR ai.vision_status IS NULL OR ai.vision_status = '')
+                     THEN 1 ELSE 0 END) AS has_confirmed_image
+     FROM asset_nodes n
+     LEFT JOIN asset_node_images ai ON ai.asset_node_id = n.id
+     WHERE n.project_id = ? AND n.status <> 'archived'
+     GROUP BY n.id, n.node_type, n.ref_id, n.group_key, n.label`,
+    [projectId],
+  )
+  const activeNodes = assetRows.map((row) => ({
+    nodeType: String(row.node_type || ''),
+    refId: row.ref_id == null ? null : Number(row.ref_id),
+    groupKey: String(row.group_key || ''),
+    label: String(row.label || ''),
+    state: Number(row.has_confirmed_image) === 1 ? 'confirmed' : 'pending',
+  }))
+  const requiredCharacters = characters.map((character) => {
+    const nodes = activeNodes.filter((node) => node.nodeType === 'character' && node.refId === Number(character.id))
+    if (!nodes.length) return { nodeType: 'character', refId: Number(character.id), exists: false, state: 'missing' }
+    return nodes.map((node) => ({ ...node, exists: true }))
+  }).flat()
+  const requiredScenes = scenes.map((scene) => {
+    const node = activeNodes.find((item) => item.nodeType === 'scene'
+      && Number(findSceneNodeMatch(item, scenes)?.id) === Number(scene.id))
+    if (!node) return { nodeType: 'scene', refId: Number(scene.id), exists: false, state: 'missing' }
+    return { ...node, exists: true }
+  })
+  const gates = evaluateCreativeWorkflowGates({
+    scenes,
+    parsedFingerprint: stateRows[0]?.parsed_script_fingerprint || '',
+    requiredAssets: [...requiredCharacters, ...requiredScenes, ...activeNodes.filter((node) => ['prop', 'tool', 'material'].includes(node.nodeType)).map((node) => ({ ...node, exists: true }))],
+  })
+  return gates
+}
+
+async function persistParsedScriptFingerprint(projectId) {
+  const [scenes] = await db.execute(
+    `SELECT id, episode_no, scene_no, title, summary, content
+     FROM script_scenes WHERE project_id = ?
+     ORDER BY episode_no ASC, sort_order ASC, scene_no ASC, id ASC`,
+    [projectId],
+  )
+  if (!scenes.length || scenes.some((scene) => !String(scene.content || '').trim())) {
+    const error = new Error('所有场景正文必须先生成并保存，才能完成剧本解析。')
+    error.statusCode = 409
+    throw error
+  }
+  const [characters] = await db.execute(
+    `SELECT id FROM characters WHERE project_id = ? AND status <> 'archived'`,
+    [projectId],
+  )
+  const [nodes] = await db.execute(
+    `SELECT node_type, ref_id, group_key, label FROM asset_nodes
+     WHERE project_id = ? AND status <> 'archived'`,
+    [projectId],
+  )
+  const missingCharacter = characters.some((character) => !nodes.some((node) =>
+    node.node_type === 'character' && Number(node.ref_id) === Number(character.id),
+  ))
+  const missingScene = scenes.some((scene) => !nodes.some((node) =>
+    node.node_type === 'scene' && Number(findSceneNodeMatch(node, [scene])?.id) === Number(scene.id),
+  ))
+  if (missingCharacter || missingScene) {
+    const error = new Error('剧本解析结果不完整，请重新执行角色与场景解析。')
+    error.statusCode = 409
+    throw error
+  }
+  const fingerprint = createScriptFingerprint(scenes)
+  await db.execute(
+    `INSERT INTO project_workflow_states (project_id, parsed_script_fingerprint, parsed_at)
+     VALUES (?, ?, NOW())
+     ON DUPLICATE KEY UPDATE parsed_script_fingerprint = VALUES(parsed_script_fingerprint), parsed_at = NOW()`,
+    [projectId, fingerprint],
+  )
+}
+
+async function buildExportPackage(projectId, { episodeNo = null } = {}) {
+  const scopedEpisodeNo = parseId(episodeNo) || 0
+  const episodeFilter = scopedEpisodeNo ? ' AND sc.episode_no = ?' : ''
   const [rows] = await db.execute(
     `SELECT sc.id AS scene_id,
+            sc.episode_no,
             sc.scene_no,
             sc.title AS scene_title,
             s.id AS storyboard_id,
@@ -4998,8 +11216,9 @@ async function buildExportPackage(projectId) {
        ) latest_confirmed ON latest_confirmed.latest_id = va.id
      ) cva ON cva.storyboard_id = s.id
      WHERE sc.project_id = ?
+       ${episodeFilter}
      ORDER BY sc.scene_no ASC, s.sort_order ASC, s.id ASC`,
-    [projectId],
+    scopedEpisodeNo ? [projectId, scopedEpisodeNo] : [projectId],
   )
 
   const rawVideoItems = rows
@@ -5020,7 +11239,7 @@ async function buildExportPackage(projectId) {
     })
 
   const draftRow = await fetchFinalEditDraft(projectId)
-  const normalizedDraft = normalizeFinalEditDraft(draftRow?.draft_json, {
+  const normalizedDraft = normalizeFinalEditDraftPayload(selectFinalEditDraftForEpisode(draftRow?.draft_json, scopedEpisodeNo), {
     videoItems: rawVideoItems,
     audioTracks: null,
   })
@@ -5030,6 +11249,11 @@ async function buildExportPackage(projectId) {
       {
         enabled: item.enabled !== false,
         order: parseId(item.order) || index + 1,
+        videoAssetId: parseId(item.videoAssetId) || null,
+        trimStartSeconds: item.trimStartSeconds,
+        trimEndSeconds: item.trimEndSeconds,
+        transition: item.transition,
+        transitionManual: item.transitionManual === true,
       },
     ]),
   )
@@ -5080,6 +11304,7 @@ async function buildExportPackage(projectId) {
 
     items.push({
       sceneId: row.scene_id,
+      episodeNo: Number(row.episode_no || 1),
       sceneNo: row.scene_no,
       sceneTitle: row.scene_title,
       storyboardId: row.storyboard_id,
@@ -5119,9 +11344,22 @@ async function buildExportPackage(projectId) {
       message: '当前所有视频片段都被禁用了，导出前至少保留一个启用片段。',
     })
   }
+  if (scopedEpisodeNo && totalShots === 0) {
+    blockingIssues.push({
+      code: 'episode-storyboard-manifest-empty',
+      message: `第 ${scopedEpisodeNo} 集还没有已保存的分镜，不能生成整集成片。`,
+    })
+  }
+  if (scopedEpisodeNo && missingVideoCount > 0) {
+    blockingIssues.push({
+      code: 'episode-missing-confirmed-videos',
+      message: `第 ${scopedEpisodeNo} 集还有 ${missingVideoCount} 个分镜缺少已确认视频，整集成片已阻止。`,
+    })
+  }
 
   return {
     projectId,
+    episodeNo: scopedEpisodeNo || null,
     coverUrl,
     totalShots,
     readyShots,
@@ -5147,6 +11385,12 @@ function queueExportJob(exportId) {
 }
 
 async function processExportJob(exportId) {
+  // 导出任务的完整执行流程：
+  // 1. 读取导出配置和最终剪辑草稿
+  // 2. 计算对白/旁白可能撑开的镜头时长
+  // 3. 按每个场景限制真实视频数量，其余镜头用静帧转成视频
+  // 4. 调 FFmpeg 混合视频、音频和字幕
+  // 5. 更新 export_records，供前端轮询和播放
   const [rows] = await db.execute(`SELECT * FROM export_records WHERE id = ? LIMIT 1`, [exportId])
   const record = rows[0]
   if (!record || ['completed', 'failed'].includes(record.status)) return
@@ -5164,7 +11408,8 @@ async function processExportJob(exportId) {
   try {
     const project = await fetchProjectById(Number(record.project_id))
     if (!project) throw new Error('project not found for export')
-    const finalEditPayload = await buildProjectFinalEdit(project)
+    const requestedEpisode = normalizeEpisodeExportRequest({ episodeNo: config.episodeNo }).episodeNo
+    const finalEditPayload = await buildProjectFinalEdit(project, { episodeNo: requestedEpisode })
     const speechDurationByStoryboard = new Map()
     for (const trackKey of ['dialogue', 'narration']) {
       for (const item of finalEditPayload.audioTracks?.[trackKey] || []) {
@@ -5178,22 +11423,131 @@ async function processExportJob(exportId) {
         )
       }
     }
-    const sourceClips = finalEditPayload.videoTrack.items
-      .filter((item) => item.enabled !== false)
+    let selectedClips
+    try {
+      selectedClips = selectExportClips(
+        finalEditPayload.videoTrack.items,
+        config.finalEditDraft || {},
+        {
+          episodeNo: requestedEpisode,
+          storyboardIds: requestedEpisode ? finalEditPayload.summary.storyboardIds : undefined,
+        },
+      )
+    } catch (error) {
+      if (!requestedEpisode) throw error
+      const message = error instanceof Error ? error.message : '整集分镜素材不完整'
+      const missingIds = [...new Set(
+        (Array.isArray(error?.storyboardIds) ? error.storyboardIds : [])
+          .map((id) => Number(id))
+          .filter((id) => id > 0),
+      )]
+      const issueShots = missingIds.map((storyboardId) => ({
+        storyboardId,
+        code: 'missing-confirmed-video',
+        message: `分镜 ${storyboardId} 缺少已确认视频`,
+      }))
+      const cinematicQualityReport = evaluateCinematicQuality({
+        plan: { planVersion: 'cinematic-edit-plan-v1', sourceCandidatePreserved: true, clips: [] },
+        sources: finalEditPayload.videoTrack.items,
+        rendered: {
+          outputExists: false,
+          durationSeconds: 0,
+          blockingIssues: [{ code: error?.code || 'episode-source-selection-blocked', message }],
+          issueShots,
+        },
+      })
+      const blockedConfig = {
+        ...config,
+        episodeNo: requestedEpisode,
+        pipeline: 'cinematic-final-edit-v1',
+        cinematicQualityReport,
+      }
+      await db.execute(
+        `UPDATE export_records SET status = 'blocked', config_json = ?, updated_at = NOW() WHERE id = ?`,
+        [JSON.stringify(blockedConfig), exportId],
+      )
+      return
+    }
+    const sourceClips = selectedClips
       .map((item) => ({
         ...item,
-        durationSeconds: Math.max(
-          Number(item.durationSeconds) || 0,
-          speechDurationByStoryboard.get(Number(item.storyboardId)) || 0,
-        ),
+        durationSeconds: config.episodeNo
+          ? Number(item.durationSeconds) || 0
+          : Math.max(
+              Number(item.durationSeconds) || 0,
+              speechDurationByStoryboard.get(Number(item.storyboardId)) || 0,
+            ),
       }))
+    const draftClipByStoryboardId = new Map(
+      (Array.isArray(config.finalEditDraft?.videoClips) ? config.finalEditDraft.videoClips : [])
+        .map((item) => [Number(item?.storyboardId), item])
+        .filter(([storyboardId]) => storyboardId > 0),
+    )
+    const cinematicPlanSources = sourceClips.map((item) => {
+      const draftItem = draftClipByStoryboardId.get(Number(item.storyboardId))
+      return {
+        ...item,
+        videoAssetId: Number(item.videoAssetId || item.id || 0) || null,
+        ...(draftItem
+          ? {
+              trimStartSeconds: draftItem.trimStartSeconds,
+              trimEndSeconds: draftItem.trimEndSeconds,
+              transition: draftItem.transition,
+            }
+          : {}),
+      }
+    })
+    const cinematicEditPlan = buildCinematicEditPlan({
+      sources: cinematicPlanSources,
+      mode: draftClipByStoryboardId.size ? 'automatic-with-user-edits' : 'automatic',
+    })
+    const cinematicPlanValidation = validateCinematicEditPlan({
+      plan: cinematicEditPlan,
+      sources: cinematicPlanSources,
+    })
+    if (!cinematicPlanValidation.passed) {
+      const qualityReport = evaluateCinematicQuality({
+        plan: cinematicEditPlan,
+        sources: cinematicPlanSources,
+        rendered: {
+          outputExists: false,
+          durationSeconds: 0,
+          blockingIssues: cinematicPlanValidation.blockers,
+          issueShots: [],
+        },
+      })
+      await db.execute(
+        `UPDATE export_records SET status = 'blocked', config_json = ?, updated_at = NOW() WHERE id = ?`,
+        [JSON.stringify({
+          ...config,
+          pipeline: 'cinematic-final-edit-v1',
+          cinematicEditPlan,
+          cinematicQualityReport: qualityReport,
+        }), exportId],
+      )
+      return
+    }
+    const plannedClipByStoryboardId = new Map(
+      cinematicEditPlan.clips.map((clip) => [Number(clip.storyboardId), clip]),
+    )
+    const plannedSourceClips = sourceClips.map((item) => {
+      const planClip = plannedClipByStoryboardId.get(Number(item.storyboardId))
+      if (!planClip) return item
+      return {
+        ...item,
+        trimStartSeconds: planClip.trimStartSeconds,
+        trimEndSeconds: planClip.trimEndSeconds,
+        durationSeconds: Number(Math.max(0.25, planClip.trimEndSeconds - planClip.trimStartSeconds).toFixed(3)),
+        transition: planClip.transition,
+      }
+    })
     const hybridVideoPerScene = Math.max(
       1,
       Math.min(6, Number(config.hybridVideoPerScene) || Number(config.hybridVideoLimit) || 4),
     )
     const realVideoByScene = new Map()
     let realVideoCount = 0
-    const clips = sourceClips.map((item) => {
+    const clips = plannedSourceClips.map((item) => {
       const sceneKey = Number(item.sceneId) || Number(item.sceneNo) || 'unknown'
       const sceneRealVideoCount = realVideoByScene.get(sceneKey) || 0
       if (item.sourceType === 'video' && item.videoUrl && sceneRealVideoCount < hybridVideoPerScene) {
@@ -5205,17 +11559,82 @@ async function processExportJob(exportId) {
       return item
     })
     if (!clips.length) throw new Error('no enabled mixed-media clips')
+    const episodeExportPolicy = resolveEpisodeExportPolicy({ episodeNo: requestedEpisode }) || {}
+    const renderConfig = { ...config, ...episodeExportPolicy }
     const rendered = await renderHybridExport({
       exportId,
       projectId: Number(record.project_id),
-      config,
+      config: renderConfig,
       clips,
       audioTracks: finalEditPayload.audioTracks,
+      editPlan: cinematicEditPlan,
     })
-    const videoUrl = `${buildGeneratedExportPublicBaseUrl()}/${exportId}`
-    const coverUrl = clips[0]?.thumbnailUrl || clips[0]?.imageUrl || record.cover_url || null
+    const expectedEpisodeAudio = requestedEpisode
+      && (config.preserveSourceAudio === true || Object.entries(finalEditPayload.audioTracks || {}).some(([trackKey, items]) =>
+        config.finalEditDraft?.audioMix?.[trackKey]?.enabled !== false
+        && Array.isArray(items)
+        && items.some((item) => item?.audioUrl),
+      ))
+    const finalInspection = await inspectVideoCandidateFile({
+      filePath: rendered.finalPath,
+      expected: { durationSeconds: rendered.durationSeconds, requiresAudio: expectedEpisodeAudio },
+      ffprobeBin: FFPROBE_BIN,
+      ffmpegBin: FFMPEG_BIN,
+    })
+    const renderedIssueShots = (rendered.skipped || [])
+      .filter((item) => Number(item?.storyboardId) > 0)
+      .map((item) => ({
+        storyboardId: Number(item.storyboardId),
+        code: 'rendered-shot-skipped',
+        message: `分镜 ${item.storyboardId} 未进入成片：${item.reason || '渲染失败'}`,
+      }))
+    const audioRenderIssues = resolveCinematicAudioRenderIssues({ skipped: rendered.skipped })
+    const inspectionIssues = resolveCinematicInspectionIssues({
+      inspection: finalInspection,
+      requiresAudio: expectedEpisodeAudio,
+    })
+    const cinematicQualityReport = evaluateCinematicQuality({
+      plan: cinematicEditPlan,
+      sources: clips,
+      rendered: {
+        outputExists: await fileExists(rendered.finalPath),
+        durationSeconds: rendered.durationSeconds,
+        blockingIssues: [...inspectionIssues.blockers, ...audioRenderIssues.blockers],
+        warnings: inspectionIssues.warnings,
+        issueShots: [...renderedIssueShots, ...audioRenderIssues.issueShots],
+      },
+    })
+    const exportStorageKey = buildExportStorageKey({
+      projectId: Number(record.project_id),
+      exportId,
+      extension: '.mp4',
+    })
+    const subtitleStorageKey = buildExportStorageKey({
+      projectId: Number(record.project_id),
+      exportId,
+      extension: '.srt',
+    })
+    const [storedExport, storedSubtitles] = await Promise.all([
+      objectStorage.putObject({
+        key: exportStorageKey,
+        bytes: await readFile(rendered.finalPath),
+        contentType: 'video/mp4',
+      }),
+      rendered.subtitlePath
+        ? objectStorage.putObject({
+            key: subtitleStorageKey,
+            bytes: await readFile(rendered.subtitlePath),
+            contentType: 'application/x-subrip; charset=utf-8',
+          })
+        : Promise.resolve(null),
+    ])
+    const videoUrl = storedExport.url
+    const coverCandidate = clips[0]?.thumbnailUrl || clips[0]?.imageUrl || record.cover_url || null
+    const coverUrl = coverCandidate && !/\.(?:mp4|mov|webm|tiff?)(?:$|\?)/i.test(String(coverCandidate))
+      ? coverCandidate
+      : null
     const resultConfig = {
-      ...config,
+      ...renderConfig,
       pipeline: 'hybrid-mvp',
       strictStoryboardAudio: config.strictStoryboardAudio !== false,
       sourceClipCount: clips.length,
@@ -5226,25 +11645,81 @@ async function processExportJob(exportId) {
       boundAudioCount: rendered.boundAudioCount,
       skippedLegacyAudioCount: rendered.skippedLegacyAudioCount,
       skipped: rendered.skipped,
-      subtitleFile: `${buildGeneratedExportPublicBaseUrl()}/${exportId}/subtitles.srt`,
+      subtitleFile: storedSubtitles?.url || null,
+      subtitleStorageKey: storedSubtitles?.key || null,
+      subtitleGenerated: Boolean(storedSubtitles),
+      boundaryEvidence: rendered.boundaryEvidence || [],
+      sourceAudioPreserved: rendered.sourceAudioPreserved === true,
+      cinematicEditPlan,
+      cinematicQualityReport,
+      technicalQuality: {
+        status: cinematicQualityReport.passed ? 'passed' : 'failed',
+        automaticPassed: cinematicQualityReport.passed,
+        inspectedMedia: finalInspection.metrics || null,
+        blockingIssues: cinematicQualityReport.blockers,
+      },
     }
+    const exportStatus = resolveCinematicExportStatus(cinematicQualityReport)
     await db.execute(
       `UPDATE export_records
-       SET status = 'completed', video_url = ?, cover_url = ?, duration_seconds = ?, config_json = ?, updated_at = NOW()
+       SET status = ?, video_url = ?, storage_key = ?, subtitle_storage_key = ?, cover_url = ?, duration_seconds = ?, config_json = ?, updated_at = NOW()
        WHERE id = ?`,
-      [videoUrl, coverUrl, rendered.durationSeconds, JSON.stringify(resultConfig), exportId],
+      [
+        exportStatus,
+        videoUrl,
+        storedExport.key,
+        storedSubtitles?.key || null,
+        coverUrl,
+        rendered.durationSeconds,
+        JSON.stringify(resultConfig),
+        exportId,
+      ],
     )
   } catch (error) {
     const message = sanitizeProviderError(error)
+    const failedShotId = Number(message.match(/分镜\s*(\d+)/)?.[1]) || null
+    const requestedEpisode = parseId(config.episodeNo) || 0
+    const cinematicQualityReport = requestedEpisode
+      ? evaluateCinematicQuality({
+          plan: config.cinematicEditPlan || {
+            planVersion: 'cinematic-edit-plan-v1',
+            sourceCandidatePreserved: true,
+            clips: [],
+          },
+          sources: [],
+          rendered: {
+            outputExists: false,
+            durationSeconds: 0,
+            blockingIssues: [{
+              code: 'episode-render-failed',
+              message: `第 ${requestedEpisode} 集成片渲染未完成：${message}`,
+            }],
+            issueShots: failedShotId
+              ? [{
+                  storyboardId: failedShotId,
+                  code: 'episode-render-failed',
+                  message: `分镜 ${failedShotId} 渲染失败：${message}`,
+                }]
+              : [],
+          },
+        })
+      : null
+    const failureConfig = {
+      ...config,
+      pipeline: 'cinematic-final-edit-v1',
+      error: message,
+      ...(cinematicQualityReport ? { cinematicQualityReport } : {}),
+    }
     await db.execute(
-      `UPDATE export_records SET status = 'failed', config_json = ?, updated_at = NOW() WHERE id = ?`,
-      [JSON.stringify({ ...config, pipeline: 'hybrid-mvp', error: message }), exportId],
+      `UPDATE export_records SET status = ?, config_json = ?, updated_at = NOW() WHERE id = ?`,
+      [requestedEpisode ? 'blocked' : 'failed', JSON.stringify(failureConfig), exportId],
     )
     console.error(`[export-job:${exportId}] ${message}`)
   }
 }
 
 async function resumeExportJobs() {
+  // 服务重启后恢复 queued/running 的导出记录。
   try {
     const [rows] = await db.execute(
       `SELECT id FROM export_records WHERE status IN ('queued', 'running') ORDER BY id ASC`,
@@ -5259,7 +11734,7 @@ async function buildProjectAssets(projectId) {
   const [characterRows] = await db.execute(
     `SELECT *
      FROM characters
-     WHERE project_id = ?
+     WHERE project_id = ? AND status <> 'archived'
      ORDER BY updated_at DESC, id DESC`,
     [projectId],
   )
@@ -5275,7 +11750,7 @@ async function buildProjectAssets(projectId) {
      FROM image_assets ia
      INNER JOIN storyboards s ON s.id = ia.storyboard_id
      INNER JOIN script_scenes sc ON sc.id = s.scene_id
-     WHERE sc.project_id = ?
+     WHERE sc.project_id = ? AND ia.status <> 'archived'
      ORDER BY ia.created_at DESC, ia.id DESC`,
     [projectId],
   )
@@ -5291,7 +11766,7 @@ async function buildProjectAssets(projectId) {
      FROM video_assets va
      INNER JOIN storyboards s ON s.id = va.storyboard_id
      INNER JOIN script_scenes sc ON sc.id = s.scene_id
-     WHERE sc.project_id = ?
+     WHERE sc.project_id = ? AND va.status <> 'archived'
      ORDER BY va.created_at DESC, va.id DESC`,
     [projectId],
   )
@@ -5306,7 +11781,7 @@ async function buildProjectAssets(projectId) {
      LEFT JOIN script_scenes sc ON sc.id = aa.scene_id
      LEFT JOIN storyboards sb ON sb.id = aa.storyboard_id
      LEFT JOIN characters c ON c.id = aa.character_id
-     WHERE aa.project_id = ?
+     WHERE aa.project_id = ? AND aa.status <> 'archived'
      ORDER BY aa.created_at DESC, aa.id DESC`,
     [projectId],
   )
@@ -5491,11 +11966,14 @@ async function buildProjectTasks(projectId) {
             sc.scene_no,
             sc.title AS scene_title,
             s.shot_no,
-            c.name AS character_name
+            c.name AS character_name,
+            an.label AS asset_node_label,
+            an.node_type AS asset_node_type
      FROM generation_jobs gj
-     LEFT JOIN storyboards s ON gj.job_type IN ('frame_image', 'lip_sync') AND s.id = gj.source_id
+     LEFT JOIN storyboards s ON gj.job_type IN ('frame_image', 'video_image', 'lip_sync') AND s.id = gj.source_id
      LEFT JOIN script_scenes sc ON sc.id = s.scene_id
      LEFT JOIN characters c ON gj.job_type = 'character_image' AND c.id = gj.source_id
+     LEFT JOIN asset_nodes an ON gj.job_type = 'asset_node_image' AND an.id = gj.source_id
      WHERE gj.project_id = ?
      ORDER BY gj.created_at DESC, gj.id DESC`,
     [projectId],
@@ -5703,11 +12181,14 @@ async function buildProjectTasksV2(projectId) {
             sc.scene_no,
             sc.title AS scene_title,
             s.shot_no,
-            c.name AS character_name
+            c.name AS character_name,
+            an.label AS asset_node_label,
+            an.node_type AS asset_node_type
      FROM generation_jobs gj
-     LEFT JOIN storyboards s ON gj.job_type IN ('frame_image', 'lip_sync') AND s.id = gj.source_id
+     LEFT JOIN storyboards s ON gj.job_type IN ('frame_image', 'video_image', 'lip_sync') AND s.id = gj.source_id
      LEFT JOIN script_scenes sc ON sc.id = s.scene_id
      LEFT JOIN characters c ON gj.job_type = 'character_image' AND c.id = gj.source_id
+     LEFT JOIN asset_nodes an ON gj.job_type = 'asset_node_image' AND an.id = gj.source_id
      WHERE gj.project_id = ?
      ORDER BY gj.created_at DESC, gj.id DESC`,
     [projectId],
@@ -5719,41 +12200,75 @@ async function buildProjectTasksV2(projectId) {
 
   for (const row of generationJobRows) {
     const isCharacter = row.job_type === 'character_image'
+    const isAssetNode = row.job_type === 'asset_node_image'
     const isLipSync = row.job_type === 'lip_sync'
+    const isVideoGeneration = row.job_type === 'video_image'
+    const isVideoTask = isLipSync || isVideoGeneration
     const jobResult = safeJsonParse(row.result_json, null)
     const firstResult = isLipSync ? jobResult?.item || null : jobResult?.items?.[0] || null
     rawItems.push({
       taskKey: `generation-${row.id}`,
-      taskType: isLipSync ? 'video' : 'image',
+      taskType: isVideoTask ? 'video' : 'image',
       sourceId: Number(row.id),
       projectId,
       sceneId: row.scene_id || null,
       sceneNo: row.scene_no || null,
       sceneTitle: row.scene_title || null,
-      storyboardId: isCharacter ? null : Number(row.source_id),
+      storyboardId: isCharacter || isAssetNode ? null : Number(row.source_id),
       characterId: isCharacter ? Number(row.source_id) : null,
+      assetNodeId: isAssetNode ? Number(row.source_id) : null,
       shotNo: row.shot_no || null,
       versionNo: null,
       title: isCharacter
         ? `${row.character_name || '角色'} 定妆图生成`
+        : isAssetNode
+          ? `${row.asset_node_label || '资产节点'} 形象生成`
         : isLipSync
           ? `Scene ${String(row.scene_no || 0).padStart(2, '0')} / ${row.shot_no || 'SHOT'} 对白口型同步`
-          : `Scene ${String(row.scene_no || 0).padStart(2, '0')} / ${row.shot_no || 'SHOT'} 静帧生成`,
+          : isVideoGeneration
+            ? `Scene ${String(row.scene_no || 0).padStart(2, '0')} / ${row.shot_no || 'SHOT'} 视频生成`
+            : `Scene ${String(row.scene_no || 0).padStart(2, '0')} / ${row.shot_no || 'SHOT'} 静帧生成`,
       subtitle: row.status === 'success' ? '生成完成' : row.status === 'failed' ? '生成失败' : '后台处理中',
       status: row.status === 'success' ? 'completed' : row.status,
-      previewUrl: firstResult?.thumbnailUrl || firstResult?.imageUrl || null,
-      fileUrl: firstResult?.videoUrl || firstResult?.imageUrl || null,
-      detailText: isCharacter ? '角色定妆图生成任务' : isLipSync ? '中文对白驱动口型视频' : '分镜静帧生成任务',
+      previewUrl: normalizeGeneratedMediaUrl(
+        firstResult?.thumbnailUrl || firstResult?.imageUrl || null,
+        PUBLIC_BASE_URL,
+      ),
+      fileUrl: normalizeGeneratedMediaUrl(
+        firstResult?.videoUrl || firstResult?.imageUrl || null,
+        PUBLIC_BASE_URL,
+      ),
+      detailText: isCharacter
+        ? '角色定妆图生成任务'
+        : isAssetNode
+          ? `资产画布${row.asset_node_type === 'character' ? '角色形象' : '节点图片'}生成任务`
+        : isLipSync
+          ? '中文对白驱动口型视频'
+          : isVideoGeneration
+            ? '分镜动作视频生成并持久化任务'
+            : '分镜静帧生成任务',
       runtimeStatus: row.status,
       progressPercent: Number(row.progress_percent || 0),
       runtimeMessage:
         row.status === 'queued'
           ? '生成任务正在排队'
           : row.status === 'running'
-            ? isLipSync ? '正在同步中文对白与人物口型' : '正在调用图片生成模型'
+            ? isLipSync
+              ? '正在同步中文对白与人物口型'
+              : isVideoGeneration
+                ? '正在生成并下载动作视频'
+                : '正在调用图片生成模型'
             : row.status === 'success'
-              ? isLipSync ? '口型视频已生成并保存到本地' : '图片候选已生成'
-              : isLipSync ? '口型同步失败' : '图片生成失败',
+              ? isLipSync
+                ? '口型视频已生成并保存到本地'
+                : isVideoGeneration
+                  ? '动作视频已生成并保存到本地'
+                  : '图片候选已生成'
+              : isLipSync
+                ? '口型同步失败'
+                : isVideoGeneration
+                  ? '动作视频生成失败'
+                  : '图片生成失败',
       errorText: row.error_text || null,
       canRetry: row.status === 'failed' || row.status === 'canceled',
       canCancel: false,
@@ -5910,22 +12425,33 @@ async function buildProjectTasksV2(projectId) {
   }
 }
 
-async function buildProjectFinalEdit(project) {
+async function buildProjectFinalEdit(project, { episodeNo = null } = {}) {
   const projectId = Number(project.id)
+  const scopedEpisodeNo = parseId(episodeNo) || 0
+  const episodeFilter = scopedEpisodeNo ? ' AND sc.episode_no = ?' : ''
   const [completenessRows] = await db.execute(
     `SELECT COUNT(s.id) AS total_storyboard_count,
             SUM(CASE WHEN s.id IS NULL THEN 1 ELSE 0 END) AS missing_storyboard_scene_count
      FROM script_scenes sc
      LEFT JOIN storyboards s ON s.scene_id = sc.id
-     WHERE sc.project_id = ?`,
-    [projectId],
+     WHERE sc.project_id = ? ${episodeFilter}`,
+    scopedEpisodeNo ? [projectId, scopedEpisodeNo] : [projectId],
   )
   const projectCompleteness = {
     totalStoryboardCount: Number(completenessRows[0]?.total_storyboard_count || 0),
     missingStoryboardSceneCount: Number(completenessRows[0]?.missing_storyboard_scene_count || 0),
   }
+  const [manifestRows] = await db.execute(
+    `SELECT s.id AS storyboard_id
+     FROM script_scenes sc
+     INNER JOIN storyboards s ON s.scene_id = sc.id
+     WHERE sc.project_id = ? ${episodeFilter}
+     ORDER BY sc.episode_no ASC, sc.scene_no ASC, s.sort_order ASC, s.id ASC`,
+    scopedEpisodeNo ? [projectId, scopedEpisodeNo] : [projectId],
+  )
   const [videoRows] = await db.execute(
     `SELECT sc.id AS scene_id,
+            sc.episode_no,
             sc.scene_no,
             sc.title AS scene_title,
             s.id AS storyboard_id,
@@ -5936,12 +12462,14 @@ async function buildProjectFinalEdit(project) {
             s.sort_order,
             va.id AS video_asset_id,
             va.video_url,
+            va.storage_key AS video_storage_key,
             va.thumbnail_url,
             va.duration_seconds AS video_duration_seconds,
             va.version_no AS video_version_no,
             va.confirmed_at AS video_confirmed_at,
             ia.id AS image_asset_id,
             ia.image_url AS confirmed_image_url,
+            ia.storage_key AS image_storage_key,
             ia.thumbnail_url AS confirmed_image_thumbnail_url
      FROM script_scenes sc
      INNER JOIN storyboards s ON s.scene_id = sc.id
@@ -5965,14 +12493,15 @@ async function buildProjectFinalEdit(project) {
          GROUP BY storyboard_id
        ) latest_confirmed_images ON latest_confirmed_images.latest_id = i1.id
      ) ia ON ia.storyboard_id = s.id
-     WHERE sc.project_id = ?
-       AND (va.id IS NOT NULL OR ia.id IS NOT NULL)
+     WHERE sc.project_id = ? ${episodeFilter}
+       AND (va.id IS NOT NULL OR ia.id IS NOT NULL OR ? = 1)
      ORDER BY sc.scene_no ASC, s.sort_order ASC, s.id ASC`,
-    [projectId],
+    scopedEpisodeNo ? [projectId, scopedEpisodeNo, 1] : [projectId, 0],
   )
 
   const [audioRows] = await db.execute(
     `SELECT aa.*,
+            sc.episode_no,
             sb.shot_no AS storyboard_shot_no,
             sb.duration_seconds AS storyboard_duration_seconds,
             sc.scene_no,
@@ -5983,6 +12512,7 @@ async function buildProjectFinalEdit(project) {
      LEFT JOIN script_scenes sc ON sc.id = aa.scene_id
      LEFT JOIN characters c ON c.id = aa.character_id
      WHERE aa.project_id = ? AND aa.status = 'confirmed'
+       AND (? = 0 OR sc.episode_no = ? OR (aa.scene_id IS NULL AND aa.storyboard_id IS NULL))
      ORDER BY CASE aa.track_type
                 WHEN 'dialogue' THEN 1
                 WHEN 'narration' THEN 2
@@ -5992,7 +12522,7 @@ async function buildProjectFinalEdit(project) {
               END ASC,
               aa.scene_id ASC,
               aa.id ASC`,
-    [projectId],
+    [projectId, scopedEpisodeNo, scopedEpisodeNo],
   )
 
   const audioTracks = {
@@ -6013,21 +12543,32 @@ async function buildProjectFinalEdit(project) {
           ? Number(row.storyboard_duration_seconds)
         : 4
     totalSourceDurationSeconds += durationSeconds
-    const imageUrl = row.confirmed_image_url || row.image_url || null
+    const imageUrl = row.image_storage_key
+      ? resolveObjectStorageUrl(row.image_storage_key, row.confirmed_image_url || row.image_url)
+      : row.confirmed_image_url || row.image_url || null
     const hasVideo = Boolean(row.video_asset_id && row.video_url)
     videoItems.push({
       storyboardId: row.storyboard_id,
       sceneId: row.scene_id,
+      episodeNo: Number(row.episode_no || 1),
       sceneNo: row.scene_no,
       sceneTitle: row.scene_title,
       shotNo: row.shot_no,
       shotType: row.shot_type,
       dialogueText: row.dialogue_text || null,
       durationSeconds,
+      sourceDurationSeconds: durationSeconds,
+      videoAssetId: row.video_asset_id ? Number(row.video_asset_id) : null,
       sourceType: hasVideo ? 'video' : 'static',
-      videoUrl: hasVideo ? row.video_url : null,
+      videoUrl: hasVideo
+        ? row.video_storage_key
+          ? resolveObjectStorageUrl(row.video_storage_key, row.video_url)
+          : normalizeGeneratedMediaUrl(row.video_url, PUBLIC_BASE_URL)
+        : null,
       imageUrl,
-      thumbnailUrl: row.thumbnail_url || row.confirmed_image_thumbnail_url || imageUrl || null,
+      thumbnailUrl: row.video_storage_key
+        ? resolveObjectStorageUrl(row.video_storage_key, row.thumbnail_url || row.video_url)
+        : row.thumbnail_url || row.confirmed_image_thumbnail_url || imageUrl || null,
       versionNo: row.video_version_no || 1,
       confirmedAt: row.video_confirmed_at || null,
       sortOrder: row.sort_order || 0,
@@ -6036,10 +12577,12 @@ async function buildProjectFinalEdit(project) {
     })
   }
 
-  for (const row of audioRows) {
+  for (const rawRow of audioRows) {
+    const row = await ensureAudioAssetStorage(rawRow)
     const item = {
       id: row.id,
       projectId: row.project_id,
+      episodeNo: Number(row.episode_no || 0) || null,
       trackType: row.track_type,
       sceneId: row.scene_id || null,
       storyboardId: row.storyboard_id || null,
@@ -6047,7 +12590,9 @@ async function buildProjectFinalEdit(project) {
       characterId: row.character_id || null,
       versionNo: row.version_no || 1,
       title: resolveAudioSourceTitle({ ...row, project_name: project.name }),
-      audioUrl: row.audio_url,
+      audioUrl: row.storage_key
+        ? resolveObjectStorageUrl(row.storage_key, row.audio_url)
+        : row.audio_url,
       durationSeconds:
         Number.isFinite(Number(row.duration_seconds)) && Number(row.duration_seconds) > 0
           ? Number(row.duration_seconds)
@@ -6064,36 +12609,15 @@ async function buildProjectFinalEdit(project) {
   }
 
   const draftRow = await fetchFinalEditDraft(projectId)
-  const normalizedDraft = normalizeFinalEditDraft(draftRow?.draft_json, {
+  const selectedDraft = selectFinalEditDraftForEpisode(draftRow?.draft_json, scopedEpisodeNo)
+  const normalizedDraft = normalizeFinalEditDraftPayload(selectedDraft, {
     videoItems,
     audioTracks,
   })
 
-  const draftVideoMap = new Map(
-    normalizedDraft.videoClips.map((item, index) => [
-      item.storyboardId,
-      {
-        enabled: item.enabled !== false,
-        order: parseId(item.order) || index + 1,
-      },
-    ]),
-  )
-  const hasDraftVideoClips = draftVideoMap.size > 0
-  const nextFallbackOrder = draftVideoMap.size + 1
-  videoItems.forEach((item, index) => {
-    const draftItem = draftVideoMap.get(item.storyboardId)
-    item.enabled = draftItem ? draftItem.enabled !== false : !hasDraftVideoClips
-    item.order = draftItem ? draftItem.order : nextFallbackOrder + index
-  })
-  videoItems.sort((a, b) => {
-    if (a.order !== b.order) return a.order - b.order
-    if (a.sceneNo !== b.sceneNo) return a.sceneNo - b.sceneNo
-    if ((a.sortOrder || 0) !== (b.sortOrder || 0)) return (a.sortOrder || 0) - (b.sortOrder || 0)
-    return a.storyboardId - b.storyboardId
-  })
-  videoItems.forEach((item, index) => {
-    item.order = index + 1
-  })
+  const timelineVideoItems = applyFinalEditDraftToVideoItems(videoItems, normalizedDraft)
+  videoItems.splice(0, videoItems.length, ...timelineVideoItems)
+  Object.assign(audioTracks, applyFinalEditDraftToAudioTracks(audioTracks, normalizedDraft))
 
   const validation = buildFinalEditValidation(
     videoItems,
@@ -6117,18 +12641,30 @@ async function buildProjectFinalEdit(project) {
     audioMix: normalizedDraft.audioMix,
     draft: {
       videoClips: videoItems.map((item) => ({
+        clipId: item.clipId || null,
         storyboardId: item.storyboardId,
         enabled: item.enabled !== false,
         order: item.order,
+        videoAssetId: item.videoAssetId || null,
+        trimStartSeconds: item.trimStartSeconds,
+        trimEndSeconds: item.trimEndSeconds,
+        transition: item.transition || { type: 'cut', durationSeconds: 0 },
+        transitionManual: item.transitionManual === true,
       })),
       audioMix: normalizedDraft.audioMix,
+      audioClips: normalizedDraft.audioClips,
+      subtitleCues: normalizedDraft.subtitleCues,
+      beatMarkers: normalizedDraft.beatMarkers,
+      emotionCurve: normalizedDraft.emotionCurve,
+      versionHistory: normalizedDraft.versionHistory,
       updatedAt: draftRow?.updated_at || null,
     },
+    overlayClips: normalizedDraft.overlayClips,
     validation,
     summary: {
-      confirmedVideoCount: videoItems.length,
+      confirmedVideoCount: validation.confirmedVideoCount,
       confirmedAudioCount,
-      hasVideo: videoItems.length > 0,
+      hasVideo: videoItems.some((item) => (item.sourceType === 'video' && item.videoUrl) || item.imageUrl),
       hasAudio: confirmedAudioCount > 0,
       totalDurationSeconds: validation.enabledVideoDurationSeconds,
       sourceDurationSeconds: totalSourceDurationSeconds,
@@ -6137,10 +12673,15 @@ async function buildProjectFinalEdit(project) {
       totalStoryboardCount: validation.totalStoryboardCount,
       missingVideoCount: validation.missingVideoCount,
       missingStoryboardSceneCount: validation.missingStoryboardSceneCount,
+      storyboardIds: manifestRows.map((row) => Number(row.storyboard_id)).filter((id) => id > 0),
+      episodeNo: scopedEpisodeNo || null,
     },
   }
 }
 
+// HTTP 请求总入口。
+// 前面先处理本地媒体文件和健康检查，后面再按 /api/... 路径分发业务接口。
+// 每个业务分支通常遵循：解析参数 -> authenticate -> 查库/调用服务 -> success/fail。
 const server = createServer(async (req, res) => {
   if (!req.url || !req.method) {
     fail(res, 5000, 'invalid request', 500)
@@ -6151,7 +12692,7 @@ const server = createServer(async (req, res) => {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     })
     res.end()
     return
@@ -6172,6 +12713,26 @@ const server = createServer(async (req, res) => {
         'Content-Type': 'image/svg+xml; charset=utf-8',
       })
       res.end(buildMockImageSvg(storyboardId, versionNo, candidateNo))
+      return
+    }
+
+    const mockAssetImageMatch = pathname.match(
+      /^\/mock-assets\/project-(\d+)\/node-(\d+)\/v(\d+)-(\d+)\.png$/,
+    )
+    if (req.method === 'GET' && mockAssetImageMatch) {
+      const bytes = await readMockAssetImageBytes()
+      if (!bytes) {
+        fail(res, 4040, 'mock asset image not found', 404)
+        return
+      }
+      res.writeHead(200, {
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=3600',
+        'Content-Length': bytes.length,
+        'Content-Type': 'image/png',
+        'X-ProjectDream-Mock-Asset': 'true',
+      })
+      res.end(bytes)
       return
     }
 
@@ -6383,6 +12944,11 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && pathname === '/api/health') {
       success(res, {
         status: 'ok',
+        serverStartedAt: process.env.PROJECTDREAM_SERVER_STARTED_AT || null,
+        port: PORT,
+        publicBaseUrl: PUBLIC_BASE_URL,
+        objectStorageProvider: objectStorage.provider,
+        objectStoragePublicBaseUrl: objectStorage.publicBaseUrl,
         smsProvider: smsRuntime.provider,
         smsReady: smsRuntime.ready,
         smsReason: smsRuntime.reason,
@@ -6425,6 +12991,32 @@ const server = createServer(async (req, res) => {
       return
     }
 
+    if (req.method === 'GET' && pathname === '/api/auth/captcha') {
+      const phone = normalizePhone(url.searchParams.get('phone') || '')
+      const ip = String(req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.socket.remoteAddress || '')
+        .split(',')[0].trim()
+      success(res, captchaStore.createChallenge({ ip, phone }))
+      return
+    }
+
+    if (req.method === 'POST' && pathname === '/api/auth/captcha/verify') {
+      const body = await parseBody(req)
+      const ip = String(req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.socket.remoteAddress || '')
+        .split(',')[0].trim()
+      const result = captchaStore.verify({
+        challenge: body.challenge,
+        position: body.position,
+        phone: normalizePhone(body.phone || ''),
+        ip,
+      })
+      if (!result.ok) {
+        fail(res, 4010, result.message, 409)
+        return
+      }
+      success(res, { captchaToken: result.verificationToken }, '滑块验证通过')
+      return
+    }
+
     if (req.method === 'POST' && pathname === '/api/auth/send-code') {
       const body = await parseBody(req)
       const phone = normalizePhone(body.phone)
@@ -6433,6 +13025,11 @@ const server = createServer(async (req, res) => {
 
       if (!/^1\d{10}$/.test(phone)) {
         fail(res, 4001, '手机号格式不正确')
+        return
+      }
+
+      if (!captchaStore.consumeVerificationToken(body.captchaToken)) {
+        fail(res, 4009, '请先完成滑块验证，验证结果已失效或已使用', 409)
         return
       }
 
@@ -6627,8 +13224,17 @@ const server = createServer(async (req, res) => {
                   COALESCE(audio.confirmed_audio_count, 0) AS confirmed_audio_count,
                   exports.latest_export_id,
                   exports.latest_export_video_url,
+                  exports.latest_export_cover_url,
                   exports.latest_export_duration_seconds,
-                  exports.latest_export_created_at
+                  exports.latest_export_created_at,
+                  (SELECT COALESCE(ia.thumbnail_url, ia.image_url)
+                   FROM image_assets ia
+                   INNER JOIN storyboards sb ON sb.id = ia.storyboard_id
+                   INNER JOIN script_scenes sc ON sc.id = sb.scene_id
+                   WHERE sc.project_id = p.id AND ia.status = 'confirmed'
+                     AND (ia.thumbnail_url IS NOT NULL OR ia.image_url IS NOT NULL)
+                   ORDER BY ia.confirmed_at DESC, ia.id DESC
+                   LIMIT 1) AS latest_project_frame_url
            FROM projects p
            LEFT JOIN (
              SELECT project_id, COUNT(*) AS outline_count
@@ -6672,6 +13278,7 @@ const server = createServer(async (req, res) => {
              SELECT latest.project_id,
                     latest.id AS latest_export_id,
                     latest.video_url AS latest_export_video_url,
+                    latest.cover_url AS latest_export_cover_url,
                     latest.duration_seconds AS latest_export_duration_seconds,
                     latest.created_at AS latest_export_created_at
              FROM export_records latest
@@ -6730,7 +13337,14 @@ const server = createServer(async (req, res) => {
         return
       }
 
-      const exportPackage = await buildExportPackage(projectId)
+      let episodeRequest
+      try {
+        episodeRequest = normalizeEpisodeExportRequest({ episodeNo: url.searchParams.get('episodeNo') || undefined })
+      } catch (error) {
+        fail(res, 4001, error instanceof Error ? error.message : '无效的 episodeNo', 400)
+        return
+      }
+      const exportPackage = await buildExportPackage(projectId, episodeRequest)
       success(res, exportPackage)
       return
     }
@@ -6749,6 +13363,1837 @@ const server = createServer(async (req, res) => {
 
       const payload = await buildProjectAssets(projectId)
       success(res, payload)
+      return
+    }
+
+    const projectAssetArchiveMatch = pathname.match(/^\/api\/project-assets\/(character|image|video|audio)\/(\d+)\/archive$/)
+    if (projectAssetArchiveMatch && req.method === 'POST') {
+      const user = await authenticate(req, res)
+      if (!user) return
+
+      const assetType = normalizeProjectAssetType(projectAssetArchiveMatch[1])
+      const assetId = parseId(projectAssetArchiveMatch[2])
+      if (!assetType || !assetId) {
+        fail(res, 4001, '无效的项目资产参数', 400)
+        return
+      }
+
+      const assetQueries = {
+        character: `
+          SELECT c.id, c.status, p.user_id AS ownerId
+          FROM characters c
+          INNER JOIN projects p ON p.id = c.project_id
+          WHERE c.id = ? LIMIT 1`,
+        image: `
+          SELECT ia.id, ia.status, p.user_id AS ownerId
+          FROM image_assets ia
+          INNER JOIN storyboards sb ON sb.id = ia.storyboard_id
+          INNER JOIN script_scenes sc ON sc.id = sb.scene_id
+          INNER JOIN projects p ON p.id = sc.project_id
+          WHERE ia.id = ? LIMIT 1`,
+        video: `
+          SELECT va.id, va.status, p.user_id AS ownerId
+          FROM video_assets va
+          INNER JOIN storyboards sb ON sb.id = va.storyboard_id
+          INNER JOIN script_scenes sc ON sc.id = sb.scene_id
+          INNER JOIN projects p ON p.id = sc.project_id
+          WHERE va.id = ? LIMIT 1`,
+        audio: `
+          SELECT aa.id, aa.status, p.user_id AS ownerId
+          FROM audio_assets aa
+          INNER JOIN projects p ON p.id = aa.project_id
+          WHERE aa.id = ? LIMIT 1`,
+      }
+      const [rows] = await db.execute(assetQueries[assetType], [assetId])
+      const asset = rows[0]
+      if (!asset || Number(asset.ownerId) !== Number(user.id)) {
+        fail(res, 4004, '项目资产不存在或无权访问', 404)
+        return
+      }
+
+      const policy = canArchiveProjectAsset({ assetType, status: asset.status })
+      if (!policy.allowed) {
+        const messages = {
+          already_archived: '项目资产已经归档',
+          confirmed: '已确认或定稿资产不能直接归档',
+          finalized: '已确认或定稿资产不能直接归档',
+          done: '已完成资产不允许直接归档',
+        }
+        fail(res, 4001, messages[policy.reason] || '当前资产不允许归档', 400)
+        return
+      }
+
+      const tableByType = {
+        character: 'characters',
+        image: 'image_assets',
+        video: 'video_assets',
+        audio: 'audio_assets',
+      }
+      await db.execute(
+        `UPDATE ${tableByType[assetType]} SET status = 'archived' WHERE id = ?`,
+        [assetId],
+      )
+      success(res, { id: assetId, assetType, status: 'archived' }, '项目资产已归档')
+      return
+    }
+
+    const agentPipelineStartMatch = pathname.match(/^\/api\/projects\/(\d+)\/agent-pipeline\/start$/)
+    const agentPipelineListMatch = pathname.match(/^\/api\/projects\/(\d+)\/agent-pipeline$/)
+    if (agentPipelineStartMatch || agentPipelineListMatch) {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const projectId = parseId(agentPipelineStartMatch?.[1] || agentPipelineListMatch?.[1])
+      const project = await fetchProjectForUser(projectId, user.id)
+      if (!project) {
+        fail(res, 4004, '项目不存在或无权访问', 404)
+        return
+      }
+
+      if (agentPipelineListMatch && req.method === 'GET') {
+        const [rows] = await db.execute(
+          `SELECT * FROM agent_pipeline_runs
+           WHERE project_id = ? AND user_id = ?
+           ORDER BY updated_at DESC, id DESC`,
+          [projectId, user.id],
+        )
+        const items = []
+        for (const row of rows) {
+          const view = await loadAgentPipelineView(Number(row.id), user.id)
+          if (view) items.push(view)
+        }
+        success(res, { items })
+        return
+      }
+
+      if (agentPipelineStartMatch && req.method === 'POST') {
+        let input
+        try {
+          input = normalizeAgentPipelineInput(await parseBody(req))
+        } catch (error) {
+          fail(res, 4001, error instanceof Error ? error.message : 'Agent Pipeline 参数无效')
+          return
+        }
+
+        const [existingRows] = await db.execute(
+          `SELECT id FROM agent_pipeline_runs
+           WHERE project_id = ? AND user_id = ? AND idempotency_key = ?
+           LIMIT 1`,
+          [projectId, user.id, input.idempotencyKey],
+        )
+        if (existingRows[0]) {
+          success(res, await loadAgentPipelineView(Number(existingRows[0].id), user.id), 'Agent Pipeline 已存在')
+          return
+        }
+
+        const [sceneRows] = await db.execute(
+          `SELECT id, scene_no, title, content
+           FROM script_scenes
+           WHERE project_id = ? AND episode_no = ?
+           ORDER BY sort_order ASC, id ASC`,
+          [projectId, input.episodeNo],
+        )
+        if (!sceneRows.some((scene) => String(scene.content || '').trim())) {
+          fail(res, 4001, `第 ${input.episodeNo} 集还没有剧本正文，请先完成剧本生成`)
+          return
+        }
+
+        const [result] = await db.execute(
+          `INSERT INTO agent_pipeline_runs
+            (project_id, user_id, episode_no, status, current_stage, input_snapshot_json, idempotency_key)
+           VALUES (?, ?, ?, 'queued', 'asset-parse', ?, ?)`,
+          [
+            projectId,
+            user.id,
+            input.episodeNo,
+            JSON.stringify({
+              projectId,
+              episodeNo: input.episodeNo,
+              regenerate: input.regenerate,
+              sourceSceneIds: sceneRows.map((scene) => Number(scene.id)),
+            }),
+            input.idempotencyKey,
+          ],
+        )
+        const runId = Number(result.insertId)
+        const run = agentPipelineRunRow({
+          id: runId,
+          project_id: projectId,
+          user_id: user.id,
+          episode_no: input.episodeNo,
+          status: 'queued',
+          current_stage: AGENT_PIPELINE_STAGES[0].key,
+          input_snapshot_json: JSON.stringify({
+            projectId,
+            episodeNo: input.episodeNo,
+            regenerate: input.regenerate,
+            sourceSceneIds: sceneRows.map((scene) => Number(scene.id)),
+          }),
+          idempotency_key: input.idempotencyKey,
+        })
+        try {
+          await executePipelineStage(run, 'asset-parse', {})
+        } catch (error) {
+          await updateAgentPipelineRun(runId, {
+            status: 'retryable_failed',
+            currentStage: 'asset-parse',
+            errorText: error instanceof Error ? error.message : '资产解析 Agent 执行失败',
+          })
+        }
+        success(res, await loadAgentPipelineView(runId, user.id), '资产解析 Agent 已执行')
+        return
+      }
+    }
+
+    const agentPipelineDetailMatch = pathname.match(/^\/api\/agent-pipelines\/(\d+)$/)
+    const agentPipelineActionMatch = pathname.match(/^\/api\/agent-pipelines\/(\d+)\/stage-actions$/)
+    const agentPipelineDecisionMatch = pathname.match(/^\/api\/agent-pipelines\/(\d+)\/stages\/([^/]+)\/decision$/)
+    if (agentPipelineDetailMatch || agentPipelineActionMatch || agentPipelineDecisionMatch) {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const runId = parseId(
+        agentPipelineDetailMatch?.[1] ||
+        agentPipelineActionMatch?.[1] ||
+        agentPipelineDecisionMatch?.[1],
+      )
+      const view = await loadAgentPipelineView(runId, user.id)
+      if (!view) {
+        fail(res, 4004, 'Agent Pipeline 不存在或无权访问', 404)
+        return
+      }
+      if (agentPipelineDetailMatch && req.method === 'GET') {
+        success(res, view)
+        return
+      }
+      if (agentPipelineActionMatch && req.method === 'POST') {
+        let input
+        try {
+          input = normalizeAgentPipelineStageAction(await parseBody(req))
+        } catch (error) {
+          fail(res, 4001, error instanceof Error ? error.message : 'Agent 阶段动作参数无效')
+          return
+        }
+        const run = view.run
+        if (!['completed', 'waiting_approval', 'running'].includes(run.status) && run.status !== 'paused') {
+          fail(res, 4090, '当前 Pipeline 不允许登记业务动作', 409)
+          return
+        }
+        try {
+          const result = await registerAgentPipelineStageAction(run, input)
+          success(res, await loadAgentPipelineView(runId, user.id), `${getAgentPipelineStage(input.stageKey).label} 已登记`)
+        } catch (error) {
+          fail(res, 4011, error instanceof Error ? error.message : 'Agent 阶段动作登记失败', 400)
+        }
+        return
+      }
+      if (agentPipelineDecisionMatch && req.method === 'POST') {
+        const stageKey = decodeURIComponent(agentPipelineDecisionMatch[2])
+        const body = await parseBody(req)
+        const decision = String(body.decision || '').trim()
+        if (!['approve', 'reject'].includes(decision)) {
+          fail(res, 4001, 'Agent 检查点决定无效')
+          return
+        }
+        const stageExecution = view.executions.find((item) => item.stageKey === stageKey)
+        if (!stageExecution || stageExecution.status !== 'waiting_approval') {
+          fail(res, 4001, '当前 Agent 阶段还没有可审批的结果')
+          return
+        }
+        if (decision === 'reject') {
+          await updateAgentPipelineRun(runId, {
+            status: 'paused',
+            currentStage: stageKey,
+            errorText: String(body.note || '').trim() || '人工检查点未通过',
+          })
+          success(res, await loadAgentPipelineView(runId, user.id), 'Agent Pipeline 已暂停')
+          return
+        }
+
+        const run = view.run
+        const nextStage = getNextAgentPipelineStageForKeys(stageKey, SCRIPTING_PIPELINE_STAGE_KEYS)
+        if (!nextStage) {
+          if (stageKey !== 'storyboard') {
+            await updateAgentPipelineRun(runId, {
+              status: 'paused',
+              currentStage: stageKey,
+              errorText: '当前阶段已确认，但后续阶段需要由对应业务页面的真实操作触发',
+            })
+            success(res, await loadAgentPipelineView(runId, user.id), '当前阶段已确认')
+            return
+          }
+          await updateAgentPipelineRun(runId, {
+            status: 'completed',
+            currentStage: 'storyboard',
+            errorText: '',
+          })
+          success(res, await loadAgentPipelineView(runId, user.id), '剧本链已完成，请进入分镜创作页')
+          return
+        }
+
+        const nextOutputs = {
+          ...(run.outputSnapshot || {}),
+          [stageKey]: stageExecution.outputSnapshot || {},
+        }
+        await updateAgentPipelineRun(runId, {
+          status: 'running',
+          currentStage: nextStage.key,
+          outputSnapshot: nextOutputs,
+          errorText: '',
+        })
+        // 人工确认只是一次持久化决策，不能让浏览器连接继续等待后续模型调用。
+        // 例如“场景锁定 -> 分镜”会调用文本模型；同步等待会被反向代理判为 502，
+        // 从而出现“已确认”与“请求失败”同时显示的假失败。
+        void executePipelineStage(
+          { ...run, status: 'running', currentStage: nextStage.key, outputSnapshot: nextOutputs },
+          nextStage.key,
+          nextOutputs,
+        ).catch(async (error) => {
+          try {
+            await updateAgentPipelineRun(runId, {
+              status: 'retryable_failed',
+              currentStage: nextStage.key,
+              errorText: error instanceof Error ? error.message : `${nextStage.label} Agent 执行失败`,
+            })
+          } catch (persistError) {
+            console.error('[agent-pipeline] failed to persist async stage failure', persistError)
+          }
+        })
+        success(
+          res,
+          await loadAgentPipelineView(runId, user.id),
+          `${getAgentPipelineStage(stageKey)?.label || stageKey} 已确认，${nextStage.label} Agent 已启动，状态将在后台更新`,
+        )
+        return
+      }
+    }
+
+    const storageMatch = pathname.match(/^\/storage\/(.+)$/)
+    if (req.method === 'GET' && storageMatch && ['local', 'cos'].includes(objectStorage.provider)) {
+      try {
+        const key = decodeURIComponent(storageMatch[1])
+        const object = await objectStorage.getObject(key)
+        if (!object) {
+          fail(res, 4040, 'stored object not found', 404)
+          return
+        }
+        res.writeHead(200, {
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'public, max-age=31536000, immutable',
+          'Content-Length': object.bytes.length,
+          'Content-Type': object.contentType || 'application/octet-stream',
+        })
+        res.end(object.bytes)
+      } catch {
+        fail(res, 4040, 'stored object not found', 404)
+      }
+      return
+    }
+
+    const scriptAgentActivitiesMatch = pathname.match(/^\/api\/projects\/(\d+)\/script-agent\/activities$/)
+    if (scriptAgentActivitiesMatch) {
+      const user = await authenticate(req, res)
+      if (!user) return
+
+      const projectId = parseId(scriptAgentActivitiesMatch[1])
+      const project = await fetchProjectForUser(projectId, user.id)
+      if (!project) {
+        fail(res, 4004, '项目不存在或无权访问', 404)
+        return
+      }
+
+      if (req.method === 'GET') {
+        success(res, { items: await listScriptAgentActivities(projectId, user.id, url.searchParams.get('limit')) })
+        return
+      }
+
+      if (req.method !== 'POST') {
+        fail(res, 4050, 'Script Agent 活动只支持读取和写入', 405)
+        return
+      }
+
+      const body = await parseBody(req)
+      const phase = String(body.phase || 'start').trim()
+      if (!['start', 'complete', 'fail', 'blocked'].includes(phase)) {
+        fail(res, 4001, '无效的 Script Agent 活动阶段')
+        return
+      }
+
+      if (phase === 'start') {
+        let input
+        try {
+          input = buildScriptAgentActivityPayload({
+            ...body,
+            status: 'running',
+          })
+        } catch (error) {
+          fail(res, 4001, error instanceof Error ? error.message : 'Script Agent 活动参数无效')
+          return
+        }
+
+        if (input.idempotencyKey) {
+          const [existingRows] = await db.execute(
+            `SELECT *
+             FROM script_agent_activities
+             WHERE project_id = ? AND idempotency_key = ?
+             LIMIT 1`,
+            [projectId, input.idempotencyKey],
+          )
+          if (existingRows[0]) {
+            const item = scriptAgentActivityRow(existingRows[0])
+            success(res, { item, reaction: item.reaction }, 'Script Agent 活动已存在')
+            return
+          }
+        }
+
+        try {
+          const [result] = await db.execute(
+            `INSERT INTO script_agent_activities
+              (project_id, user_id, stage_key, action_key, agent_key, source, status,
+               title, summary, context_json, result_json, reaction_json, idempotency_key)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              projectId,
+              user.id,
+              input.stageKey,
+              input.actionKey,
+              input.agentKey,
+              input.source,
+              input.status,
+              input.title,
+              input.summary || null,
+              JSON.stringify(input.context),
+              JSON.stringify(input.result),
+              JSON.stringify(input.reaction),
+              input.idempotencyKey || null,
+            ],
+          )
+          const row = await loadScriptAgentActivity(Number(result.insertId), projectId, user.id)
+          const item = scriptAgentActivityRow(row)
+          success(res, { item, reaction: item.reaction }, 'Script Agent 已开始执行')
+        } catch (error) {
+          if (error?.code === 'ER_DUP_ENTRY' && input.idempotencyKey) {
+            const [existingRows] = await db.execute(
+              `SELECT *
+               FROM script_agent_activities
+               WHERE project_id = ? AND idempotency_key = ?
+               LIMIT 1`,
+              [projectId, input.idempotencyKey],
+            )
+            if (existingRows[0]) {
+              const item = scriptAgentActivityRow(existingRows[0])
+              success(res, { item, reaction: item.reaction }, 'Script Agent 活动已存在')
+              return
+            }
+          }
+          throw error
+        }
+        return
+      }
+
+      const activityId = parseId(body.activityId)
+      const existing = await loadScriptAgentActivity(activityId, projectId, user.id)
+      if (!existing) {
+        fail(res, 4004, 'Script Agent 活动不存在或无权访问', 404)
+        return
+      }
+
+      const status = phase === 'complete' ? 'completed' : phase === 'blocked' ? 'blocked' : 'failed'
+      let input
+      try {
+        input = buildScriptAgentActivityPayload({
+          actionKey: existing.action_key,
+          agentKey: existing.agent_key,
+          stageKey: existing.stage_key,
+          source: existing.source,
+          status,
+          title: body.title || existing.title,
+          summary: body.summary || '',
+          context: body.context || parseJsonObject(existing.context_json),
+          result: body.result || {},
+          errorText: body.errorText || '',
+        })
+      } catch (error) {
+        fail(res, 4001, error instanceof Error ? error.message : 'Script Agent 活动参数无效')
+        return
+      }
+
+      await db.execute(
+        `UPDATE script_agent_activities
+         SET status = ?, title = ?, summary = ?, context_json = ?, result_json = ?,
+             reaction_json = ?, error_text = ?, finished_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND project_id = ? AND user_id = ?`,
+        [
+          input.status,
+          input.title,
+          input.summary || null,
+          JSON.stringify(input.context),
+          JSON.stringify(input.result),
+          JSON.stringify(input.reaction),
+          input.errorText || null,
+          activityId,
+          projectId,
+          user.id,
+        ],
+      )
+      const row = await loadScriptAgentActivity(activityId, projectId, user.id)
+      const item = scriptAgentActivityRow(row)
+      success(res, { item, reaction: item.reaction }, 'Script Agent 活动已更新')
+      return
+    }
+
+    const storyQualityMatch = pathname.match(
+      /^\/api\/projects\/(\d+)\/(story-bible|season-structure)(?:\/(evaluate|lock|generate))?$/,
+    )
+    if (storyQualityMatch) {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const projectId = parseId(storyQualityMatch[1])
+      const resource = storyQualityMatch[2]
+      const action = storyQualityMatch[3] || ''
+      const project = await fetchProjectForUser(projectId, user.id)
+      if (!project) {
+        fail(res, 4004, '项目不存在或无权访问', 404)
+        return
+      }
+
+      const isBible = resource === 'story-bible'
+      if (req.method === 'GET' && !action) {
+        const table = isBible ? 'story_bibles' : 'season_structures'
+        const [rows] = await db.execute(
+          `SELECT * FROM ${table} WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+          [projectId],
+        )
+        success(res, rows[0] ? (isBible ? storyBibleRow(rows[0]) : seasonStructureRow(rows[0])) : null)
+        return
+      }
+
+      const body = await parseBody(req)
+      if (req.method === 'POST' && action === 'generate' && isBible) {
+        const idea = String(body.idea || '').trim()
+        if (!idea) {
+          fail(res, 4001, '请先写下你的创意，再生成故事设定')
+          return
+        }
+        try {
+          const generated = await generateStoryBible(project, {
+            idea,
+            episodeCount: Math.max(1, Math.min(50, parseId(body.episodeCount) || 1)),
+          })
+          const bible = normalizeStoryBibleInput(generated)
+          const report = evaluateStoryBible(bible)
+          const row = await persistStoryBible(projectId, bible, report, false)
+          success(res, { item: storyBibleRow(row), report }, '故事设定已生成')
+        } catch (error) {
+          fail(res, 5020, error instanceof Error ? error.message : '故事设定生成失败', 502)
+        }
+        return
+      }
+
+      if (req.method === 'POST' && action === 'generate' && !isBible) {
+        const [bibleRows] = await db.execute(
+          `SELECT * FROM story_bibles WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+          [projectId],
+        )
+        if (!bibleRows[0]) {
+          fail(res, 4001, '请先生成并保存故事设定')
+          return
+        }
+        try {
+          const generated = await generateSeasonStructure(project, storyBibleRow(bibleRows[0]), {
+            episodeCount: Math.max(1, Math.min(50, parseId(body.episodeCount) || 1)),
+          })
+          const season = normalizeSeasonStructureInput(generated)
+          const report = evaluateSeasonStructure(season)
+          const row = await persistSeasonStructure(
+            projectId,
+            Number(bibleRows[0].id),
+            season,
+            report,
+            false,
+          )
+          success(res, { item: seasonStructureRow(row), report }, '分集大纲已生成')
+        } catch (error) {
+          fail(res, 5020, error instanceof Error ? error.message : '分集大纲生成失败', 502)
+        }
+        return
+      }
+
+      if (req.method === 'PUT' || (req.method === 'POST' && ['evaluate', 'lock'].includes(action))) {
+        if (isBible) {
+          const bible = normalizeStoryBibleInput(body)
+          const report = evaluateStoryBible(bible)
+          const row = await persistStoryBible(projectId, bible, report, action === 'lock')
+          success(res, { item: storyBibleRow(row), report }, action === 'lock' ? '故事设定已确认' : '故事设定已保存')
+        } else {
+          const season = normalizeSeasonStructureInput(body)
+          const report = evaluateSeasonStructure(season)
+          const [bibleRows] = await db.execute(
+            `SELECT id FROM story_bibles WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+            [projectId],
+          )
+          const row = await persistSeasonStructure(projectId, bibleRows[0]?.id || null, season, report, action === 'lock')
+          success(res, { item: seasonStructureRow(row), report }, action === 'lock' ? '分集大纲已确认' : '分集大纲已保存')
+        }
+        return
+      }
+    }
+
+    const productionRunsMatch = pathname.match(/^\/api\/projects\/(\d+)\/production-runs$/)
+    if (productionRunsMatch) {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const projectId = parseId(productionRunsMatch[1])
+      const project = await fetchProjectForUser(projectId, user.id)
+      if (!project) {
+        fail(res, 4004, '项目不存在或无权访问', 404)
+        return
+      }
+      if (req.method === 'GET') {
+        const [rows] = await db.execute(
+          `SELECT pr.*, p.name AS project_name
+           FROM production_runs pr INNER JOIN projects p ON p.id = pr.project_id
+           WHERE pr.project_id = ? ORDER BY pr.updated_at DESC, pr.id DESC`,
+          [projectId],
+        )
+        success(res, { items: rows.map(productionRunRow) })
+        return
+      }
+      if (req.method === 'POST') {
+        const body = await parseBody(req)
+        const input = normalizeProductionRunInput({ ...body, projectId })
+        const idempotencyKey = String(body.idempotencyKey || '').trim() || null
+        if (idempotencyKey) {
+          const [existing] = await db.execute(
+            `SELECT id FROM production_runs WHERE project_id = ? AND idempotency_key = ? LIMIT 1`,
+            [projectId, idempotencyKey],
+          )
+          if (existing[0]) {
+            success(res, await loadProductionRunView(Number(existing[0].id), user.id), 'ProductionRun 已存在')
+            return
+          }
+        }
+        const { bible, season } = await loadProductionStorySources(projectId)
+        const episode = Array.isArray(season.episodes)
+          ? season.episodes.find((item) => Number(item?.episodeNo || item?.episode_no) === input.episodeNo) ||
+            season.episodes[input.episodeNo - 1] ||
+            {}
+          : {}
+        const sourceScript = await loadProductionScriptSource(projectId, input.episodeNo)
+        const blueprint = buildEpisodeBlueprint({
+          projectId,
+          episodeNo: input.episodeNo,
+          episode,
+          bible,
+          platform: input.platform,
+          candidatePolicy: input.candidatePolicy,
+          sourceScript: sourceScript,
+        })
+        const qualityReport = evaluateEpisodeBlueprint(blueprint)
+        const seed = buildProductionRunSeed({ ...input, blueprint })
+        const connection = await db.getConnection()
+        let runId = 0
+        try {
+          await connection.beginTransaction()
+          const [runResult] = await connection.execute(
+            `INSERT INTO production_runs
+              (project_id, user_id, episode_no, platform, name, status, current_stage, current_checkpoint,
+               pilot_mode, pilot_scene_count, budget, candidate_policy_json, success_metrics_json,
+               input_snapshot_json, output_snapshot_json, idempotency_key)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              projectId, user.id, input.episodeNo, input.platform,
+              `${project.name || '项目'} · 第 ${input.episodeNo} 集黄金样片`,
+              seed.run.status, seed.run.currentStage, seed.run.currentCheckpoint,
+              seed.run.pilotMode, seed.run.pilotSceneCount, seed.run.budget,
+              JSON.stringify(seed.run.candidatePolicy), JSON.stringify(seed.run.successMetrics),
+              JSON.stringify(seed.run.inputSnapshot), JSON.stringify({ blueprint }), idempotencyKey,
+            ],
+          )
+          runId = Number(runResult.insertId)
+          for (const stage of seed.stages) {
+            await connection.execute(
+              `INSERT INTO production_stage_runs
+                (production_run_id, stage_key, sequence_no, agent_key, status, input_snapshot_json)
+               VALUES (?, ?, ?, ?, ?, ?)`,
+              [runId, stage.stageKey, stage.sequenceNo, stage.agentKey, stage.status,
+                stage.inputSnapshot ? JSON.stringify(stage.inputSnapshot) : null],
+            )
+          }
+          for (const checkpoint of seed.checkpoints) {
+            await connection.execute(
+              `INSERT INTO production_checkpoints
+                (production_run_id, checkpoint_key, stage_key, status, decision_note)
+               VALUES (?, ?, ?, ?, ?)`,
+              [runId, checkpoint.checkpointKey, checkpoint.stageKey, checkpoint.status, checkpoint.decisionNote],
+            )
+          }
+          await connection.execute(
+            `INSERT INTO production_agent_executions
+              (production_run_id, stage_key, agent_key, status) VALUES (?, ?, ?, 'pending')`,
+            [runId, seed.stages[0].stageKey, seed.stages[0].agentKey],
+          )
+          await connection.execute(
+            `INSERT INTO episode_blueprints
+              (production_run_id, project_id, episode_no, version_no, status, blueprint_json, quality_report_json)
+             VALUES (?, ?, ?, 1, 'draft', ?, ?)`,
+            [runId, projectId, input.episodeNo, JSON.stringify(blueprint), JSON.stringify(qualityReport)],
+          )
+          await connection.commit()
+        } catch (error) {
+          await connection.rollback()
+          if (error?.code === 'ER_DUP_ENTRY' && idempotencyKey) {
+            const [existing] = await db.execute(
+              `SELECT id FROM production_runs WHERE project_id = ? AND idempotency_key = ? LIMIT 1`,
+              [projectId, idempotencyKey],
+            )
+            if (existing[0]) {
+              success(res, await loadProductionRunView(Number(existing[0].id), user.id), 'ProductionRun 已存在')
+              return
+            }
+          }
+          throw error
+        } finally {
+          connection.release()
+        }
+        success(res, await loadProductionRunView(runId, user.id), 'ProductionRun 已创建')
+        return
+      }
+    }
+
+    const productionRunDetailMatch = pathname.match(/^\/api\/production-runs\/(\d+)$/)
+    const productionBlueprintMatch = pathname.match(/^\/api\/production-runs\/(\d+)\/blueprint$/)
+    const productionCheckpointMatch = pathname.match(/^\/api\/production-runs\/(\d+)\/checkpoints\/([^/]+)\/decision$/)
+    const productionStageCompletionMatch = pathname.match(/^\/api\/production-runs\/(\d+)\/stages\/([^/]+)\/complete$/)
+    if (productionRunDetailMatch || productionBlueprintMatch || productionCheckpointMatch || productionStageCompletionMatch) {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const runId = parseId(
+        productionRunDetailMatch?.[1] || productionBlueprintMatch?.[1] ||
+        productionCheckpointMatch?.[1] || productionStageCompletionMatch?.[1],
+      )
+      const view = await loadProductionRunView(runId, user.id)
+      if (!view) {
+        fail(res, 4004, '生产运行不存在或无权访问', 404)
+        return
+      }
+      if (productionRunDetailMatch && req.method === 'GET') {
+        success(res, view)
+        return
+      }
+      if (productionBlueprintMatch && req.method === 'PUT') {
+        const body = await parseBody(req)
+        const blueprint = body.blueprint && typeof body.blueprint === 'object' ? body.blueprint : {}
+        const report = evaluateEpisodeBlueprint(blueprint)
+        const [versions] = await db.execute(
+          `SELECT COALESCE(MAX(version_no), 0) AS max_version FROM episode_blueprints WHERE production_run_id = ?`,
+          [runId],
+        )
+        const versionNo = Number(versions[0]?.max_version || 0) + 1
+        const [result] = await db.execute(
+          `INSERT INTO episode_blueprints
+            (production_run_id, project_id, episode_no, version_no, status, blueprint_json, quality_report_json)
+           VALUES (?, ?, ?, ?, 'draft', ?, ?)`,
+          [runId, view.run.projectId, view.run.episodeNo, versionNo, JSON.stringify(blueprint), JSON.stringify(report)],
+        )
+        await db.execute(
+          `UPDATE production_runs SET output_snapshot_json = ?, updated_at = NOW() WHERE id = ?`,
+          [JSON.stringify({ blueprint }), runId],
+        )
+        const [rows] = await db.execute(`SELECT * FROM episode_blueprints WHERE id = ? LIMIT 1`, [result.insertId])
+        success(res, { blueprint: productionBlueprintRow(rows[0], []), report }, '单集蓝图已保存')
+        return
+      }
+      if (productionCheckpointMatch && req.method === 'POST') {
+        const checkpointKey = decodeURIComponent(productionCheckpointMatch[2])
+        const body = await parseBody(req)
+        const decision = String(body.decision || '').trim()
+        if (!['approve', 'reject'].includes(decision)) {
+          fail(res, 4001, '检查点决定无效', 400)
+          return
+        }
+        const checkpoint = view.checkpoints.find((item) => item.checkpointKey === checkpointKey)
+        if (!checkpoint || checkpoint.status !== 'pending') {
+          fail(res, 4001, '当前检查点不可审批，请先完成前置阶段', 400)
+          return
+        }
+        if (checkpointKey === 'blueprint' && !view.blueprint?.qualityReport?.canApprove) {
+          fail(res, 4001, '单集蓝图尚未通过质量门禁，不能审批进入生成', 400)
+          return
+        }
+        const stageIndex = PRODUCTION_RUN_STAGES.findIndex((item) => item.key === view.run.currentStage)
+        const nextStage = PRODUCTION_RUN_STAGES[stageIndex + 1] || null
+        const connection = await db.getConnection()
+        try {
+          await connection.beginTransaction()
+          await connection.execute(
+            `UPDATE production_checkpoints SET status = ?, decision_note = ?, reviewed_at = NOW()
+             WHERE id = ?`,
+            [decision === 'approve' ? 'approved' : 'rejected', String(body.note || '').trim() || null, checkpoint.id],
+          )
+          if (decision === 'reject') {
+            await connection.execute(
+              `UPDATE production_runs SET status = 'paused', failure_code = 'checkpoint-rejected',
+               failure_text = ?, updated_at = NOW() WHERE id = ?`,
+              [String(body.note || '').trim() || '检查点被拒绝', runId],
+            )
+          } else if (nextStage) {
+            await connection.execute(
+              `UPDATE production_stage_runs SET status = 'completed', finished_at = NOW()
+               WHERE production_run_id = ? AND stage_key = ?`,
+              [runId, view.run.currentStage],
+            )
+            await connection.execute(
+              `UPDATE production_stage_runs SET status = ?, started_at = NOW()
+               WHERE production_run_id = ? AND stage_key = ?`,
+              [nextStage.checkpointKey ? 'waiting_approval' : 'ready', runId, nextStage.key],
+            )
+            if (nextStage.checkpointKey) {
+              await connection.execute(
+                `UPDATE production_checkpoints SET status = 'pending'
+                 WHERE production_run_id = ? AND checkpoint_key = ?`,
+                [runId, nextStage.checkpointKey],
+              )
+            }
+            await connection.execute(
+              `UPDATE production_runs SET status = ?, current_stage = ?, current_checkpoint = ?,
+               failure_code = NULL, failure_text = NULL, updated_at = NOW() WHERE id = ?`,
+              [nextStage.checkpointKey ? 'waiting_approval' : 'running', nextStage.key, nextStage.checkpointKey || null, runId],
+            )
+          } else {
+            await connection.execute(
+              `UPDATE production_runs SET status = 'completed', current_checkpoint = NULL, updated_at = NOW()
+               WHERE id = ?`,
+              [runId],
+            )
+          }
+          await connection.commit()
+        } catch (error) {
+          await connection.rollback()
+          throw error
+        } finally {
+          connection.release()
+        }
+        success(res, await loadProductionRunView(runId, user.id), decision === 'approve' ? '检查点已批准' : '检查点已拒绝')
+        return
+      }
+      if (productionStageCompletionMatch && req.method === 'POST') {
+        const body = await parseBody(req)
+        const transition = buildProductionStageCompletionTransition({
+          run: view.run,
+          stages: view.stages,
+          checkpoints: view.checkpoints,
+          completedStageKey: decodeURIComponent(productionStageCompletionMatch[2]),
+          outputSnapshot: body.outputSnapshot || {},
+        })
+        if (!transition?.run || !Array.isArray(transition.stageUpdates)) {
+          fail(res, 4001, '当前阶段不可完成', 400)
+          return
+        }
+        const connection = await db.getConnection()
+        try {
+          await connection.beginTransaction()
+          for (const update of transition.stageUpdates) {
+            await connection.execute(
+              `UPDATE production_stage_runs SET status = ?, output_snapshot_json = ?,
+               finished_at = CASE WHEN ? = 'completed' THEN NOW() ELSE finished_at END
+               WHERE production_run_id = ? AND stage_key = ?`,
+              [update.status, update.outputSnapshot ? JSON.stringify(update.outputSnapshot) : null,
+                update.status, runId, update.stageKey],
+            )
+          }
+          for (const update of transition.checkpointUpdates) {
+            await connection.execute(
+              `UPDATE production_checkpoints SET status = ? WHERE production_run_id = ? AND checkpoint_key = ?`,
+              [update.status, runId, update.checkpointKey],
+            )
+          }
+          await connection.execute(
+            `UPDATE production_runs SET status = ?, current_stage = ?, current_checkpoint = ?, updated_at = NOW()
+             WHERE id = ?`,
+            [transition.run.status, transition.run.currentStage, transition.run.currentCheckpoint, runId],
+          )
+          await connection.commit()
+        } catch (error) {
+          await connection.rollback()
+          throw error
+        } finally {
+          connection.release()
+        }
+        success(res, await loadProductionRunView(runId, user.id), '当前生产阶段已完成')
+        return
+      }
+    }
+
+    const workflowReadinessMatch = pathname.match(/^\/api\/projects\/(\d+)\/workflow-readiness(\/parse-complete)?$/)
+    if (workflowReadinessMatch) {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const projectId = parseId(workflowReadinessMatch[1])
+      if (!(await fetchProjectForUser(projectId, user.id))) {
+        fail(res, 4004, '项目不存在或无权访问', 404)
+        return
+      }
+      if (workflowReadinessMatch[2] && req.method === 'POST') {
+        try {
+          await persistParsedScriptFingerprint(projectId)
+        } catch (error) {
+          fail(res, 4004, error instanceof Error ? error.message : '剧本尚未完成', error?.statusCode || 409)
+          return
+        }
+        success(res, await getProjectWorkflowReadiness(projectId), '当前剧本解析状态已确认')
+        return
+      }
+      if (req.method !== 'GET' || workflowReadinessMatch[2]) {
+        fail(res, 4001, '不支持的项目流程状态操作', 405)
+        return
+      }
+      success(res, await getProjectWorkflowReadiness(projectId), '项目流程门禁已读取')
+      return
+    }
+
+    const assetCanvasMatch = pathname.match(/^\/api\/projects\/(\d+)\/asset-canvas$/)
+    if (assetCanvasMatch && req.method === 'GET') {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const projectId = parseId(assetCanvasMatch[1])
+      if (!(await fetchProjectForUser(projectId, user.id))) {
+        fail(res, 4004, '项目不存在或无权访问', 404)
+        return
+      }
+      const [nodes] = await db.execute(
+        `SELECT n.*,
+                (SELECT COUNT(*) FROM asset_node_images ai WHERE ai.asset_node_id = n.id) AS image_count
+         FROM asset_nodes n
+         WHERE n.project_id = ? AND n.status <> 'archived' ORDER BY n.id ASC`,
+        [projectId],
+      )
+      // 兼容旧版解析留下的重复场景节点：旧节点的 label 含有“场景：/时间未明确”，
+      // 且没有隔离的环境提示词；保留同一剧本场景的新节点和全部图片记录，归档旧壳。
+      const legacySceneIds = nodes
+        .filter((node) => node.node_type === 'scene'
+          && node.ref_id
+          && !String(node.environment_prompt_text || '').trim()
+          && /场景：|时间未明确/u.test(String(node.label || node.appearance_label || '')))
+        .map((node) => Number(node.id))
+        .filter(Number.isSafeInteger)
+      if (legacySceneIds.length) {
+        await db.execute(
+          `UPDATE asset_nodes SET status = 'archived', updated_at = NOW()
+           WHERE project_id = ? AND id IN (${legacySceneIds.map(() => '?').join(',')})`,
+          [projectId, ...legacySceneIds],
+        )
+        for (let index = nodes.length - 1; index >= 0; index -= 1) {
+          if (legacySceneIds.includes(Number(nodes[index].id))) nodes.splice(index, 1)
+        }
+      }
+      const duplicatePlan = buildActiveAssetNodeDedupPlan(nodes)
+      if (duplicatePlan.archiveIds.length) {
+        await db.execute(
+          `UPDATE asset_nodes SET status = 'archived', updated_at = NOW()
+           WHERE project_id = ? AND id IN (${duplicatePlan.archiveIds.map(() => '?').join(',')})`,
+          [projectId, ...duplicatePlan.archiveIds],
+        )
+        for (let index = nodes.length - 1; index >= 0; index -= 1) {
+          if (duplicatePlan.archiveIds.includes(Number(nodes[index].id))) nodes.splice(index, 1)
+        }
+      }
+      const project = await fetchProjectById(projectId)
+      const [sceneRows] = await db.execute(
+        `SELECT id, scene_no, title, summary, content, spatial_anchors_json, location, time_of_day
+         FROM script_scenes
+         WHERE project_id = ?
+         ORDER BY episode_no ASC, scene_no ASC, id ASC`,
+        [projectId],
+      )
+      const [characterRows] = await db.execute(
+        `SELECT * FROM characters WHERE project_id = ? AND status <> 'archived' ORDER BY id ASC`,
+        [projectId],
+      )
+      // 场景提示词属于剧本解析结果的派生快照。即使旧节点已经有 ref_id，
+      // 也必须在每次读取画布时重新绑定并刷新，避免 Agent 提示词升级后旧快照永久滞留。
+      const sceneNodes = nodes.filter((node) => node.node_type === 'scene')
+      const propLikeNodeIds = nodes
+        .filter((node) => ['prop', 'material'].includes(String(node.node_type || '')))
+        .map((node) => Number(node.id))
+        .filter(Number.isSafeInteger)
+      if (propLikeNodeIds.length) {
+        const [passedPropRows] = await db.execute(
+          `SELECT id FROM asset_node_images
+           WHERE asset_node_id IN (${propLikeNodeIds.map(() => '?').join(',')})
+             AND view_set_type = 'single' AND status = 'candidate' AND vision_status = 'passed'`,
+          propLikeNodeIds,
+        )
+        for (const image of passedPropRows) await autoAdoptSingleAsset(image.id)
+      }
+      for (const node of nodes.filter((item) => item.node_type === 'character' && item.ref_id)) {
+        const character = characterRows.find((item) => Number(item.id) === Number(node.ref_id))
+        if (!character) continue
+        const characterScenes = sceneRows.filter((scene) => [
+          scene.title,
+          scene.summary,
+          scene.content,
+          scene.location,
+        ].some((value) => String(value || '').includes(character.name)))
+        const generated = buildScriptCharacterPrompt({
+          character,
+          scenes: characterScenes,
+          projectVisualStyle: project?.visual_style || '',
+          projectCategory: project?.category || '',
+        })
+        const noFaceConstraintRequired = !requiresCharacterFaceReference(
+          character,
+          ...characterScenes.map((scene) => scene.content),
+        )
+        const stalePrompt = !String(node.prompt_text || '').trim()
+          || /固定服装与随身物件：由 Agent 根据剧本场景、时代、身份和动作自动整理/u.test(String(node.prompt_text || ''))
+          || (noFaceConstraintRequired && !/本角色在剧情中明确不直接露脸/u.test(String(node.prompt_text || '')))
+          || isLegacyCharacterPrompt(node.prompt_text)
+        const staleTurnaround = !String(node.turnaround_prompt_text || '').trim()
+          || (noFaceConstraintRequired && !/该角色剧情约束为不直接露脸/u.test(String(node.turnaround_prompt_text || '')))
+        if (!stalePrompt && !staleTurnaround) continue
+        await db.execute(
+          `UPDATE asset_nodes
+           SET prompt_text = CASE WHEN ? THEN ? ELSE prompt_text END,
+               turnaround_prompt_text = CASE WHEN ? THEN ? ELSE turnaround_prompt_text END,
+               negative_prompt = CASE WHEN (negative_prompt IS NULL OR negative_prompt = '') THEN ? ELSE negative_prompt END,
+               updated_at = NOW()
+           WHERE id = ?`,
+          [
+            stalePrompt,
+            generated.prompt,
+            staleTurnaround,
+            generated.turnaroundPrompt,
+            generated.negativePrompt,
+            node.id,
+          ],
+        )
+        if (stalePrompt) node.prompt_text = generated.prompt
+        if (staleTurnaround) node.turnaround_prompt_text = generated.turnaroundPrompt
+        if (!String(node.negative_prompt || '').trim()) node.negative_prompt = generated.negativePrompt
+      }
+      if (sceneNodes.length) {
+        for (const node of sceneNodes) {
+          const matchedScene = findSceneNodeMatch(node, sceneRows)
+          if (!matchedScene) continue
+          const promptText = buildScriptScenePrompt({
+            scene: matchedScene,
+            projectVisualStyle: project?.visual_style || '',
+            projectCategory: project?.category || '',
+            characterNames: characterRows.map((character) => character.name).filter(Boolean),
+          })
+          const environmentPromptText = buildSceneEnvironmentPrompt({
+            scene: matchedScene,
+            projectVisualStyle: project?.visual_style || '',
+            projectCategory: project?.category || '',
+            characterNames: characterRows.map((character) => character.name).filter(Boolean),
+          })
+          const expectedGroupKey = `scene:${matchedScene.id}:default`
+          const staleSceneLink = Number(node.ref_id || 0) !== Number(matchedScene.id)
+            || String(node.group_key || '') !== expectedGroupKey
+          const refreshedLabel = buildSceneDisplayLabel(matchedScene)
+          const refreshedAppearanceLabel = [inferSceneLocation(matchedScene), inferSceneTimeOfDay(matchedScene)]
+            .filter(Boolean)
+            .join(' · ') || null
+          await db.execute(
+            `UPDATE asset_nodes
+             SET ref_id = ?, prompt_text = ?, environment_prompt_text = ?,
+                 label = CASE
+                   WHEN ? OR label IS NULL OR label = '' OR label = ? OR label LIKE '%死后三天%' OR label LIKE '%场景：%'
+                   THEN ? ELSE label END,
+                 group_key = CASE WHEN ? THEN ? ELSE group_key END,
+                 appearance_label = CASE
+                   WHEN appearance_label IS NULL OR appearance_label = '' OR appearance_label LIKE '%未明确%'
+                   THEN ? ELSE appearance_label END,
+                 updated_at = NOW()
+             WHERE id = ?`,
+            [
+              matchedScene.id,
+              promptText,
+              environmentPromptText,
+              staleSceneLink,
+              matchedScene.title,
+              refreshedLabel,
+              staleSceneLink,
+              expectedGroupKey,
+              refreshedAppearanceLabel,
+              node.id,
+            ],
+          )
+          node.ref_id = Number(matchedScene.id)
+          node.prompt_text = promptText
+          node.environment_prompt_text = environmentPromptText
+          if (staleSceneLink || !String(node.label || '').trim() || node.label === matchedScene.title || /死后三天|场景：/u.test(String(node.label || ''))) {
+            node.label = refreshedLabel
+          }
+          if (staleSceneLink) node.group_key = expectedGroupKey
+          node.appearance_label = node.appearance_label
+            || refreshedAppearanceLabel
+            || null
+        }
+      }
+      let images = []
+      if (nodes.length) {
+        const placeholders = nodes.map(() => '?').join(', ')
+        const [rows] = await db.execute(
+          `SELECT * FROM asset_node_images WHERE asset_node_id IN (${placeholders}) ORDER BY id ASC`,
+          nodes.map((node) => node.id),
+        )
+        images = rows
+      }
+      const canvasView = buildAssetCanvasView({
+        projectId,
+        nodes,
+        images: images.map(assetNodeImageDto),
+      })
+      success(res, canvasView)
+      return
+    }
+
+    const projectAssetNodeCreateMatch = pathname.match(/^\/api\/projects\/(\d+)\/asset-nodes$/)
+    if (projectAssetNodeCreateMatch && req.method === 'POST') {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const projectId = parseId(projectAssetNodeCreateMatch[1])
+      if (!(await fetchProjectForUser(projectId, user.id))) {
+        fail(res, 4004, '项目不存在或无权访问', 404)
+        return
+      }
+      const body = await parseBody(req)
+      const nodeType = normalizeAssetNodeType(body.nodeType)
+      if (!nodeType) {
+        fail(res, 4001, '无效的节点类型，只支持 character / scene / prop / material')
+        return
+      }
+      let refId = null
+      let label = String(body.label || '').trim()
+      let character = null
+      let scene = null
+      if (nodeType === 'character' && body.refId != null) {
+        const [characterRows] = await db.execute(
+          `SELECT * FROM characters
+           WHERE id = ? AND project_id = ? AND status <> 'archived' LIMIT 1`,
+          [parseId(body.refId), projectId],
+        )
+        if (!characterRows[0]) {
+          fail(res, 4004, '角色不存在或不属于该项目', 404)
+          return
+        }
+        character = characterRows[0]
+        refId = Number(character.id)
+        if (!label) label = String(character.name || '').trim()
+      }
+      if (nodeType === 'scene' && body.refId != null) {
+        const [sceneRows] = await db.execute(
+          `SELECT id, scene_no, title, summary, content, location, time_of_day
+           FROM script_scenes
+           WHERE id = ? AND project_id = ? LIMIT 1`,
+          [parseId(body.refId), projectId],
+        )
+        if (!sceneRows[0]) {
+          fail(res, 4004, '关联场景不存在或不属于该项目', 404)
+          return
+        }
+        scene = sceneRows[0]
+        refId = Number(scene.id)
+        if (!label) label = buildSceneDisplayLabel(scene)
+      }
+      if (!label) {
+        fail(res, 4001, '请填写节点名称')
+        return
+      }
+      let promptText = body.promptText != null ? String(body.promptText) : null
+      let turnaroundPromptText = body.turnaroundPromptText != null
+        ? String(body.turnaroundPromptText)
+        : null
+      let environmentPromptText = body.environmentPromptText != null
+        ? String(body.environmentPromptText)
+        : null
+      let negativePrompt = body.negativePrompt != null ? String(body.negativePrompt) : null
+      if ((nodeType === 'character' || nodeType === 'scene') && promptText == null) {
+        const [projectRows] = await db.execute(
+          `SELECT visual_style, category FROM projects WHERE id = ? LIMIT 1`,
+          [projectId],
+        )
+        const [sceneRows] = await db.execute(
+          `SELECT episode_no, scene_no, title, summary, content, location, time_of_day
+           FROM script_scenes WHERE project_id = ? ORDER BY episode_no ASC, scene_no ASC, id ASC`,
+          [projectId],
+        )
+        if (nodeType === 'character' && character) {
+          const generated = buildScriptCharacterPrompt({
+            character,
+            scenes: sceneRows,
+            projectVisualStyle: projectRows[0]?.visual_style || '',
+            projectCategory: projectRows[0]?.category || '',
+          })
+          promptText = generated.prompt
+          if (turnaroundPromptText == null) turnaroundPromptText = generated.turnaroundPrompt
+          if (negativePrompt == null) negativePrompt = generated.negativePrompt
+        } else if (nodeType === 'scene' && scene) {
+          promptText = buildScriptScenePrompt({
+            scene,
+            projectVisualStyle: projectRows[0]?.visual_style || '',
+            projectCategory: projectRows[0]?.category || '',
+          })
+          environmentPromptText = buildSceneEnvironmentPrompt({
+            scene,
+            projectVisualStyle: projectRows[0]?.visual_style || '',
+            projectCategory: projectRows[0]?.category || '',
+          })
+        }
+      }
+      const layout = normalizeAssetNodeLayout(body)
+      const [result] = await db.execute(
+        `INSERT INTO asset_nodes
+          (project_id, node_type, ref_id, label, appearance_label, prompt_text, turnaround_prompt_text,
+           environment_prompt_text, negative_prompt,
+           x, y, width, height, group_key, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+        [
+          projectId,
+          nodeType,
+          refId,
+          label,
+          body.appearanceLabel != null ? String(body.appearanceLabel).trim() || null : null,
+          promptText,
+          turnaroundPromptText,
+          environmentPromptText,
+          negativePrompt,
+          layout.x,
+          layout.y,
+          layout.width,
+          layout.height,
+          body.groupKey != null ? normalizeAssetGroupKey(String(body.groupKey).trim()) || null : null,
+        ],
+      )
+      const [rows] = await db.execute('SELECT * FROM asset_nodes WHERE id = ? LIMIT 1', [result.insertId])
+      success(res, buildAssetCanvasView({ projectId, nodes: rows }).nodes[0], '画布节点已创建')
+      return
+    }
+
+    const assetNodeMatch = pathname.match(/^\/api\/asset-nodes\/(\d+)$/)
+    const assetNodeRelinkSceneMatch = pathname.match(/^\/api\/asset-nodes\/(\d+)\/relink-scene$/)
+    const assetNodeHydratePromptMatch = pathname.match(/^\/api\/asset-nodes\/(\d+)\/hydrate-prompt$/)
+    if (assetNodeRelinkSceneMatch && req.method === 'POST') {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const nodeId = parseId(assetNodeRelinkSceneMatch[1])
+      const resolved = await fetchAssetNodeForUser(nodeId, user.id)
+      if (!resolved) {
+        fail(res, 4004, '画布节点不存在或无权访问', 404)
+        return
+      }
+      if (resolved.node.node_type !== 'scene') {
+        fail(res, 4001, '只有场景节点可以重新关联剧本场景', 400)
+        return
+      }
+      const body = await parseBody(req)
+      const [sceneRows] = await db.execute(
+        `SELECT id, scene_no, title, summary, content, location, time_of_day
+         FROM script_scenes WHERE project_id = ? ORDER BY episode_no ASC, scene_no ASC, id ASC`,
+        [resolved.node.project_id],
+      )
+      const scene = chooseSceneForRelink({
+        requestedSceneId: body.sceneId,
+        requestedLabel: body.label || body.location,
+        scenes: sceneRows,
+      })
+      if (!scene) {
+        fail(res, 4004, '没有找到可关联的剧本场景，请提供有效 sceneId 或场景名称', 404)
+        return
+      }
+      const [projectRows] = await db.execute(
+        `SELECT visual_style, category FROM projects WHERE id = ? LIMIT 1`,
+        [resolved.node.project_id],
+      )
+      const promptText = buildScriptScenePrompt({
+        scene,
+        projectVisualStyle: projectRows[0]?.visual_style || '',
+        projectCategory: projectRows[0]?.category || '',
+      })
+      const environmentPromptText = buildSceneEnvironmentPrompt({
+        scene,
+        projectVisualStyle: projectRows[0]?.visual_style || '',
+        projectCategory: projectRows[0]?.category || '',
+      })
+      await db.execute(
+        `UPDATE asset_nodes
+         SET ref_id = ?, label = ?, group_key = ?, prompt_text = ?,
+             environment_prompt_text = ?, appearance_label = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [
+          scene.id,
+          buildSceneDisplayLabel(scene),
+          `scene:${scene.id}:default`,
+          promptText,
+          environmentPromptText,
+          [scene.location, scene.time_of_day].filter(Boolean).join(' · ') || null,
+          nodeId,
+        ],
+      )
+      const [rows] = await db.execute('SELECT * FROM asset_nodes WHERE id = ? LIMIT 1', [nodeId])
+      const [images] = await db.execute(
+        'SELECT * FROM asset_node_images WHERE asset_node_id = ? ORDER BY id ASC',
+        [nodeId],
+      )
+      success(
+        res,
+        buildAssetCanvasView({
+          projectId: Number(resolved.node.project_id),
+          nodes: rows,
+          images: images.map(assetNodeImageDto),
+        }).nodes[0],
+        '场景节点已重新关联并刷新提示词',
+      )
+      return
+    }
+    if (assetNodeHydratePromptMatch && req.method === 'POST') {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const nodeId = parseId(assetNodeHydratePromptMatch[1])
+      const resolved = await fetchAssetNodeForUser(nodeId, user.id)
+      if (!resolved) {
+        fail(res, 4004, '画布节点不存在或无权访问', 404)
+        return
+      }
+      if (!['scene', 'character'].includes(resolved.node.node_type) || !resolved.node.ref_id) {
+        fail(res, 4001, '只有关联剧本场景或角色的节点可以自动补齐提示词', 400)
+        return
+      }
+      const [projectRows] = await db.execute(
+        `SELECT visual_style, category FROM projects WHERE id = ? LIMIT 1`,
+        [resolved.node.project_id],
+      )
+      let promptText = ''
+      let environmentPromptText = null
+      let turnaroundPromptText = null
+      let negativePrompt = null
+      if (resolved.node.node_type === 'scene') {
+        const [sceneRows] = await db.execute(
+        `SELECT id, scene_no, title, summary, content, spatial_anchors_json, location, time_of_day
+           FROM script_scenes WHERE id = ? AND project_id = ? LIMIT 1`,
+          [resolved.node.ref_id, resolved.node.project_id],
+        )
+        if (!sceneRows[0]) {
+          fail(res, 4004, '关联剧本场景不存在', 404)
+          return
+        }
+        promptText = buildScriptScenePrompt({
+          scene: sceneRows[0],
+          projectVisualStyle: projectRows[0]?.visual_style || '',
+          projectCategory: projectRows[0]?.category || '',
+        })
+        environmentPromptText = buildSceneEnvironmentPrompt({
+          scene: sceneRows[0],
+          projectVisualStyle: projectRows[0]?.visual_style || '',
+          projectCategory: projectRows[0]?.category || '',
+        })
+      } else {
+        const [characterRows] = await db.execute(
+          `SELECT * FROM characters WHERE id = ? AND project_id = ? AND status <> 'archived' LIMIT 1`,
+          [resolved.node.ref_id, resolved.node.project_id],
+        )
+        if (!characterRows[0]) {
+          fail(res, 4004, '关联剧本角色不存在', 404)
+          return
+        }
+        const [sceneRows] = await db.execute(
+          `SELECT episode_no, scene_no, title, summary, content, location, time_of_day
+           FROM script_scenes WHERE project_id = ? ORDER BY episode_no ASC, scene_no ASC, id ASC`,
+          [resolved.node.project_id],
+        )
+        const generated = buildScriptCharacterPrompt({
+          character: characterRows[0],
+          scenes: sceneRows,
+          projectVisualStyle: projectRows[0]?.visual_style || '',
+          projectCategory: projectRows[0]?.category || '',
+        })
+        promptText = generated.prompt
+        turnaroundPromptText = generated.turnaroundPrompt
+        negativePrompt = generated.negativePrompt
+      }
+      await db.execute(
+        `UPDATE asset_nodes
+         SET prompt_text = ?, turnaround_prompt_text = COALESCE(?, turnaround_prompt_text),
+             environment_prompt_text = COALESCE(?, environment_prompt_text),
+             negative_prompt = COALESCE(?, negative_prompt), updated_at = NOW()
+         WHERE id = ?`,
+        [promptText, turnaroundPromptText, environmentPromptText, negativePrompt, nodeId],
+      )
+      const [rows] = await db.execute('SELECT * FROM asset_nodes WHERE id = ? LIMIT 1', [nodeId])
+      const [images] = await db.execute(
+        'SELECT * FROM asset_node_images WHERE asset_node_id = ? ORDER BY id ASC',
+        [nodeId],
+      )
+      success(
+        res,
+        buildAssetCanvasView({
+          projectId: Number(resolved.node.project_id),
+          nodes: rows,
+          images: images.map(assetNodeImageDto),
+        }).nodes[0],
+        `${resolved.node.node_type === 'scene' ? '场景' : '角色'}详细提示词已补齐并保存`,
+      )
+      return
+    }
+    if (assetNodeMatch && req.method === 'PATCH') {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const nodeId = parseId(assetNodeMatch[1])
+      const resolved = await fetchAssetNodeForUser(nodeId, user.id)
+      if (!resolved) {
+        fail(res, 4004, '画布节点不存在或无权访问', 404)
+        return
+      }
+      const body = await parseBody(req)
+      const updates = []
+      const params = []
+      for (const [key, column] of [
+        ['label', 'label'],
+        ['appearanceLabel', 'appearance_label'],
+        ['promptText', 'prompt_text'],
+        ['turnaroundPromptText', 'turnaround_prompt_text'],
+        ['environmentPromptText', 'environment_prompt_text'],
+        ['negativePrompt', 'negative_prompt'],
+        ['groupKey', 'group_key'],
+      ]) {
+        if (body[key] === undefined) continue
+        const value = body[key] == null ? '' : String(body[key]).trim()
+        if (key === 'label' && !value) {
+          fail(res, 4001, '节点名称不能为空')
+          return
+        }
+        updates.push(`${column} = ?`)
+        params.push(key === 'appearanceLabel' || key === 'groupKey' ? value || null : value)
+      }
+      if (['x', 'y', 'width', 'height'].some((key) => body[key] !== undefined)) {
+        const layout = normalizeAssetNodeLayout({
+          x: body.x ?? resolved.node.x,
+          y: body.y ?? resolved.node.y,
+          width: body.width ?? resolved.node.width,
+          height: body.height ?? resolved.node.height,
+        })
+        updates.push('x = ?', 'y = ?', 'width = ?', 'height = ?')
+        params.push(layout.x, layout.y, layout.width, layout.height)
+      }
+      if (!updates.length) {
+        fail(res, 4001, '没有可更新的字段')
+        return
+      }
+      params.push(nodeId)
+      await db.execute(`UPDATE asset_nodes SET ${updates.join(', ')}, updated_at = NOW() WHERE id = ?`, params)
+      const [rows] = await db.execute('SELECT * FROM asset_nodes WHERE id = ? LIMIT 1', [nodeId])
+      const [images] = await db.execute(
+        'SELECT * FROM asset_node_images WHERE asset_node_id = ? ORDER BY id ASC',
+        [nodeId],
+      )
+      success(
+        res,
+        buildAssetCanvasView({
+          projectId: Number(resolved.node.project_id),
+          nodes: rows,
+          images,
+        }).nodes[0],
+        '画布节点已更新',
+      )
+      return
+    }
+    if (assetNodeMatch && req.method === 'DELETE') {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const nodeId = parseId(assetNodeMatch[1])
+      const resolved = await fetchAssetNodeForUser(nodeId, user.id)
+      if (!resolved) {
+        fail(res, 4004, '画布节点不存在或无权访问', 404)
+        return
+      }
+      await db.execute(
+        `UPDATE asset_nodes SET status = 'archived', updated_at = NOW() WHERE id = ?`,
+        [nodeId],
+      )
+      success(res, { success: true }, '画布节点已移除')
+      return
+    }
+
+    const assetNodeImagesMatch = pathname.match(/^\/api\/asset-nodes\/(\d+)\/images$/)
+    if (assetNodeImagesMatch && req.method === 'GET') {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const nodeId = parseId(assetNodeImagesMatch[1])
+      if (!(await fetchAssetNodeForUser(nodeId, user.id))) {
+        fail(res, 4004, '画布节点不存在或无权访问', 404)
+        return
+      }
+      const [rows] = await db.execute(
+        'SELECT * FROM asset_node_images WHERE asset_node_id = ? ORDER BY id ASC',
+        [nodeId],
+      )
+      success(res, { items: rows.map(assetNodeImageDto) })
+      return
+    }
+    const assetNodeGenerateMatch = pathname.match(/^\/api\/asset-nodes\/(\d+)\/images\/generate$/)
+    if (assetNodeGenerateMatch && req.method === 'POST') {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const nodeId = parseId(assetNodeGenerateMatch[1])
+      try {
+        const job = await enqueueAssetNodeImageJob(user.id, nodeId, await parseBody(req))
+        if (!job) {
+          fail(res, 4004, '画布节点不存在或无权访问', 404)
+          return
+        }
+        success(res, job, '画布节点形象生成任务已提交')
+      } catch (error) {
+        fail(res, 4011, error instanceof Error ? error.message : '画布节点形象任务提交失败', error?.statusCode || 400)
+      }
+      return
+    }
+    const assetNodeImageConfirmMatch = pathname.match(/^\/api\/asset-node-images\/(\d+)\/confirm$/)
+    if (assetNodeImageConfirmMatch && req.method === 'POST') {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const imageId = parseId(assetNodeImageConfirmMatch[1])
+      const [rows] = await db.execute(
+        `SELECT ai.*, n.project_id, n.node_type, n.ref_id, n.label, n.status AS node_status, p.user_id AS ownerId
+         FROM asset_node_images ai
+         INNER JOIN asset_nodes n ON n.id = ai.asset_node_id
+         INNER JOIN projects p ON p.id = n.project_id
+         WHERE ai.id = ? LIMIT 1`,
+        [imageId],
+      )
+      const image = rows[0]
+      if (!image || Number(image.ownerId) !== Number(user.id) || image.node_status === 'archived') {
+        fail(res, 4004, '画布节点形象不存在或无权访问', 404)
+        return
+      }
+      const legacyCharacterBoard = image.node_type === 'character' && isCharacterAssetPackRow(image)
+      if (image.node_type === 'character'
+        && image.view_set_type !== 'character-asset-pack'
+        && !legacyCharacterBoard) {
+        fail(res, 4004, '角色资产板通过整体视觉检查后会自动采用，无需单独确认旧版拆分图片', 409)
+        return
+      }
+      if (image.status === 'superseded') {
+        fail(res, 4004, '该图片已被新资产替代，不能重新检查', 409)
+        return
+      }
+      if (legacyCharacterBoard) {
+        await db.execute(
+          `UPDATE asset_node_images
+           SET view_set_type = 'character-asset-pack', view_key = NULL,
+               view_index = NULL, view_label = '角色资产板'
+           WHERE id = ?`,
+          [imageId],
+        )
+        image.view_set_type = 'character-asset-pack'
+        image.view_key = null
+        image.view_index = null
+        image.view_label = '角色资产板'
+      }
+      const confirmationGate = validateCharacterTurnaroundConfirmation({
+        viewType: image.view_set_type,
+        viewKey: image.view_key,
+        imageStatus: image.status,
+        visionStatus: image.vision_status,
+        imageUrl: image.image_url,
+        modelName: image.model_name,
+        identityStatus: image.identity_status,
+        identityReason: image.identity_reason,
+      })
+      const assetPackGate = validateCharacterAssetPackConfirmation({
+        viewType: image.view_set_type,
+        imageStatus: image.status,
+        visionStatus: image.vision_status,
+        imageUrl: image.image_url,
+        modelName: image.model_name,
+      })
+      const faceCloseupGate = validateCharacterFaceCloseupConfirmation({
+        viewType: image.view_set_type,
+        viewKey: image.view_key,
+        imageStatus: image.status,
+        visionStatus: image.vision_status,
+        imageUrl: image.image_url,
+        modelName: image.model_name,
+        identityStatus: image.identity_status,
+        identityReason: image.identity_reason,
+      })
+      const propGate = validatePropTurnaroundConfirmation({
+        nodeType: image.node_type,
+        viewType: image.view_set_type,
+        viewKey: image.view_key,
+        imageStatus: image.status,
+        visionStatus: image.vision_status,
+        imageUrl: image.image_url,
+        modelName: image.model_name,
+      })
+      const selectedConfirmationGate = !assetPackGate.ready
+        ? assetPackGate
+        : !confirmationGate.ready
+        ? confirmationGate
+        : !faceCloseupGate.ready ? faceCloseupGate : propGate
+      if (!selectedConfirmationGate.ready) {
+        fail(res, 4004, selectedConfirmationGate.message, 409)
+        return
+      }
+      const baseAssetGate = validateAssetImageConfirmation({
+        nodeType: image.node_type,
+        viewType: image.view_set_type,
+        imageStatus: image.status,
+        visionStatus: image.vision_status,
+        imageUrl: image.image_url,
+        modelName: image.model_name,
+      })
+      if (!baseAssetGate.ready) {
+        fail(res, 4004, baseAssetGate.message, 409)
+        return
+      }
+      if (image.view_set_type === 'scene-nine-grid') {
+        const sceneGate = validateSceneNineGridViewConfirmation({
+          viewKey: image.view_key || (image.node_type === 'character' && image.view_set_type === 'single' ? 'front' : null),
+          crop: safeJsonParse(image.crop_json, null),
+          sourceImageId: image.source_image_id,
+          imageStatus: image.status,
+          visionStatus: image.vision_status,
+          imageUrl: image.image_url,
+          modelName: image.model_name,
+        })
+        if (!sceneGate.ready) {
+          fail(res, 4004, sceneGate.message, 409)
+          return
+        }
+      }
+      if (image.node_type === 'character') {
+        const [characterRows] = await db.execute(
+          `SELECT id, name, appearance, costume, costume_description
+           FROM characters WHERE id = ? AND project_id = ? LIMIT 1`,
+          [Number(image.ref_id) || 0, Number(image.project_id)],
+        )
+        const [referenceRows] = await db.execute(
+          `SELECT * FROM asset_node_images WHERE asset_node_id = ? AND id <> ?
+           ORDER BY id DESC`,
+          [image.asset_node_id, imageId],
+        )
+        const referenceSet = resolveCharacterReferenceSet([
+          { ...image, status: 'confirmed' },
+          ...referenceRows,
+        ])
+        const identitySnapshot = buildCharacterIdentityLockSnapshot({
+          character: characterRows[0] || { id: image.ref_id, name: image.label },
+          baseImage: { ...image, status: 'confirmed' },
+          referenceSet,
+        })
+        await db.execute(
+          `UPDATE asset_nodes SET character_identity_lock_json = ?, updated_at = NOW() WHERE id = ?`,
+          [JSON.stringify(identitySnapshot), image.asset_node_id],
+        )
+        await db.execute(
+          `UPDATE asset_node_images SET character_identity_lock_json = ? WHERE id = ?`,
+          [JSON.stringify(identitySnapshot), imageId],
+        )
+      }
+      if (image.view_set_type === 'single' && ['character', 'scene'].includes(image.node_type)) {
+        await db.execute(
+          `UPDATE asset_node_images
+           SET status = 'superseded'
+           WHERE asset_node_id = ? AND view_set_type = 'single'
+             AND status = 'confirmed' AND id <> ?`,
+          [image.asset_node_id, imageId],
+        )
+        if (image.node_type === 'scene') {
+          await db.execute(
+            `UPDATE asset_node_images
+             SET status = 'superseded'
+             WHERE asset_node_id = ? AND view_set_type = 'scene-nine-grid'
+               AND (source_image_id IS NULL OR source_image_id <> ?)
+               AND status IN ('candidate', 'confirmed')`,
+            [image.asset_node_id, imageId],
+          )
+        }
+      }
+      if (image.node_type === 'character' && image.view_set_type === 'character-asset-pack') {
+        await db.execute(
+          `UPDATE asset_node_images
+           SET status = 'superseded'
+           WHERE asset_node_id = ?
+             AND view_set_type IN (${CHARACTER_PACK_LEGACY_TYPES})
+             AND id <> ?
+             AND status IN ('candidate', 'confirmed')`,
+          [image.asset_node_id, imageId],
+        )
+      }
+      if (image.view_set_type === 'scene-nine-grid') {
+        await db.execute(
+          `UPDATE asset_node_images
+           SET status = 'superseded'
+           WHERE asset_node_id = ? AND view_set_type = 'scene-nine-grid'
+             AND view_key = ? AND id <> ? AND status IN ('candidate', 'confirmed')`,
+          [image.asset_node_id, image.view_key, imageId],
+        )
+      }
+      if (image.view_set_type === 'character-turnaround') {
+        // A retry stays independent until this request explicitly adopts it.
+        // Only then is the prior confirmed/candidate version of the same angle
+        // superseded; other angles and other temporal groups remain untouched.
+        await db.execute(
+          `UPDATE asset_node_images
+           SET status = 'superseded'
+           WHERE asset_node_id = ? AND view_set_type = 'character-turnaround'
+             AND view_key = ? AND id <> ? AND status IN ('candidate', 'confirmed')`,
+          [image.asset_node_id, image.view_key, imageId],
+        )
+      }
+      if (image.view_set_type === 'character-face-closeup') {
+        await db.execute(
+          `UPDATE asset_node_images
+           SET status = 'superseded'
+           WHERE asset_node_id = ? AND view_set_type = 'character-face-closeup'
+             AND view_key = ? AND id <> ? AND status IN ('candidate', 'confirmed')`,
+          [image.asset_node_id, image.view_key, imageId],
+        )
+      }
+      if (image.view_set_type === 'prop-turnaround') {
+        await db.execute(
+          `UPDATE asset_node_images
+           SET status = 'superseded'
+           WHERE asset_node_id = ? AND view_set_type = 'prop-turnaround'
+             AND view_key = ? AND id <> ? AND status IN ('candidate', 'confirmed')`,
+          [image.asset_node_id, image.view_key, imageId],
+        )
+      }
+      await db.execute(
+        `UPDATE asset_node_images SET status = 'confirmed', confirmed_at = NOW() WHERE id = ?`,
+        [imageId],
+      )
+      const [updatedRows] = await db.execute(
+        'SELECT * FROM asset_node_images WHERE id = ? LIMIT 1',
+        [imageId],
+      )
+      success(res, assetNodeImageDto(updatedRows[0]), '形象已采用')
+      return
+    }
+    const assetNodeImageVisionCheckMatch = pathname.match(/^\/api\/asset-node-images\/(\d+)\/vision-check$/)
+    if (assetNodeImageVisionCheckMatch && req.method === 'POST') {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const imageId = parseId(assetNodeImageVisionCheckMatch[1])
+      const [rows] = await db.execute(
+         `SELECT ai.*, n.project_id, n.node_type, n.ref_id, n.label, n.status AS node_status, p.user_id AS ownerId
+         FROM asset_node_images ai
+         INNER JOIN asset_nodes n ON n.id = ai.asset_node_id
+         INNER JOIN projects p ON p.id = n.project_id
+         WHERE ai.id = ? LIMIT 1`,
+        [imageId],
+      )
+      const image = rows[0]
+      if (!image || Number(image.ownerId) !== Number(user.id) || image.node_status === 'archived') {
+        fail(res, 4004, '画布节点形象不存在或无权访问', 404)
+        return
+      }
+      if (image.status === 'superseded') {
+        fail(res, 4004, '该图片已被新资产替代，不能重新检查', 409)
+        return
+      }
+      if (image.node_type === 'scene' && !isSceneVisionCheckEnabled()) {
+        await db.execute(
+          `UPDATE asset_node_images
+           SET vision_status = 'skipped',
+               vision_reason = '未运行视觉检查；结果需由用户按全景基准人工确认',
+               vision_checked_at = NULL,
+               identity_status = 'not_checked'
+           WHERE id = ?`,
+          [imageId],
+        )
+        const [updatedRows] = await db.execute(
+          'SELECT * FROM asset_node_images WHERE id = ? LIMIT 1',
+          [imageId],
+        )
+        success(res, assetNodeImageDto(updatedRows[0]), '场景视觉检查未运行，请按全景基准人工确认')
+        return
+      }
+      const currentStored = image.storage_key ? await objectStorage.getObject(image.storage_key) : null
+      let sourceStored = null
+      let sourceImageUrl = null
+      if (image.view_set_type === 'scene-nine-grid' && image.source_image_id) {
+        const [sourceRows] = await db.execute(
+          'SELECT storage_key, image_url FROM asset_node_images WHERE id = ? LIMIT 1',
+          [image.source_image_id],
+        )
+        sourceImageUrl = sourceRows[0]?.image_url || null
+        if (sourceRows[0]?.storage_key) {
+          sourceStored = await objectStorage.getObject(sourceRows[0].storage_key)
+        }
+      }
+      let identityReferenceUrls = []
+      let identityReferenceBytes = []
+      let identityChecked = false
+      if (image.node_type === 'character'
+        && ['character-turnaround', 'character-face-closeup'].includes(image.view_set_type)) {
+        identityChecked = true
+        const [referenceRows] = await db.execute(
+          `SELECT * FROM asset_node_images
+           WHERE asset_node_id = ? AND id <> ? ORDER BY id DESC`,
+          [image.asset_node_id, imageId],
+        )
+        const referenceSet = resolveCharacterReferenceSet(referenceRows)
+        identityReferenceUrls = referenceSet.imageUrls
+        for (const storageKey of referenceSet.storageKeys) {
+          const stored = await objectStorage.getObject(storageKey)
+          if (stored?.bytes?.length) identityReferenceBytes.push(stored.bytes)
+        }
+      }
+      let vision
+      try {
+        vision = await inspectAssetImage({
+          imageUrl: currentStored ? null : image.image_url,
+          imageBytes: currentStored?.bytes || null,
+          referenceImageUrl: sourceStored ? null : sourceImageUrl,
+        referenceImageBytes: sourceStored?.bytes || null,
+        referenceImageUrls: identityReferenceBytes.length ? [] : identityReferenceUrls,
+        referenceImageBytesList: identityReferenceBytes,
+        viewKey: image.view_key || (image.node_type === 'character' && image.view_set_type === 'single' ? 'front' : null),
+        scene: image.node_type === 'scene',
+        assetPack: image.view_set_type === 'character-asset-pack' || isCharacterAssetPackRow(image),
+        nodeType: image.node_type,
+        identityLock: identityChecked,
+          noFace: image.node_type === 'character'
+            && /不露脸|正脸不呈现|不直接露脸|不出现正脸|脸部.*不可见/u.test(String(image.prompt_snapshot || '')),
+        })
+      } catch (error) {
+        vision = {
+          passed: false,
+          reason: `视觉检查无法读取已生成图片：${error instanceof Error ? error.message : '未知错误'}`,
+        }
+      }
+      await db.execute(
+        `UPDATE asset_node_images
+         SET vision_status = ?, vision_reason = ?, vision_checked_at = NOW(),
+             status = IF(status = 'failed', 'candidate', status),
+             identity_status = ?, identity_reason = ?,
+             identity_similarity_score = ?, wardrobe_consistency_score = ?
+         WHERE id = ?`,
+        [
+          vision.pending ? 'pending' : vision.passed ? 'passed' : 'failed',
+          vision.reason || null,
+          identityChecked ? (vision.pending ? 'pending' : vision.passed ? 'passed' : 'failed') : 'not_checked',
+          identityChecked ? vision.reason || null : null,
+          identityChecked ? vision.identitySimilarityScore : null,
+          identityChecked ? vision.wardrobeConsistencyScore : null,
+          imageId,
+        ],
+      )
+      if (vision.passed) {
+        if (image.node_type === 'character'
+          && (image.view_set_type === 'character-asset-pack' || isCharacterAssetPackRow(image))) {
+          await autoAdoptAssetPack(image.asset_node_id, [imageId])
+        } else if (['prop', 'material'].includes(String(image.node_type))
+          && image.view_set_type === 'single') {
+          await autoAdoptSingleAsset(imageId)
+        }
+      }
+      const [updatedRows] = await db.execute(
+        'SELECT * FROM asset_node_images WHERE id = ? LIMIT 1',
+        [imageId],
+      )
+      success(res, assetNodeImageDto(updatedRows[0]), '视角视觉检查已更新')
       return
     }
 
@@ -6824,20 +15269,41 @@ const server = createServer(async (req, res) => {
         fail(res, 4001, '只有失败或已取消的生成任务可以重试', 409)
         return
       }
+      let retryRequest = safeJsonParse(job.request_json, {})
+      retryRequest = await repairVideoRetryReferences(job, retryRequest)
+      // Reuse pending tasks and completed URLs to avoid duplicate provider
+      // charges. Only terminally failed provider tasks are replaced.
+      retryRequest.providerTasks = Array.isArray(retryRequest.providerTasks)
+        ? retryRequest.providerTasks.filter((task) => {
+            const status = String(task?.status || '').trim().toLowerCase()
+            const hasCompletedUrl = /^https?:\/\//i.test(String(task?.videoUrl || '').trim())
+            return String(task?.videoId || '').trim() && status !== 'failed'
+              && (status !== 'succeeded' || hasCompletedUrl)
+          })
+        : []
+      delete retryRequest.providerTaskId
+      if (!retryRequest.providerTasks.length) delete retryRequest.providerReferenceImages
       await updateGenerationJob(jobId, {
         status: 'queued',
         progress_percent: 0,
         result_json: null,
         error_text: null,
+        request_json: JSON.stringify(retryRequest),
       })
       queueGenerationJob(jobId)
       const updated = await fetchGenerationJob(jobId)
+      const isVideoGenerationJob = ['video_image', 'lip_sync'].includes(job.job_type)
       success(res, projectTaskItemRow({
         taskKey: `generation-${jobId}`,
-        taskType: job.job_type === 'lip_sync' ? 'video' : 'image',
+        taskType: isVideoGenerationJob ? 'video' : 'image',
         sourceId: jobId,
         projectId: Number(job.project_id),
-        title: job.job_type === 'lip_sync' ? '对白口型同步任务' : '图片生成任务',
+        title:
+          job.job_type === 'lip_sync'
+            ? '对白口型同步任务'
+            : job.job_type === 'video_image'
+              ? '动作视频生成任务'
+              : '图片生成任务',
         status: 'queued',
         runtimeStatus: 'queued',
         progressPercent: 0,
@@ -6940,7 +15406,16 @@ const server = createServer(async (req, res) => {
         return
       }
 
-      const payload = await buildProjectFinalEdit(project)
+      let episodeNo
+      try {
+        episodeNo = normalizeEpisodeExportRequest({
+          episodeNo: url.searchParams.get('episodeNo') || undefined,
+        }).episodeNo
+      } catch (error) {
+        fail(res, 4001, error instanceof Error ? error.message : '无效的 episodeNo', 400)
+        return
+      }
+      const payload = await buildProjectFinalEdit(project, { episodeNo })
       success(res, payload)
       return
     }
@@ -6958,22 +15433,37 @@ const server = createServer(async (req, res) => {
       }
 
       const body = await parseBody(req)
-      const currentFinalEdit = await buildProjectFinalEdit(project)
-      const normalizedDraft = normalizeFinalEditDraft(body, {
+      let episodeNo
+      try {
+        episodeNo = normalizeEpisodeExportRequest({
+          episodeNo: url.searchParams.get('episodeNo') || undefined,
+        }).episodeNo
+      } catch (error) {
+        fail(res, 4001, error instanceof Error ? error.message : '无效的 episodeNo', 400)
+        return
+      }
+      const currentFinalEdit = await buildProjectFinalEdit(project, { episodeNo })
+      const normalizedDraft = normalizeFinalEditDraftPayload(body, {
         videoItems: currentFinalEdit.videoTrack.items,
         audioTracks: currentFinalEdit.audioTracks,
       })
 
+      const storedDraftRow = await fetchFinalEditDraft(projectId)
+      const persistedDraft = saveFinalEditDraftForEpisode(
+        storedDraftRow?.draft_json,
+        episodeNo,
+        normalizedDraft,
+      )
       await db.execute(
         `INSERT INTO final_edit_drafts (project_id, draft_json)
          VALUES (?, ?)
          ON DUPLICATE KEY UPDATE
            draft_json = VALUES(draft_json),
            updated_at = NOW()`,
-        [projectId, JSON.stringify(normalizedDraft)],
+        [projectId, JSON.stringify(persistedDraft)],
       )
 
-      const payload = await buildProjectFinalEdit(project)
+      const payload = await buildProjectFinalEdit(project, { episodeNo })
       success(res, payload, '成片编辑草稿已保存')
       return
     }
@@ -7085,7 +15575,7 @@ const server = createServer(async (req, res) => {
         let character = null
         if (requestedCharacterId) {
           const [characterRows] = await db.execute(
-            `SELECT id, name, voice_setting, voice_profile_key, voice_locked,
+            `SELECT id, name, voice_setting, voice_profile_key, voice_locked, voice_design_json,
                     age_group, gender, voice_style, appearance, personality, role_tag
              FROM characters
              WHERE id = ? AND project_id = ?
@@ -7106,13 +15596,42 @@ const server = createServer(async (req, res) => {
         let voiceProfile = null
         if (trackType === 'dialogue') {
           if (!character.voice_profile_key || !character.voice_locked) {
+            const customVoiceDesign = safeJsonParse(character.voice_design_json, null)
+            const hasCustomVoice = Boolean(
+              character.voice_locked
+              && character.voice_setting
+              && customVoiceDesign?.provider === 'qwen'
+              && customVoiceDesign?.voiceId === character.voice_setting
+              && customVoiceDesign?.targetModel,
+            )
+            if (!hasCustomVoice) {
+              fail(res, 4010, `角色“${character.name}”还没有确认并锁定音色，请先完成角色音色管理`, 409)
+              return
+            }
+          }
+          const characterVoiceDesign = safeJsonParse(character.voice_design_json, null)
+          const isCustomDesignedVoice = Boolean(
+            characterVoiceDesign?.provider === 'qwen'
+            && characterVoiceDesign?.voiceId === character.voice_setting
+            && characterVoiceDesign?.targetModel,
+          )
+          if (isCustomDesignedVoice) {
+            voiceProfile = {
+              profileKey: character.voice_profile_key || null,
+              voiceId: character.voice_setting,
+              modelName: characterVoiceDesign.targetModel,
+              instructions: '',
+              languageType: 'Chinese',
+            }
+          } else if (!character.voice_profile_key || !character.voice_locked) {
             fail(res, 4010, `角色“${character.name}”还没有确认并锁定音色，请先完成角色音色管理`, 409)
             return
-          }
-          voiceProfile = await findActiveVoiceProfile(character.voice_profile_key)
-          if (!voiceProfile) {
-            fail(res, 4010, `角色“${character.name}”绑定的音色已停用，请重新选择`, 409)
-            return
+          } else {
+            voiceProfile = await findActiveVoiceProfile(character.voice_profile_key)
+            if (!voiceProfile) {
+              fail(res, 4010, `角色“${character.name}”绑定的音色已停用，请重新选择`, 409)
+              return
+            }
           }
         } else if (trackType === 'narration' && body.voiceProfileKey) {
           voiceProfile = await findActiveVoiceProfile(body.voiceProfileKey)
@@ -7146,7 +15665,6 @@ const server = createServer(async (req, res) => {
               : body.voiceName
                 ? String(body.voiceName).trim()
                 : character?.voice_setting || audioConfig.defaultVoice
-        const voiceInstructions = voiceProfile?.instructions || null
         const sourceSceneId = scene?.id || null
         const sourceCharacterId =
           trackType === 'music' || trackType === 'sfx' ? null : character?.id || null
@@ -7163,6 +15681,25 @@ const server = createServer(async (req, res) => {
           fail(res, 4001, 'Speech synthesis text is required', 400)
           return
         }
+        const storedVoiceDesign = safeJsonParse(character?.voice_design_json, null)
+        const sceneContext = [
+          scene?.title,
+          scene?.summary,
+          scene?.content,
+        ].filter(Boolean).join('，')
+        const agentVoiceInstructions = storedVoiceDesign
+          ? buildVoicePerformanceInstructions({
+            design: storedVoiceDesign,
+            characterName: character?.name,
+            sceneContext,
+            dialogueText: sourceText,
+          })
+          : ''
+        const voiceInstructions = [
+          voiceProfile?.instructions,
+          character?.voice_style,
+          agentVoiceInstructions,
+        ].filter(Boolean).join('；') || null
         const title = buildAudioSourceTitle({
           trackType,
           sceneNo: scene?.scene_no || null,
@@ -7210,6 +15747,11 @@ const server = createServer(async (req, res) => {
               publicBaseUrl: buildGeneratedAudioPublicBaseUrl(),
               outputDir: GENERATED_AUDIO_DIR,
               candidateCount,
+              allowModelFallback: !(
+                trackType === 'dialogue'
+                && character?.voice_setting === voiceProfile?.voiceId
+                && safeJsonParse(character?.voice_design_json, null)?.provider === 'qwen'
+              ),
             })
           } catch (audioError) {
             console.error('[audio] real provider failed', audioError)
@@ -7241,9 +15783,9 @@ const server = createServer(async (req, res) => {
           const [result] = await db.execute(
             `INSERT INTO audio_assets
                (project_id, track_type, scene_id, storyboard_id, character_id, version_no,
-               start_offset_seconds, title, audio_url, duration_seconds, voice_name, model_name, voice_profile_key,
+               start_offset_seconds, title, audio_url, storage_key, duration_seconds, voice_name, model_name, voice_profile_key,
                voice_instructions, status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'candidate')`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'candidate')`,
             [
               projectId,
               trackType,
@@ -7254,6 +15796,7 @@ const server = createServer(async (req, res) => {
               Math.max(0, Number(body.startOffsetSeconds) || 0),
               title,
               candidate.audioUrl,
+              null,
               candidate.durationSeconds || durationSeconds,
               candidate.voiceName || voiceName,
               candidate.modelName || modelName,
@@ -7261,7 +15804,16 @@ const server = createServer(async (req, res) => {
               candidate.voiceInstructions || voiceInstructions,
             ],
           )
-          insertedIds.push(Number(result.insertId))
+          const audioId = Number(result.insertId)
+          if (candidate.filePath) {
+            await ensureAudioAssetStorage({
+              id: audioId,
+              project_id: projectId,
+              audio_url: candidate.audioUrl,
+              filePath: candidate.filePath,
+            })
+          }
+          insertedIds.push(audioId)
         }
 
         const placeholders = insertedIds.map(() => '?').join(', ')
@@ -7315,10 +15867,22 @@ const server = createServer(async (req, res) => {
           body = {}
         }
 
-        const exportPackage = await buildExportPackage(projectId)
-        if (!exportPackage.canExport && exportPackage.readyShots <= 0) {
+        let episodeRequest
+        try {
+          episodeRequest = normalizeEpisodeExportRequest(body)
+        } catch (error) {
+          fail(res, 4001, error instanceof Error ? error.message : '无效的 episodeNo', 400)
+          return
+        }
+        const exportPackage = await buildExportPackage(projectId, episodeRequest)
+        if (episodeRequest.episodeNo
+          ? (!exportPackage.canExport || exportPackage.missingShots > 0)
+          : (!exportPackage.canExport && exportPackage.readyShots <= 0)) {
           const blockingMessage =
             exportPackage.blockingIssues[0]?.message ||
+            (episodeRequest.episodeNo
+              ? `第 ${episodeRequest.episodeNo} 集尚未完成全部确认视频，无法生成整集成片`
+              : null) ||
             (exportPackage.readyShots <= 0
               ? '当前项目还没有已确认视频，无法导出'
               : '当前项目素材尚未补齐，无法导出')
@@ -7326,7 +15890,11 @@ const server = createServer(async (req, res) => {
           return
         }
 
-        const finalEditPayload = await buildProjectFinalEdit(project)
+        const finalEditPayload = await buildProjectFinalEdit(project, { episodeNo: episodeRequest.episodeNo })
+        if (episodeRequest.episodeNo && finalEditPayload.validation.missingVideoCount > 0) {
+          fail(res, 4001, `第 ${episodeRequest.episodeNo} 集还有 ${finalEditPayload.validation.missingVideoCount} 个分镜缺少已确认视频`, 409)
+          return
+        }
         if (!finalEditPayload.validation.canExport) {
           const blockingMessage =
             finalEditPayload.validation.blockingIssues[0]?.message ||
@@ -7342,6 +15910,8 @@ const server = createServer(async (req, res) => {
           burnSubtitle: Boolean(body.burnSubtitle),
           hybridVideoPerScene: Math.max(1, Math.min(6, parseId(body.hybridVideoPerScene) || 4)),
           strictStoryboardAudio: body.strictStoryboardAudio !== false,
+          ...(episodeRequest.episodeNo ? { episodeNo: episodeRequest.episodeNo } : {}),
+          preserveSourceAudio: episodeRequest.preserveSourceAudio,
           finalEditDraft: finalEditPayload.draft,
           finalEditSummary: {
             enabledVideoCount: finalEditPayload.validation.enabledVideoCount,
@@ -7380,6 +15950,61 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    const projectDeletionMatch = pathname.match(/^\/api\/projects\/(\d+)$/)
+    if (projectDeletionMatch && req.method === 'DELETE') {
+      const user = await authenticate(req, res)
+      if (!user) return
+
+      const projectId = parseId(projectDeletionMatch[1])
+      const project = await fetchProjectForUser(projectId, user.id)
+      if (!project) {
+        fail(res, 4004, '项目不存在或无权访问', 404)
+        return
+      }
+
+      let body = {}
+      try {
+        body = await parseBody(req)
+      } catch {
+        fail(res, 4001, '删除确认信息格式无效')
+        return
+      }
+
+      const confirmName = String(body.confirmName || '').trim()
+      const expectedName = projectDeletionConfirmationName(project)
+      if (!confirmName) {
+        fail(res, 4001, `请输入项目名称“${expectedName}”以确认删除`)
+        return
+      }
+      if (confirmName !== expectedName) {
+        fail(res, 4090, '项目名称不匹配，请输入页面显示的完整项目名称', 409)
+        return
+      }
+
+      const connection = await db.getConnection()
+      try {
+        await connection.beginTransaction()
+        const [result] = await connection.execute(
+          `DELETE FROM projects WHERE id = ? AND user_id = ?`,
+          [projectId, user.id],
+        )
+        if (!result.affectedRows) {
+          await connection.rollback()
+          fail(res, 4004, '项目不存在或无权访问', 404)
+          return
+        }
+        await connection.commit()
+      } catch (error) {
+        await connection.rollback()
+        throw error
+      } finally {
+        connection.release()
+      }
+
+      success(res, { id: projectId }, '项目已永久删除')
+      return
+    }
+
     const projectMatch = pathname.match(/^\/api\/projects\/(\d+)(\/(outline|scenes)(\/.*)?)?$/)
     if (projectMatch) {
       const user = await authenticate(req, res)
@@ -7400,6 +16025,21 @@ const server = createServer(async (req, res) => {
           success(res, projectRow(project))
           return
         }
+        if (req.method === 'PATCH') {
+          const normalized = normalizeProjectUpdateInput(await parseBody(req))
+          if (normalized.error) {
+            fail(res, 4001, normalized.error)
+            return
+          }
+          const assignments = normalized.updates.map((item) => `${item.column} = ?`).join(', ')
+          await db.execute(
+            `UPDATE projects SET ${assignments}, updated_at = NOW() WHERE id = ? AND user_id = ?`,
+            [...normalized.updates.map((item) => item.value), projectId, user.id],
+          )
+          const [rows] = await db.execute(`SELECT * FROM projects WHERE id = ? LIMIT 1`, [projectId])
+          success(res, projectRow(rows[0]), '项目设置已保存')
+          return
+        }
       }
 
       if (sub === 'outline') {
@@ -7418,6 +16058,17 @@ const server = createServer(async (req, res) => {
       }
 
       if (sub === 'outline' && req.method === 'POST' && tail.startsWith('/generate')) {
+        const [modernScriptRows] = await db.execute(
+          `SELECT COUNT(*) AS total
+           FROM script_scenes sc
+           INNER JOIN season_structures ss ON ss.project_id = sc.project_id
+           WHERE sc.project_id = ?`,
+          [projectId],
+        )
+        if (Number(modernScriptRows[0]?.total || 0) > 0) {
+          fail(res, 4090, '此项目已有分集剧本，旧版总纲重生成已拦截，避免删除剧本与分镜', 409)
+          return
+        }
         const aiOutline = await aiGenerateOutline({
           id: project.id,
           name: project.name,
@@ -7484,7 +16135,7 @@ const server = createServer(async (req, res) => {
 
       if (sub === 'scenes' && req.method === 'GET') {
         const [rows] = await db.execute(
-          `SELECT * FROM script_scenes WHERE project_id = ? ORDER BY scene_no ASC, id ASC`,
+          `SELECT * FROM script_scenes WHERE project_id = ? ORDER BY episode_no ASC, sort_order ASC, scene_no ASC, id ASC`,
           [projectId],
         )
         success(res, { items: rows.map(sceneRow) })
@@ -7492,31 +16143,67 @@ const server = createServer(async (req, res) => {
       }
 
       if (sub === 'scenes' && req.method === 'POST' && tail.startsWith('/generate')) {
-        // 读取最新总纲
-        const [outlineRows] = await db.execute(
-          `SELECT * FROM story_outlines WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+        // 新工作台以故事圣经 + 分集结构为来源；旧总纲接口继续兼容历史项目。
+        const [seasonRows] = await db.execute(
+          `SELECT * FROM season_structures
+           WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
           [projectId],
         )
-        const outline = outlineRows[0]
-        if (!outline) {
-          fail(res, 4001, '请先生成总纲')
-          return
-        }
+        const season = seasonRows[0]
+        let outline = null
+        let scenesSpec = season ? seasonEpisodeSceneSpecs(jsonArray(season.episodes_json)) : []
 
-        let scenesSpec = []
-        try {
-          scenesSpec = outline.raw_json ? JSON.parse(outline.raw_json).scenes || [] : []
-        } catch {
-          scenesSpec = []
+        // 正文场景是空间解析的权威来源。分集摘要只有一集级别的叙事信息，
+        // 不能拿来替代公寓、电脑工作区、视频内办公室等实际空间。
+        const [scriptSceneRows] = await db.execute(
+          `SELECT episode_no, scene_no, title, summary, content, location, time_of_day,
+                  estimated_duration
+           FROM script_scenes
+           WHERE project_id = ?
+           ORDER BY episode_no ASC, sort_order ASC, scene_no ASC, id ASC`,
+          [projectId],
+        )
+        const extractedScriptScenes = extractSceneSpecsFromScriptScenes(scriptSceneRows)
+        if (extractedScriptScenes.length) {
+          scenesSpec = extractedScriptScenes
         }
 
         if (!scenesSpec.length) {
-          fail(res, 4001, '总纲中没有可用场景')
-          return
+          const [outlineRows] = await db.execute(
+            `SELECT * FROM story_outlines WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+            [projectId],
+          )
+          outline = outlineRows[0]
+          try {
+            scenesSpec = outline?.raw_json ? JSON.parse(outline.raw_json).scenes || [] : []
+          } catch {
+            scenesSpec = []
+          }
         }
 
+        // 读取最新总纲
+        if (!scenesSpec.length) {
+          fail(res, 4001, '请先生成并保存分集大纲')
+          return
+        }
+        // 重新生成会删除现有场景、剧本和分镜，必须由前端显式确认。
+        const [existingSceneRows] = await db.execute(
+          `SELECT COUNT(*) AS total FROM script_scenes WHERE project_id = ?`,
+          [projectId],
+        )
+        if (Number(existingSceneRows[0]?.total || 0) > 0 && String(req.headers['x-confirm-regenerate'] || '') !== 'true') {
+          fail(res, 4090, '项目已有场景，重新生成会覆盖剧本与分镜，请确认后再试', 409)
+          return
+        }
         // 清空旧场景（保持幂等）
-        await db.execute(`DELETE FROM script_scenes WHERE project_id = ?`, [projectId])
+        const [existingScenes] = await db.execute(
+          `SELECT COUNT(*) AS total FROM script_scenes WHERE project_id = ?`,
+          [projectId],
+        )
+        if (Number(existingScenes[0]?.total || 0) > 0) {
+          fail(res, 4090, '项目已有场景，旧版总纲不能覆盖现有剧本与分镜', 409)
+          return
+        }
 
         const connection = await db.getConnection()
         const insertedIds = []
@@ -7526,12 +16213,13 @@ const server = createServer(async (req, res) => {
             const spec = scenesSpec[i]
             const [insertResult] = await connection.execute(
               `INSERT INTO script_scenes
-                 (project_id, outline_id, scene_no, title, summary, location, time_of_day,
+                 (project_id, episode_no, outline_id, scene_no, title, summary, location, time_of_day,
                   estimated_duration, sort_order, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
               [
                 projectId,
-                outline.id,
+                Number(spec.episode_no || spec.episodeNo || 1),
+                outline?.id || null,
                 spec.scene_no || i + 1,
                 spec.title || `场景 ${i + 1}`,
                 spec.summary || '',
@@ -7557,10 +16245,92 @@ const server = createServer(async (req, res) => {
         )
 
         const [rows] = await db.execute(
-          `SELECT * FROM script_scenes WHERE project_id = ? ORDER BY scene_no ASC`,
+          `SELECT * FROM script_scenes WHERE project_id = ? ORDER BY episode_no ASC, sort_order ASC, scene_no ASC, id ASC`,
           [projectId],
         )
         success(res, { items: rows.map(sceneRow) }, '场景列表已生成')
+        return
+      }
+
+      if (sub === 'scenes' && req.method === 'POST' && tail.startsWith('/extract')) {
+        const body = await parseBody(req)
+        let scriptText = String(body.scriptText || body.content || '').trim()
+        if (!scriptText) {
+          const [sourceSceneRows] = await db.execute(
+            `SELECT episode_no, scene_no, title, summary, content
+             FROM script_scenes
+             WHERE project_id = ?
+             ORDER BY episode_no ASC, sort_order ASC, scene_no ASC, id ASC`,
+            [projectId],
+          )
+          scriptText = sourceSceneRows
+            .map((item) => [
+              `【第${item.episode_no || '?'}集·第${item.scene_no || '?'}场｜${item.title || '未命名场景'}】`,
+              item.summary,
+              item.content,
+            ].filter(Boolean).join('\n'))
+            .join('\n\n')
+            .trim()
+        }
+        if (!scriptText) {
+          fail(res, 4001, '请先提供完整剧本文本，场景解析 Agent 才能识别空间切换')
+          return
+        }
+        const sceneSpecs = await extractScenesWithAgent({
+          projectName: project.name,
+          scriptText,
+        })
+        const [existingRows] = await db.execute(
+          `SELECT COUNT(*) AS total FROM script_scenes WHERE project_id = ?`,
+          [projectId],
+        )
+        if (Number(existingRows[0]?.total || 0) > 0
+          && String(req.headers['x-confirm-regenerate'] || '') !== 'true') {
+          fail(res, 4090, '项目已有场景，重新解析会覆盖剧本与分镜，请确认后再试', 409)
+          return
+        }
+        const connection = await db.getConnection()
+        try {
+          await connection.beginTransaction()
+          await connection.execute(`DELETE FROM script_scenes WHERE project_id = ?`, [projectId])
+          for (let index = 0; index < sceneSpecs.length; index += 1) {
+            const spec = sceneSpecs[index]
+            await connection.execute(
+              `INSERT INTO script_scenes
+                (project_id, episode_no, outline_id, scene_no, title, summary, content, spatial_anchors_json, location,
+                 time_of_day, estimated_duration, sort_order, status)
+               VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+              [
+                projectId,
+                Number(spec.episode_no || spec.episodeNo || 1),
+                spec.scene_no || index + 1,
+                spec.title,
+                spec.summary,
+                spec.content,
+                JSON.stringify(spec.spatial_anchors),
+                spec.location,
+                spec.time_of_day,
+                spec.estimated_duration,
+                index,
+              ],
+            )
+          }
+          await connection.execute(
+            `UPDATE projects SET status = 'scripting', updated_at = NOW() WHERE id = ?`,
+            [projectId],
+          )
+          await connection.commit()
+        } catch (error) {
+          await connection.rollback()
+          throw error
+        } finally {
+          connection.release()
+        }
+        const [rows] = await db.execute(
+          `SELECT * FROM script_scenes WHERE project_id = ? ORDER BY episode_no ASC, sort_order ASC, scene_no ASC, id ASC`,
+          [projectId],
+        )
+        success(res, { items: rows.map(sceneRow) }, '场景解析 Agent 已完成')
         return
       }
     }
@@ -7588,11 +16358,21 @@ const server = createServer(async (req, res) => {
       }
 
       if (req.method === 'POST' && isGenerate) {
+        const [bibleRows] = await db.execute(
+          `SELECT * FROM story_bibles WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+          [scene.project_id],
+        )
+        const [seasonRows] = await db.execute(
+          `SELECT * FROM season_structures WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+          [scene.project_id],
+        )
         const [outlineRows] = await db.execute(
           `SELECT * FROM story_outlines WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
           [scene.project_id],
         )
-        const outline = outlineRows[0]
+        const outline = outlineRows[0] || null
+        const bible = bibleRows[0] ? storyBibleRow(bibleRows[0]) : null
+        const season = seasonRows[0] ? seasonStructureRow(seasonRows[0]) : null
         const aiScript = await aiGenerateSceneScript({
           scene,
           outline: outline
@@ -7601,6 +16381,8 @@ const server = createServer(async (req, res) => {
                 title: outline.title,
               }
             : null,
+          storyBible: bible,
+          seasonStructure: season,
           project: {
             name: scene.projectName,
             category: scene.category,
@@ -7611,9 +16393,19 @@ const server = createServer(async (req, res) => {
 
         await db.execute(
           `UPDATE script_scenes
-           SET content = ?, mood = ?, status = 'generated', updated_at = NOW()
+           SET title = ?, summary = ?, content = ?, mood = ?, location = ?,
+               time_of_day = ?, estimated_duration = ?, status = 'generated', updated_at = NOW()
            WHERE id = ?`,
-          [aiScript.content, aiScript.mood, sceneId],
+          [
+            aiScript.title,
+            aiScript.summary,
+            aiScript.content,
+            aiScript.mood,
+            aiScript.location,
+            aiScript.time_of_day,
+            aiScript.estimated_duration,
+            sceneId,
+          ],
         )
 
         const [rows] = await db.execute(`SELECT * FROM script_scenes WHERE id = ?`, [sceneId])
@@ -7739,17 +16531,84 @@ const server = createServer(async (req, res) => {
           return
         }
 
+        const workflowGates = await getProjectWorkflowReadiness(Number(scene.project_id))
+        if (!workflowGates.storyboard.allowed) {
+          fail(res, 4011, workflowGates.storyboard.reason, 409, { workflowGate: workflowGates.storyboard })
+          return
+        }
+
         const [outlineRows] = await db.execute(
           `SELECT * FROM story_outlines WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
           [scene.project_id],
         )
         const outline = outlineRows[0]
         const [projectCharacterRows] = await db.execute(
-          `SELECT id, name, role_tag, personality, appearance, voice_setting, age_group, gender,
-                  reference_image_url, status
-           FROM characters WHERE project_id = ? ORDER BY id ASC`,
+          `SELECT c.id, c.name, c.role_tag, c.personality, c.appearance, c.voice_setting, c.age_group, c.gender,
+                  c.voice_profile_key, c.voice_locked, c.reference_image_url, c.status,
+                  COALESCE((SELECT MAX(ci.version_no) FROM character_images ci
+                            WHERE ci.character_id = c.id AND ci.status = 'confirmed'), 1) AS asset_version,
+                  (SELECT ci.id FROM character_images ci
+                   WHERE ci.character_id = c.id AND ci.status = 'confirmed'
+                   ORDER BY ci.version_no DESC, ci.id DESC LIMIT 1) AS confirmed_image_id
+           FROM characters c WHERE c.project_id = ? ORDER BY c.id ASC`,
           [scene.project_id],
         )
+        const sceneText = [scene.title, scene.summary, scene.content]
+          .filter(Boolean)
+          .join('\n')
+        // 分镜 Agent 只能看到本场正文明确出现的角色；整季角色档案仍保留在
+        // 项目库中，但不能让后续场景人物因为总纲或“提及”混入当前镜头。
+        const sceneCharacterRows = projectCharacterRows.filter((character) =>
+          sceneText.includes(String(character.name || '').trim()),
+        )
+
+        const [storyboardAssetRows] = await db.execute(
+          `SELECT an.id AS asset_node_id, an.node_type, an.ref_id, an.label,
+                  an.prompt_text AS asset_prompt,
+                  ai.id AS image_id, ai.version_no, ai.view_set_version, ai.view_index, ai.view_key,
+                  ai.view_set_type, ai.status, ai.vision_status
+           FROM asset_nodes an
+           LEFT JOIN asset_node_images ai
+             ON ai.asset_node_id = an.id
+            AND ai.status = 'confirmed'
+              AND (ai.vision_status = 'passed'
+                   OR (an.node_type = 'scene' AND ai.vision_status = 'skipped'))
+           WHERE an.project_id = ? AND an.status <> 'archived'
+           ORDER BY an.id ASC, ai.id ASC`,
+          [scene.project_id],
+        )
+
+        const assetCatalog = buildStoryboardAssetCatalog(storyboardAssetRows, sceneId)
+        const projectKnowledgeChunks = buildProjectKnowledgeChunks({
+          scene,
+          characters: sceneCharacterRows,
+          assetCatalog,
+        })
+        const ragDocuments = buildRagDocuments({
+          projectId: scene.project_id,
+          episodeNo: scene.episode_no,
+          chunks: projectKnowledgeChunks,
+        })
+        const ragIndex = await indexRagDocuments(ragDocuments)
+        if (ragIndex.degraded) {
+          console.warn('[rag] single-scene memory sync degraded', {
+            projectId: scene.project_id,
+            episodeNo: scene.episode_no,
+            errorCode: ragIndex.errorCode,
+          })
+        }
+        const ragQuery = await queryRagDocuments({
+          projectId: scene.project_id,
+          episodeId: scene.episode_no,
+          query: [scene.title, scene.summary, scene.content].filter(Boolean).join(' '),
+        })
+        if (ragQuery.degraded) {
+          console.warn('[rag] single-scene context degraded', {
+            projectId: scene.project_id,
+            episodeNo: scene.episode_no,
+            errorCode: ragQuery.errorCode,
+          })
+        }
 
         const aiResult = await aiGenerateStoryboards({
           sceneId,
@@ -7768,8 +16627,17 @@ const server = createServer(async (req, res) => {
             category: scene.category,
             narrativeVision: scene.narrative_vision,
           },
-          characters: projectCharacterRows,
+          characters: sceneCharacterRows,
+          assetCatalog,
+          ragContext: ragQuery.items,
         })
+
+        const durationContract = validateStoryboardDurationContracts(aiResult.shots, { requireVisibleTimeline: true })
+        if (!durationContract.passed) {
+          const error = new Error(`分镜时长规划校验未通过：${durationContract.blockers.join('；')}`)
+          error.statusCode = 422
+          throw error
+        }
 
         // P1: DELETE + INSERT + UPDATE 整体进事务
         //    任何一步失败全部回滚，旧分镜完整保留；不允许"半套新分镜 + 状态已切"的状态出现
@@ -7780,25 +16648,199 @@ const server = createServer(async (req, res) => {
 
           await conn.execute(`DELETE FROM storyboards WHERE scene_id = ?`, [sceneId])
 
+          const [assetNodeRows] = await conn.execute(
+            `SELECT an.id, an.node_type, an.ref_id, an.label,
+                    ai.id AS image_id, ai.version_no, ai.view_set_version, ai.view_index, ai.view_key,
+                    ai.view_set_type, ai.status, ai.vision_status
+             FROM asset_nodes an
+             LEFT JOIN asset_node_images ai
+               ON ai.asset_node_id = an.id
+              AND ai.status = 'confirmed'
+              AND (ai.vision_status = 'passed' OR ai.vision_status IS NULL
+                   OR (an.node_type = 'scene' AND ai.vision_status = 'skipped'))
+             WHERE an.project_id = ? AND an.status <> 'archived'
+             ORDER BY an.id ASC, ai.id ASC`,
+            [scene.project_id],
+          )
+          const characterAssetRows = assetNodeRows.filter((row) => row.node_type === 'character')
+          const sceneAssetRows = assetNodeRows.filter((row) => row.node_type === 'scene')
+          const findCharacterAsset = (names = []) =>
+            characterAssetRows.find((row) =>
+              names.some((name) => String(name || '').trim() === String(row.label || '').trim())
+              || names.some((name) => Number(row.ref_id) > 0 && projectCharacterRows.some(
+                (character) => Number(character.id) === Number(row.ref_id)
+                  && String(character.name).trim() === String(name || '').trim(),
+              )),
+            )
+          const sceneAsset = sceneAssetRows.find((row) => Number(row.ref_id) === Number(sceneId))
+
           for (let i = 0; i < aiResult.shots.length; i += 1) {
             const shot = aiResult.shots[i]
+            const characterName = String(shot.character_name || '').trim()
+            const sceneAssetNames = Array.isArray(shot.scene_assets) ? shot.scene_assets : []
+            const propAssetNames = Array.isArray(shot.prop_assets) ? shot.prop_assets : []
+            const characterAssetNames = Array.isArray(shot.character_assets) && shot.character_assets.length
+              ? shot.character_assets
+              : characterName ? [characterName] : []
+            const character = projectCharacterRows.find((item) =>
+              characterAssetNames.some((name) => String(name).trim() === String(item.name).trim()),
+            )
+            const characterAsset = findCharacterAsset(characterAssetNames)
+            const characterAssetPackRow = characterAsset
+              ? assetNodeRows.find((row) =>
+                assetNodeRowId(row) === assetNodeRowId(characterAsset)
+                && row.view_set_type === 'character-asset-pack'
+                && row.status === 'confirmed'
+                && (!row.vision_status || row.vision_status === 'passed'),
+              )
+              : null
+            const characterTurnaroundRows = characterAsset
+              ? assetNodeRows.filter((row) =>
+                assetNodeRowId(row) === assetNodeRowId(characterAsset)
+                && row.view_set_type === 'character-turnaround'
+                && ['front', 'side', 'back'].includes(String(row.view_key || '')),
+              )
+              : []
+            const characterBaseRow = characterAsset
+              ? assetNodeRows.find((row) =>
+                assetNodeRowId(row) === assetNodeRowId(characterAsset)
+                && ['single', 'character-asset-pack'].includes(String(row.view_set_type || ''))
+                && !String(row.view_key || '').trim()
+                && row.status === 'confirmed'
+                && (!row.vision_status || row.vision_status === 'passed'),
+              )
+              : null
+            const characterFaceRow = characterAsset
+              ? assetNodeRows.find((row) =>
+                assetNodeRowId(row) === assetNodeRowId(characterAsset)
+                && ((row.view_set_type === 'character-face-closeup' && String(row.view_key || '') === 'face')
+                  || row.view_set_type === 'character-asset-pack')
+                && row.status === 'confirmed'
+                && (!row.vision_status || row.vision_status === 'passed'),
+              )
+              : null
+            const characterFaceRequired = !characterAssetPackRow && requiresCharacterFaceReference(
+              character,
+              scene.content,
+              shot.visual_prompt,
+              shot.action_text,
+            )
+            const characterViewKeys = characterAssetPackRow
+              ? ['front', 'side', 'back']
+              : [...new Set(characterTurnaroundRows.map((row) => row.view_key))]
+            const requiredCharacterViews = characterName
+              ? ['front', 'side', 'back']
+              : []
+            const missingCharacterViews = requiredCharacterViews.filter((key) => !characterViewKeys.includes(key))
+            const sceneViewKey = String(shot.scene_view_key || '').trim()
+            const scenePanorama = sceneAsset
+              ? sceneAssetRows.find((row) =>
+                assetNodeRowId(row) === assetNodeRowId(sceneAsset)
+                && row.view_set_type === 'single'
+                && !String(row.view_key || '').trim()
+                && row.status === 'confirmed'
+                && (!row.vision_status || row.vision_status === 'passed' || row.vision_status === 'skipped'),
+              )
+              : null
+            const sceneView = sceneAssetRows.find((row) =>
+              assetNodeRowId(row) === assetNodeRowId(sceneAsset)
+              && row.view_set_type === 'scene-nine-grid'
+              && String(row.view_key || '') === sceneViewKey,
+            )
+            const propRows = propAssetNames.map((name) => assetNodeRows.find((row) =>
+              ['prop', 'tool', 'material'].includes(String(row.node_type || ''))
+              && String(row.label || '').trim() === String(name || '').trim()
+              && row.status === 'confirmed'
+              && (!row.vision_status || row.vision_status === 'passed'),
+            )).filter(Boolean)
+            const missingProps = propAssetNames.filter((name) => !propRows.some((row) => String(row.label || '').trim() === String(name || '').trim()))
+            const tools = Array.isArray(shot.tools) ? shot.tools.map((item) => String(item || '').trim()).filter(Boolean) : []
+            const performance = normalizeStoryboardPerformance(shot)
+            const direction = validateStoryboardDirectionContract(shot)
+            const blockers = []
+            blockers.push(...direction.blockers.map((message) => `镜头 ${shot.shot_no}：${message}`))
+            if (characterName && !character) {
+              blockers.push(`镜头 ${shot.shot_no} 引用了不存在的角色「${characterName}」`)
+            }
+            if (characterName && !characterAsset) {
+              blockers.push(`镜头 ${shot.shot_no} 的角色「${characterName}」没有绑定角色资产`)
+            }
+            if (characterName && !characterAssetPackRow) {
+              blockers.push(`镜头 ${shot.shot_no} 的角色「${characterName}」没有已采用的完整角色资产板，请在资产页等待五区视觉检查通过`)
+            }
+            if (!sceneAsset || !scenePanorama) {
+              blockers.push(`镜头 ${shot.shot_no} 没有绑定当前场景全景资产`)
+            }
+            for (const name of missingProps) blockers.push(`镜头 ${shot.shot_no} 引用的道具「${name}」没有已确认道具资产`)
+            if (blockers.length) {
+              const error = new Error(`分镜资产引用门禁未通过：${blockers.join('；')}`)
+              error.statusCode = 409
+              throw error
+            }
+            const assetReference = {
+              schemaVersion: 1,
+              source: 'storyboard-agent',
+              characterId: assetNodeRowId(characterAsset),
+              characterVersionNo: characterAssetPackRow?.version_no || characterAsset?.version_no || null,
+              characterViewSetVersion: characterAssetPackRow?.view_set_version
+                || characterAssetPackRow?.version_no
+                || null,
+              characterViewKeys: ['front', 'side', 'back'],
+              characterBaseImageId: characterAssetPackRow?.image_id || characterAssetPackRow?.id || null,
+              characterBaseVersionNo: characterAssetPackRow?.version_no || null,
+              characterFaceImageId: characterAssetPackRow?.image_id || characterAssetPackRow?.id || null,
+              characterFaceVersionNo: characterAssetPackRow?.version_no || null,
+              characterAssetPackImageId: characterAssetPackRow?.image_id || null,
+              characterAssetPackVersionNo: characterAssetPackRow?.version_no || null,
+              characterFaceRequired,
+              characterName: character?.name || characterName || null,
+              sceneAssetId: assetNodeRowId(sceneAsset),
+              scenePanoramaVersion: scenePanorama?.version_no || sceneAsset?.version_no || null,
+              scenePanoramaImageId: scenePanorama?.image_id || scenePanorama?.id || null,
+              sceneViewSetVersion: sceneAsset?.view_set_version || null,
+              sceneAssetNames: [...new Set([...sceneAssetNames, String(sceneAsset?.label || '').trim()].filter(Boolean))],
+              sceneViewKey: sceneViewKey || null,
+              sceneViewIndex: sceneView?.view_index || null,
+              propAssetNames,
+              propAssetIds: propRows.map(assetNodeRowId).filter(Boolean),
+              propImageIds: propRows.map((row) => Number(row.image_id)).filter(Boolean),
+              propAssetRefs: propRows.map((row) => ({
+                assetNodeId: assetNodeRowId(row),
+                imageId: Number(row.image_id) || null,
+                name: String(row.label || '').trim(),
+                versionNo: Number(row.version_no) || null,
+              })),
+              tools,
+              emotionalChange: performance.emotionChange,
+              gazePlan: direction.gaze,
+              soundPlan: direction.sound,
+              performance,
+              startState: shot.start_state || '',
+              endState: shot.end_state || '',
+              startVisualPrompt: shot.start_visual_prompt || '',
+              endVisualPrompt: shot.end_visual_prompt || '',
+            }
             await conn.execute(
               `INSERT INTO storyboards
-                 (scene_id, shot_no, shot_type, camera_angle, composition, duration_seconds,
-                  character_id, character_name, action_text, dialogue_text, visual_prompt, sort_order, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+            (scene_id, shot_no, shot_type, camera_angle, composition, duration_seconds,
+             character_id, character_name, action_text, dialogue_text, visual_prompt,
+             start_visual_prompt, end_visual_prompt, asset_reference_json, sort_order, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
               [
                 sceneId,
                 shot.shot_no,
                 shot.shot_type,
                 shot.camera_angle,
                 shot.composition,
-                shot.duration_seconds,
+                normalizeStoryboardDurationSeconds(shot.duration_seconds),
                 matchCharacterId(shot.character_name, projectCharacterRows),
                 shot.character_name,
                 shot.action_text,
                 shot.dialogue_text,
-                shot.visual_prompt,
+                buildStoryboardMentionedPrompt(shot.visual_prompt, assetReference),
+                shot.start_visual_prompt || null,
+                shot.end_visual_prompt || null,
+                JSON.stringify(assetReference),
                 i,
               ],
             )
@@ -7880,12 +16922,8 @@ const server = createServer(async (req, res) => {
 
       // 校验归属
       const [ownRows] = await db.execute(
-        `SELECT s.id, s.scene_id, s.shot_no, s.shot_type, s.camera_angle, s.composition,
-                s.duration_seconds, s.character_id,
+        `SELECT s.*,
                 COALESCE(c.name, s.character_name) AS character_name,
-                s.action_text, s.dialogue_text,
-                s.visual_prompt, s.image_url, s.video_url, s.sort_order, s.status,
-                s.created_at, s.updated_at,
                 sc.project_id,
                 p.user_id AS ownerId
          FROM storyboards s
@@ -7950,18 +16988,49 @@ const server = createServer(async (req, res) => {
           shotType: body.shotType,
           cameraAngle: body.cameraAngle,
           composition: body.composition,
-          durationSeconds: parseId(body.durationSeconds) || null,
+          durationSeconds: body.durationSeconds === undefined
+            ? undefined
+            : normalizeStoryboardDurationSeconds(body.durationSeconds, shot.duration_seconds),
           characterId: resolvedCharacterId,
           characterName:
             body.characterName !== undefined ? body.characterName : selectedCharacter?.name,
           actionText: body.actionText,
           dialogueText: body.dialogueText,
-          visualPrompt: body.visualPrompt,
+          visualPrompt: body.videoPrompt !== undefined ? undefined : body.visualPrompt,
+          videoPrompt: body.videoPrompt,
           startVisualPrompt: body.startVisualPrompt,
           endVisualPrompt: body.endVisualPrompt,
           imageUrl: body.imageUrl,
           endImageUrl: body.endImageUrl,
           status: body.status,
+        }
+        const directionWasEdited = body.gazePlan !== undefined
+          || body.gaze_plan !== undefined
+          || body.soundPlan !== undefined
+          || body.sound_plan !== undefined
+        let updatedAssetReference = null
+        if (directionWasEdited) {
+          const currentReference = parseJsonObject(shot.asset_reference_json || shot.assetReference) || {}
+          const direction = validateStoryboardDirectionContract({
+            ...shot,
+            ...body,
+            gazePlan: body.gazePlan ?? body.gaze_plan ?? currentReference.gazePlan ?? currentReference.performance?.gazePlan,
+            soundPlan: body.soundPlan ?? body.sound_plan ?? currentReference.soundPlan ?? currentReference.performance?.soundPlan,
+          })
+          if (!direction.passed) {
+            fail(res, 4001, `视线/声音执行计划未通过校验：${direction.blockers.join('；')}`, 422)
+            return
+          }
+          updatedAssetReference = {
+            ...currentReference,
+            gazePlan: direction.gaze,
+            soundPlan: direction.sound,
+            performance: {
+              ...(currentReference.performance || {}),
+              gazePlan: direction.gaze,
+              soundPlan: direction.sound,
+            },
+          }
         }
         const sets = []
         const params = []
@@ -7977,6 +17046,7 @@ const server = createServer(async (req, res) => {
             actionText: 'action_text',
             dialogueText: 'dialogue_text',
             visualPrompt: 'visual_prompt',
+            videoPrompt: 'visual_prompt',
             startVisualPrompt: 'start_visual_prompt',
             endVisualPrompt: 'end_visual_prompt',
             imageUrl: 'image_url',
@@ -7985,6 +17055,10 @@ const server = createServer(async (req, res) => {
           }[key]
           sets.push(`${column} = ?`)
           params.push(value)
+        }
+        if (updatedAssetReference) {
+          sets.push('asset_reference_json = ?')
+          params.push(JSON.stringify(updatedAssetReference))
         }
         if (sets.length) {
           params.push(storyboardId)
@@ -8442,6 +17516,26 @@ const server = createServer(async (req, res) => {
           body = {}
         }
 
+        try {
+          const job = await enqueueStoryboardVideoJob(user.id, storyboardId, body)
+          if (!job) {
+            fail(res, 4004, '分镜不存在或无权访问', 404)
+            return
+          }
+          success(res, job, '视频生成任务已加入后台队列')
+        } catch (error) {
+          fail(
+            res,
+            4011,
+            error instanceof Error ? error.message : '视频生成任务提交失败',
+            error?.statusCode || 400,
+            error?.qualityReport ? { qualityReport: error.qualityReport } : undefined,
+          )
+        }
+        return
+
+        /* legacy synchronous generation path retained temporarily */
+
         const [confirmedRows] = await db.execute(
           `SELECT * FROM image_assets
            WHERE storyboard_id = ? AND status = 'confirmed'
@@ -8563,6 +17657,44 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    const subtitleCleanupMatch = pathname.match(/^\/api\/videos\/(\d+)\/subtitles\/remove$/)
+    if (subtitleCleanupMatch && req.method === 'POST') {
+      const user = await authenticate(req, res)
+      if (!user) return
+      const videoId = parseId(subtitleCleanupMatch[1])
+      const [rows] = await db.execute(
+        `SELECT va.*, s.scene_id, sc.project_id, p.user_id AS ownerId
+         FROM video_assets va
+         INNER JOIN storyboards s ON s.id = va.storyboard_id
+         INNER JOIN script_scenes sc ON sc.id = s.scene_id
+         INNER JOIN projects p ON p.id = sc.project_id
+         WHERE va.id = ? LIMIT 1`,
+        [videoId],
+      )
+      const video = rows[0]
+      if (!video || Number(video.ownerId) !== Number(user.id)) {
+        fail(res, 4004, '视频不存在或无权访问', 404)
+        return
+      }
+      const job = await createGenerationJob({
+        projectId: Number(video.project_id),
+        jobType: 'subtitle_cleanup',
+        sourceId: videoId,
+        request: {
+          projectId: Number(video.project_id),
+          storyboardId: Number(video.storyboard_id),
+          sourceVideoId: videoId,
+          sourceStorageKey: video.storage_key || null,
+          sourceVideoUrl: video.video_url,
+          thumbnailUrl: video.thumbnail_url,
+          durationSeconds: video.duration_seconds,
+          modelName: video.model_name,
+        },
+      })
+      success(res, job, '字幕清理任务已加入后台队列')
+      return
+    }
+
     const videoConfirmMatch = pathname.match(/^\/api\/videos\/(\d+)\/confirm$/)
     if (videoConfirmMatch && req.method === 'POST') {
       const user = await authenticate(req, res)
@@ -8575,7 +17707,8 @@ const server = createServer(async (req, res) => {
       }
 
       const [ownRows] = await db.execute(
-        `SELECT va.id, va.storyboard_id, va.video_url, p.user_id AS ownerId
+        `SELECT va.id, va.storyboard_id, va.version_no, va.video_url, va.storage_key,
+                va.quality_report_json, p.user_id AS ownerId
          FROM video_assets va
          INNER JOIN storyboards s ON s.id = va.storyboard_id
          INNER JOIN script_scenes sc ON sc.id = s.scene_id
@@ -8589,9 +17722,72 @@ const server = createServer(async (req, res) => {
         return
       }
 
+      const confirmationEligibility = inspectVideoConfirmationEligibility({
+        qualityReport: safeJsonParse(video.quality_report_json, null),
+      })
+      if (!confirmationEligibility.passed) {
+        fail(res, 4094, confirmationEligibility.summary, 409)
+        return
+      }
+
+      let confirmedVideoUrl = normalizeGeneratedMediaUrl(video.video_url, PUBLIC_BASE_URL)
+      if (confirmedVideoUrl !== video.video_url) {
+        await db.execute(
+          `UPDATE video_assets SET video_url = ? WHERE id = ?`,
+          [confirmedVideoUrl, videoId],
+        )
+      }
+      const existingLocalPath = localGeneratedPathFromUrl(confirmedVideoUrl)
+      let confirmationSource
+      try {
+        confirmationSource = resolveVideoConfirmationSource({
+          storageKey: video.storage_key,
+          videoUrl: confirmedVideoUrl,
+          localPath: existingLocalPath,
+          createSignedUrl: ({ key }) => objectStorage.createSignedUrl({ key }),
+        })
+      } catch {
+        fail(res, 4093, '视频已存入对象存储，但播放链接刷新失败；请稍后重试确认', 409)
+        return
+      }
+      confirmedVideoUrl = confirmationSource.videoUrl
+      if (existingLocalPath) {
+        if (!(await fileExists(existingLocalPath))) {
+          fail(res, 4091, '该本地视频文件已丢失，请重新生成后再确认', 409)
+          return
+        }
+      } else if (confirmationSource.shouldPersist) {
+        try {
+          const persisted = await persistGeneratedVideo({
+            storyboardId: Number(video.storyboard_id),
+            versionNo: Number(video.version_no || 1),
+            candidateNo: Number(video.id),
+            sourceUrl: confirmedVideoUrl,
+          })
+          confirmedVideoUrl = persisted.videoUrl
+        } catch {
+          fail(res, 4092, '该旧视频临时链接已过期，无法设为最终版本；请选择本地版本或重新生成', 409)
+          return
+        }
+      }
+
       const conn = await db.getConnection()
+      const reviewedReport = safeJsonParse(video.quality_report_json, null)
+      if (reviewedReport) {
+        reviewedReport.semanticStatus = 'accepted_by_user'
+        reviewedReport.reviewedAt = new Date().toISOString()
+      }
       try {
         await conn.beginTransaction()
+        if (confirmedVideoUrl !== video.video_url) {
+          const [urlUpdate] = await conn.execute(
+            `UPDATE video_assets SET video_url = ? WHERE id = ? AND video_url = ?`,
+            [confirmedVideoUrl, videoId, video.video_url],
+          )
+          if (Number(urlUpdate.affectedRows || 0) !== 1) {
+            throw new Error('视频记录在确认期间已发生变化，请刷新后重试')
+          }
+        }
         await conn.execute(
           `UPDATE video_assets
            SET status = CASE WHEN status = 'confirmed' THEN 'archived' ELSE status END,
@@ -8600,13 +17796,13 @@ const server = createServer(async (req, res) => {
           [video.storyboard_id, videoId],
         )
         await conn.execute(
-          `UPDATE video_assets SET status = 'confirmed', confirmed_at = NOW()
+          `UPDATE video_assets SET status = 'confirmed', confirmed_at = NOW(), quality_report_json = COALESCE(?, quality_report_json)
            WHERE id = ?`,
-          [videoId],
+          [reviewedReport ? JSON.stringify(reviewedReport) : null, videoId],
         )
         await conn.execute(
           `UPDATE storyboards SET video_url = ?, updated_at = NOW() WHERE id = ?`,
-          [video.video_url, video.storyboard_id],
+          [confirmedVideoUrl, video.storyboard_id],
         )
         await conn.commit()
       } catch (e) {
@@ -8875,7 +18071,7 @@ const server = createServer(async (req, res) => {
         return
       }
       const [characterRows] = await db.execute(
-        `SELECT * FROM characters WHERE project_id = ? ORDER BY id ASC`,
+        `SELECT * FROM characters WHERE project_id = ? AND status <> 'archived' ORDER BY id ASC`,
         [projectId],
       )
       const profiles = await listActiveVoiceProfiles()
@@ -8886,7 +18082,7 @@ const server = createServer(async (req, res) => {
     }
 
     const characterVoiceManagementMatch = pathname.match(
-      /^\/api\/characters\/(\d+)\/(voice-recommendations|voice-binding)$/,
+      /^\/api\/characters\/(\d+)\/(voice-recommendations|voice-binding|reference-audio)$/,
     )
     if (characterVoiceManagementMatch) {
       const user = await authenticate(req, res)
@@ -8897,7 +18093,7 @@ const server = createServer(async (req, res) => {
         `SELECT c.*, p.user_id AS ownerId
          FROM characters c
          INNER JOIN projects p ON p.id = c.project_id
-         WHERE c.id = ? LIMIT 1`,
+         WHERE c.id = ? AND c.status <> 'archived' LIMIT 1`,
         [characterId],
       )
       const ch = ownRows[0]
@@ -8943,12 +18139,21 @@ const server = createServer(async (req, res) => {
         const inferred = inferCharacterVoiceTraits(ch)
         const ageGroup = requestedAgeGroup || normalizeCharacterAgeGroup(ch.age_group) || inferred.ageGroup
         const gender = requestedGender || normalizeCharacterGender(ch.gender) || inferred.gender
+        const voiceResolution = resolveCharacterVoiceProfile({
+          character: { ...ch, gender, age_group: ageGroup },
+          profiles: [profile],
+          requestedProfileKey: profile.profileKey,
+        })
+        if (voiceResolution.error) {
+          fail(res, 4001, voiceResolution.error, 400)
+          return
+        }
         const voiceStyle = String(body.voiceStyle ?? ch.voice_style ?? '').trim().slice(0, 160) || null
         const voiceLocked = body.locked !== false
         await db.execute(
           `UPDATE characters
            SET age_group = ?, gender = ?, voice_style = ?, voice_profile_key = ?,
-               voice_setting = ?, voice_locked = ?, updated_at = NOW()
+               voice_setting = ?, voice_design_json = NULL, voice_locked = ?, updated_at = NOW()
            WHERE id = ?`,
           [
             ageGroup,
@@ -8966,6 +18171,25 @@ const server = createServer(async (req, res) => {
           selectedProfile: profile,
           traits: inferCharacterVoiceTraits(rows[0]),
         }, voiceLocked ? '角色音色已确认并锁定' : '角色音色方案已保存')
+        return
+      }
+
+      if (action === 'reference-audio' && req.method === 'PUT') {
+        const body = await parseBody(req, 22_000_000)
+        const { mimeType, bytes } = decodeAudioDataUrl(body.dataBase64)
+        const extension = mimeType.split('/')[1].replace('mpeg', 'mp3').replace('x-wav', 'wav')
+        const storageKey = `projects/${ch.project_id}/characters/${characterId}/voice-reference.${extension}`
+        const stored = await objectStorage.putObject({
+          key: storageKey,
+          bytes,
+          contentType: mimeType,
+        })
+        await db.execute(
+          `UPDATE characters SET reference_audio_url = ?, reference_audio_storage_key = ?, voice_locked = 1, updated_at = NOW() WHERE id = ?`,
+          [stored.url, stored.key, characterId],
+        )
+        const [rows] = await db.execute(`SELECT * FROM characters WHERE id = ? LIMIT 1`, [characterId])
+        success(res, { character: characterRow(rows[0]) }, '参考音频已保存')
         return
       }
     }
@@ -9001,6 +18225,11 @@ const server = createServer(async (req, res) => {
           `SELECT * FROM script_scenes WHERE project_id = ? ORDER BY sort_order ASC, scene_no ASC, id ASC`,
           [projectId],
         )
+        const [storyBibleRows] = await db.execute(
+          `SELECT * FROM story_bibles WHERE project_id = ? ORDER BY version_no DESC, id DESC LIMIT 1`,
+          [projectId],
+        )
+        const storyBible = storyBibleRows[0] ? storyBibleRow(storyBibleRows[0]) : null
         if (!outlineRows[0] && !sceneRows.some((scene) => String(scene.content || scene.summary || '').trim())) {
           fail(res, 4004, '项目还没有总纲或剧本内容，请先生成故事总纲或单场剧本', 400)
           return
@@ -9015,16 +18244,43 @@ const server = createServer(async (req, res) => {
           },
           outline: outlineRows[0] || null,
           scenes: sceneRows,
+          storyBible,
         })
         if (!aiResult.characters.length) {
           fail(res, 5001, 'AI 没有识别出有效角色，请检查总纲和剧本内容', 502)
           return
         }
 
+        const toSqlNullableText = (value, fallback = null) => {
+          if (value === undefined || value === null) return fallback
+          const text = String(value).trim()
+          return text || fallback
+        }
+        const normalizeCharacterPayload = (item, index) => ({
+          name: toSqlNullableText(item?.name, `角色 ${index + 1}`),
+          roleTag: toSqlNullableText(item?.role_tag, index === 0 ? '主角' : '配角'),
+          personality: toSqlNullableText(
+            item?.personality,
+            '性格鲜明，行为动机与剧情目标一致。',
+          ),
+          appearance: toSqlNullableText(
+            item?.appearance,
+            '具有清晰可辨的脸部、发型、体态与服装特征。',
+          ),
+          costume: toSqlNullableText(normalizeCharacterCostume(item), null),
+          voiceSetting: toSqlNullableText(item?.voice_setting, null),
+          ageGroup: toSqlNullableText(item?.age_group, null),
+          gender: toSqlNullableText(item?.gender, null),
+          voiceStyle: toSqlNullableText(item?.voice_style, null),
+        })
+        const safeCharacters = aiResult.characters
+          .map((item, index) => normalizeCharacterPayload(item, index))
+          .filter((item) => Boolean(item.name))
+
         const conn = await db.getConnection()
         try {
           await conn.beginTransaction()
-          for (const item of aiResult.characters) {
+          for (const item of safeCharacters) {
             const [existingRows] = await conn.execute(
               `SELECT id FROM characters WHERE project_id = ? AND name = ? ORDER BY id ASC LIMIT 1`,
               [projectId, item.name],
@@ -9036,43 +18292,51 @@ const server = createServer(async (req, res) => {
                  SET role_tag = COALESCE(NULLIF(role_tag, ''), ?),
                      personality = COALESCE(NULLIF(personality, ''), ?),
                      appearance = COALESCE(NULLIF(appearance, ''), ?),
+                     costume = COALESCE(NULLIF(costume, ''), ?),
                      voice_setting = COALESCE(NULLIF(voice_setting, ''), ?),
                      age_group = COALESCE(NULLIF(age_group, ''), ?),
-                     gender = COALESCE(NULLIF(gender, ''), ?),
+                     -- Character extraction is the authoritative script-derived source.
+                     -- Persist its normalized gender so an earlier bad parse cannot keep
+                     -- poisoning the asset prompt after a re-parse.
+                     gender = COALESCE(NULLIF(?, ''), gender),
                      voice_style = COALESCE(NULLIF(voice_style, ''), ?),
                      updated_at = NOW()
                  WHERE id = ?`,
                 [
-                  item.role_tag,
+                  item.roleTag,
                   item.personality,
                   item.appearance,
-                  item.voice_setting,
-                  item.age_group,
+                  item.costume,
+                  item.voiceSetting,
+                  item.ageGroup,
                   item.gender,
-                  item.voice_style,
+                  item.voiceStyle,
                   existingId,
                 ],
               )
             } else {
               await conn.execute(
                 `INSERT INTO characters
-                  (project_id, name, role_tag, personality, appearance, voice_setting,
+                  (project_id, name, role_tag, personality, appearance, costume, voice_setting,
                    age_group, gender, voice_style, status)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
                 [
                   projectId,
                   item.name,
-                  item.role_tag,
+                  item.roleTag,
                   item.personality,
                   item.appearance,
-                  item.voice_setting,
-                  item.age_group,
+                  item.costume,
+                  item.voiceSetting,
+                  item.ageGroup,
                   item.gender,
-                  item.voice_style,
+                  item.voiceStyle,
                 ],
               )
             }
           }
+          await archiveStaleCharacterRecords(conn, projectId, safeCharacters)
+          await repairNarrativeRoleCharacterRecords(conn, projectId, outlineRows[0] || null, sceneRows)
           await conn.commit()
         } catch (error) {
           await conn.rollback()
@@ -9080,6 +18344,14 @@ const server = createServer(async (req, res) => {
         } finally {
           conn.release()
         }
+
+        await persistParsedCharacters(
+          projectId,
+          project,
+          outlineRows[0] || null,
+          sceneRows,
+          aiResult,
+        )
 
         await db.execute(
           `UPDATE storyboards s
@@ -9090,7 +18362,7 @@ const server = createServer(async (req, res) => {
           [projectId],
         )
         const [rows] = await db.execute(
-          `SELECT * FROM characters WHERE project_id = ? ORDER BY id ASC`,
+          `SELECT * FROM characters WHERE project_id = ? AND status <> 'archived' ORDER BY id ASC`,
           [projectId],
         )
         success(res, { items: rows.map(characterRow) }, '角色档案已生成')
@@ -9099,7 +18371,7 @@ const server = createServer(async (req, res) => {
 
       if (req.method === 'GET' && !isGenerate) {
         const [rows] = await db.execute(
-          `SELECT * FROM characters WHERE project_id = ? ORDER BY id ASC`,
+          `SELECT * FROM characters WHERE project_id = ? AND status <> 'archived' ORDER BY id ASC`,
           [projectId],
         )
         success(res, { items: rows.map(characterRow) })
@@ -9118,7 +18390,7 @@ const server = createServer(async (req, res) => {
           return
         }
         const [duplicateRows] = await db.execute(
-          `SELECT id FROM characters WHERE project_id = ? AND name = ? LIMIT 1`,
+          `SELECT id FROM characters WHERE project_id = ? AND name = ? AND status <> 'archived' LIMIT 1`,
           [projectId, name],
         )
         if (duplicateRows[0]) {
@@ -9175,7 +18447,7 @@ const server = createServer(async (req, res) => {
          FROM character_images ci
          INNER JOIN characters c ON c.id = ci.character_id
          INNER JOIN projects p ON p.id = c.project_id
-         WHERE ci.id = ? LIMIT 1`,
+         WHERE ci.id = ? AND c.status <> 'archived' LIMIT 1`,
         [imageId],
       )
       const image = ownRows[0]
@@ -9199,9 +18471,9 @@ const server = createServer(async (req, res) => {
         )
         await conn.execute(
           `UPDATE characters
-           SET reference_image_url = ?, status = 'finalized', updated_at = NOW()
+           SET reference_image_url = ?, reference_image_storage_key = ?, status = 'finalized', updated_at = NOW()
            WHERE id = ?`,
-          [image.image_url, image.character_id],
+          [image.image_url, image.storage_key || null, image.character_id],
         )
         await conn.commit()
       } catch (error) {
@@ -9238,7 +18510,7 @@ const server = createServer(async (req, res) => {
         `SELECT c.*, p.user_id AS ownerId
          FROM characters c
          INNER JOIN projects p ON p.id = c.project_id
-         WHERE c.id = ? LIMIT 1`,
+         WHERE c.id = ? AND c.status <> 'archived' LIMIT 1`,
         [characterId],
       )
       const ch = ownRows[0]
@@ -9248,7 +18520,7 @@ const server = createServer(async (req, res) => {
       }
 
       const [duplicateRows] = await db.execute(
-        `SELECT id FROM characters WHERE project_id = ? AND name = ? AND id <> ? LIMIT 1`,
+        `SELECT id FROM characters WHERE project_id = ? AND name = ? AND id <> ? AND status <> 'archived' LIMIT 1`,
         [ch.project_id, newName, characterId],
       )
       if (duplicateRows[0]) {
@@ -9275,7 +18547,7 @@ const server = createServer(async (req, res) => {
                 p.narrative_vision AS project_narrative_vision, p.visual_style AS project_visual_style
          FROM characters c
          INNER JOIN projects p ON p.id = c.project_id
-         WHERE c.id = ? LIMIT 1`,
+         WHERE c.id = ? AND c.status <> 'archived' LIMIT 1`,
         [characterId],
       )
       const ch = ownRows[0]
@@ -9393,7 +18665,9 @@ const server = createServer(async (req, res) => {
               publicBaseUrl: buildGeneratedFramePublicBaseUrl(),
               outputDir: GENERATED_FRAME_DIR,
               candidateCount,
-              referenceImageUrls: ch.reference_image_url ? [ch.reference_image_url] : [],
+              referenceImageUrls: resolveCharacterReferenceImageUrls(
+                ch.reference_image_url ? [ch.reference_image_url] : [],
+              ),
             })
           } catch (frameError) {
             console.error('[character-image] real provider failed', frameError)
@@ -9435,23 +18709,137 @@ const server = createServer(async (req, res) => {
       if (feature === 'voice-preview' && req.method === 'POST') {
         const body = await parseBody(req)
         const audioConfig = getAudioConfig()
-        const text = String(body.text || `我是${ch.name}。故事已经开始，我会做出自己的选择。`).trim()
-        const requestedProfileKey = String(body.voiceProfileKey || ch.voice_profile_key || '').trim()
-        const voiceProfile = requestedProfileKey
-          ? await findActiveVoiceProfile(requestedProfileKey)
+        const isVoiceDesignRequest = body.voiceAgent === true
+        let voiceDesign = body.voiceDesign && typeof body.voiceDesign === 'object'
+          ? normalizeVoiceDesign(body.voiceDesign)
           : null
-        if (requestedProfileKey && !voiceProfile) {
-          fail(res, 4001, '试听音色方案不存在或已停用', 400)
+        const persistedVoiceDesign = safeJsonParse(ch.voice_design_json, null)
+        const lockedCustomVoiceDesign = ch.voice_locked
+          ? resolvePersistedCustomVoiceDesign(ch, ch.voice_setting)
+          : null
+        if (!voiceDesign && lockedCustomVoiceDesign && !isVoiceDesignRequest) {
+          voiceDesign = lockedCustomVoiceDesign
+        }
+        const isCustomVoiceCandidateBinding = Boolean(
+          body.bindReferenceAudio === true
+          && String(body.voiceId || '')
+          && resolvePersistedCustomVoiceDesign(ch, body.voiceId),
+        )
+        if (isCustomVoiceCandidateBinding) voiceDesign = persistedVoiceDesign
+        let customVoice = null
+        let voiceSceneTitle = ''
+        let voiceSceneContext = ''
+        if (isVoiceDesignRequest) {
+          if (isMockAudioProvider(audioConfig)) {
+            fail(res, 5030, '当前音频服务处于模拟模式，无法创建真实角色音色；请切换到 DashScope 音频服务', 503)
+            return
+          }
+          const [sceneRows] = await db.execute(
+            `SELECT scene_no, title, summary, content, mood, location, time_of_day
+             FROM script_scenes
+             WHERE project_id = ?
+             ORDER BY sort_order ASC, scene_no ASC, id ASC`,
+            [ch.project_id],
+          )
+          const previewScene = sceneRows[0] || {}
+          voiceSceneTitle = String(previewScene.title || '').trim()
+          voiceSceneContext = [previewScene.location, previewScene.time_of_day, previewScene.summary, previewScene.mood]
+            .filter(Boolean).join('，')
+          voiceDesign = await aiGenerateVoiceDesign({
+            project: {
+              name: ch.project_name,
+              category: ch.project_category,
+              visualStyle: ch.project_visual_style,
+              narrativeVision: ch.project_narrative_vision,
+            },
+            character: ch,
+            scenes: sceneRows,
+            sampleText: body.text,
+          })
+          const genderLabel = ch.gender === 'male' ? '男性' : ch.gender === 'female' ? '女性' : '中性'
+          voiceDesign.ageAndGender = `${genderLabel}声线；设计必须符合角色已确定的性别与年龄感`
+          const voicePrompt = [voiceDesign.ageAndGender, voiceDesign.timbre, voiceDesign.summary,
+            voiceDesign.performanceInstructions, voiceDesign.rhythm].filter(Boolean).join('；').slice(0, 500)
+          let previewText = String(body.text || voiceDesign.sampleText || '').trim()
+          if (previewText.length < 15) {
+            previewText = `${previewText}${previewText ? '。' : ''}我给过你机会，现在把你知道的都说出来。`
+          }
+          if (previewText.length > 200) previewText = previewText.slice(0, 200)
+          customVoice = await createQwenDesignedVoice({
+            apiKey: audioConfig.apiKey,
+            targetModel: audioConfig.voiceDesignModel,
+            voicePrompt,
+            previewText,
+            prefix: `char${characterId}`,
+          })
+          voiceDesign = {
+            ...voiceDesign,
+            provider: 'qwen',
+            model: 'voice-enrollment',
+            voiceId: customVoice.voiceId,
+            targetModel: customVoice.targetModel,
+            status: 'ready',
+            requestId: customVoice.requestId,
+            voicePrompt,
+            generationSource: voiceDesign.generationSource || 'agent',
+          }
+          await db.execute(
+            `UPDATE characters
+             SET voice_design_json = ?, voice_setting = ?, voice_profile_key = NULL,
+                 voice_locked = 0, updated_at = NOW()
+             WHERE id = ?`,
+            [JSON.stringify(voiceDesign), customVoice.voiceId, characterId],
+          )
+        }
+        const voiceResolution = resolveCharacterVoiceProfile({
+          character: ch,
+          profiles: await listActiveVoiceProfiles(),
+          requestedProfileKey: isVoiceDesignRequest || isCustomVoiceCandidateBinding
+            ? ''
+            : body.voiceProfileKey || ch.voice_profile_key || '',
+        })
+        if (!isVoiceDesignRequest && !isCustomVoiceCandidateBinding && voiceResolution.error) {
+          fail(res, 4001, voiceResolution.error, 400)
           return
         }
+        const voiceProfile = voiceResolution.profile
+        const text = isVoiceDesignRequest
+          ? buildVoicePreviewText({
+            characterName: ch.name,
+            sampleText: body.text || voiceDesign?.sampleText,
+            sceneTitle: voiceSceneTitle,
+          })
+          : String(body.text || voiceDesign?.sampleText || `我是${ch.name}。故事已经开始，我会做出自己的选择。`).trim()
         const voiceName = String(
-          voiceProfile?.voiceId || body.voiceName || ch.voice_setting || audioConfig.defaultVoice,
+          customVoice?.voiceId
+            || (isCustomVoiceCandidateBinding ? persistedVoiceDesign.voiceId : '')
+            || lockedCustomVoiceDesign?.voiceId
+            || voiceProfile?.voiceId
+            || '',
         ).trim()
         const modelName = String(
-          voiceProfile?.modelName || body.modelName || audioConfig.defaultModel,
+          customVoice?.targetModel || (isCustomVoiceCandidateBinding ? persistedVoiceDesign.targetModel : '')
+            || lockedCustomVoiceDesign?.targetModel
+            || voiceProfile?.modelName || body.modelName || audioConfig.defaultModel,
         ).trim()
-        const instructions = voiceProfile?.instructions || null
+        const instructions = [
+          voiceProfile?.instructions,
+          ch.voice_style,
+          String(body.voiceStyle || '').trim(),
+          voiceDesign
+            ? buildVoicePerformanceInstructions({
+              design: voiceDesign,
+              characterName: ch.name,
+              sceneContext: voiceSceneContext,
+              dialogueText: body.text || voiceDesign.sampleText,
+            })
+            : '',
+        ].filter(Boolean).join('；') || null
         if (isMockAudioProvider(audioConfig)) {
+          if (isVoiceDesignRequest) {
+            fail(res, 5020, '当前音频服务处于模拟模式，不能创建真实自定义音色；请配置 DashScope 音频服务后重试', 503)
+            return
+          }
           success(res, {
             audioUrl: buildMockAudioUrl(ch.project_id, 'voice-preview', 1, 1, { characterId }),
             durationSeconds: 4,
@@ -9459,26 +18847,136 @@ const server = createServer(async (req, res) => {
             modelName: 'mock-audio-v2',
             voiceProfileKey: voiceProfile?.profileKey || null,
             voiceProfileName: voiceProfile?.displayName || null,
+            voiceProfileGender: voiceProfile?.gender || null,
+            voiceDesign,
+            referenceAudioBound: false,
           }, '音色试听已生成')
           return
         }
         try {
-          const [candidate] = await generateAudioCandidates({
-            projectId: ch.project_id,
-            trackType: 'voice-preview',
-            versionNo: Math.floor(Date.now() / 1000),
-            text,
-            voiceName,
-            modelName,
-            instructions,
-            publicBaseUrl: buildGeneratedAudioPublicBaseUrl(),
-            outputDir: GENERATED_AUDIO_DIR,
-            candidateCount: 1,
-          })
+          let candidate
+          const previewAudioUrl = String(body.previewAudioUrl || '').trim()
+          if (customVoice) {
+            const bytes = Buffer.from(customVoice.previewAudioData.replace(/^data:audio\/[^;]+;base64,/i, ''), 'base64')
+            if (!bytes.length) throw new Error('Qwen voice design returned an empty preview audio file')
+            const fileName = `audio-${ch.project_id}-voice-preview-${characterId}-${Date.now()}-${randomUUID().slice(0, 8)}.wav`
+            const filePath = path.join(GENERATED_AUDIO_DIR, fileName)
+            await mkdir(GENERATED_AUDIO_DIR, { recursive: true })
+            await writeFile(filePath, bytes)
+            candidate = {
+              audioUrl: `${buildRequestGeneratedAudioBaseUrl(req)}/${fileName}`,
+              filePath,
+              durationSeconds: null,
+              voiceName,
+              modelName,
+              voiceProfileKey: null,
+              voiceInstructions: instructions,
+            }
+          } else if (body.bindReferenceAudio === true && previewAudioUrl) {
+            const parsedPreviewUrl = new URL(previewAudioUrl, 'http://local-preview')
+            const fileName = path.basename(parsedPreviewUrl.pathname)
+            const isLocalGeneratedAudio = parsedPreviewUrl.pathname.startsWith('/generated/audio/')
+              && fileName === parsedPreviewUrl.pathname.split('/').pop()
+              && /^[A-Za-z0-9._-]+$/.test(fileName)
+            const filePath = path.join(GENERATED_AUDIO_DIR, fileName)
+            if (isCustomVoiceCandidateBinding && (!fileName || fileName.includes('..'))) {
+              fail(res, 4001, '自定义音色候选试听地址无效，请重新生成试听', 400)
+              return
+            }
+            if (!isLocalGeneratedAudio || !(await fileExists(filePath))) {
+              fail(res, 4001, '试听音频已失效，请重新生成声音 Agent 试听', 400)
+              return
+            }
+            candidate = {
+              audioUrl: previewAudioUrl,
+              filePath,
+              durationSeconds: null,
+              voiceName,
+              modelName,
+              voiceProfileKey: voiceProfile?.profileKey || null,
+              voiceInstructions: instructions,
+            }
+          } else {
+            ;[candidate] = await generateAudioCandidates({
+              projectId: ch.project_id,
+              trackType: 'voice-preview',
+              versionNo: Math.floor(Date.now() / 1000),
+              text,
+              voiceName,
+              modelName,
+              instructions,
+              publicBaseUrl: buildRequestGeneratedAudioBaseUrl(req),
+              outputDir: GENERATED_AUDIO_DIR,
+              candidateCount: 1,
+              allowModelFallback: !voiceDesign?.voiceId,
+            })
+          }
+          let referenceAudioUrl = null
+          if (body.bindReferenceAudio === true && candidate.filePath) {
+            const bytes = await readFile(candidate.filePath)
+            const extension = path.extname(candidate.filePath).toLowerCase() || '.wav'
+            const stored = await objectStorage.putObject({
+              key: `projects/${ch.project_id}/characters/${characterId}/voice-agent-reference-${Date.now()}${extension}`,
+              bytes,
+              contentType: extension === '.mp3' ? 'audio/mpeg' : 'audio/wav',
+            })
+            referenceAudioUrl = stored.url
+            if (!voiceDesign) {
+              fail(res, 4001, '声音 Agent 设计已失效，请重新生成试听后再确认绑定', 409)
+              return
+            }
+            const isCustomVoiceBinding = isCustomVoiceCandidateBinding
+              && voiceDesign?.provider === 'qwen'
+              && String(body.voiceId || '') === String(voiceDesign.voiceId || '')
+              && String(voiceDesign.targetModel || '') === modelName
+            if (isCustomVoiceBinding) {
+              await db.execute(
+                `UPDATE characters
+                 SET reference_audio_url = ?, reference_audio_storage_key = ?,
+                     voice_design_json = ?, voice_profile_key = NULL, voice_setting = ?,
+                     voice_style = ?, voice_locked = 1, updated_at = NOW()
+                 WHERE id = ?`,
+                [
+                  referenceAudioUrl,
+                  stored.key,
+                  JSON.stringify(voiceDesign),
+                  voiceDesign.voiceId,
+                  String(body.voiceStyle || ch.voice_style || '').trim().slice(0, 160) || null,
+                  characterId,
+                ],
+              )
+            } else {
+              await db.execute(
+              `UPDATE characters
+               SET reference_audio_url = ?, reference_audio_storage_key = ?,
+                   voice_design_json = ?, voice_profile_key = ?, voice_setting = ?,
+                   voice_style = ?, voice_locked = 1, updated_at = NOW()
+               WHERE id = ?`,
+              [
+                referenceAudioUrl,
+                stored.key,
+                JSON.stringify(voiceDesign),
+                voiceProfile.profileKey,
+                voiceProfile.voiceId,
+                String(body.voiceStyle || ch.voice_style || '').trim().slice(0, 160) || null,
+                characterId,
+              ],
+              )
+            }
+          }
+          const [updatedCharacterRows] = referenceAudioUrl || customVoice
+            ? await db.execute('SELECT * FROM characters WHERE id = ? LIMIT 1', [characterId])
+            : [null]
           success(res, {
             ...candidate,
             voiceProfileKey: voiceProfile?.profileKey || null,
             voiceProfileName: voiceProfile?.displayName || null,
+            voiceProfileGender: voiceProfile?.gender || null,
+            voiceDesign,
+            voiceId: customVoice?.voiceId || voiceDesign?.voiceId || voiceProfile?.voiceId || null,
+            referenceAudioUrl,
+            referenceAudioBound: Boolean(referenceAudioUrl),
+            character: updatedCharacterRows?.[0] ? characterRow(updatedCharacterRows[0]) : null,
           }, '音色试听已生成')
         } catch (audioError) {
           const providerDetail = String(audioError?.message || 'unknown provider error')
@@ -9508,7 +19006,7 @@ const server = createServer(async (req, res) => {
         `SELECT c.*, p.user_id AS ownerId
          FROM characters c
          INNER JOIN projects p ON p.id = c.project_id
-         WHERE c.id = ? LIMIT 1`,
+         WHERE c.id = ? AND c.status <> 'archived' LIMIT 1`,
         [characterId],
       )
       const ch = ownRows[0]
@@ -9519,6 +19017,17 @@ const server = createServer(async (req, res) => {
 
       if (req.method === 'GET') {
         success(res, characterRow(ch))
+        return
+      }
+
+      if (req.method === 'DELETE') {
+        await db.execute(
+          `UPDATE characters
+           SET status = 'archived', voice_locked = 0, updated_at = NOW()
+           WHERE id = ?`,
+          [characterId],
+        )
+        success(res, { success: true }, '角色已删除')
         return
       }
 
@@ -9586,7 +19095,7 @@ const server = createServer(async (req, res) => {
             `SELECT c.*, p.user_id AS ownerId
              FROM characters c
              INNER JOIN projects p ON p.id = c.project_id
-             WHERE c.id = ? LIMIT 1 FOR UPDATE`,
+             WHERE c.id = ? AND c.status <> 'archived' LIMIT 1 FOR UPDATE`,
             [characterId],
           )
           const lockedCharacter = lockedRows[0]
@@ -9673,13 +19182,52 @@ const server = createServer(async (req, res) => {
   }
 })
 
-server.listen(PORT, () => {
-  console.log(`Auth server is running at http://localhost:${PORT}`)
-  console.log(`Database: mysql://${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}`)
-  console.log(`SMS provider: ${smsRuntime.provider}`)
-  console.log(`SMS ready: ${smsRuntime.ready} (${smsRuntime.reason})`)
-  console.log(`Demo account: ${DEMO_PHONE}`)
-})
+const isWorkerRuntime = appRuntimeRole.role === 'worker'
 
-await recoverGenerationJobs()
-await resumeExportJobs()
+if (isWorkerRuntime) {
+  console.log('[worker] Worker runtime started; HTTP server disabled.')
+  void recoverGenerationJobs().catch((error) => console.error('[worker] generation recovery failed', error))
+  void recoverInterruptedAgentPipelines(db)
+    .then(resumeQueuedAgentPipelines)
+    .catch((error) => console.error('[worker] agent pipeline recovery failed', error))
+  void resumeExportJobs().catch((error) => console.error('[worker] export recovery failed', error))
+} else {
+  server.on('error', (error) => {
+    if (error?.code === 'EADDRINUSE') {
+      console.error(
+        `[auth-server] 端口 ${PORT} 已被占用，当前实例不会启动。请先停止占用该端口的旧 Node 进程，或设置 PORT 使用其他端口。`,
+      )
+      process.exit(1)
+      return
+    }
+    console.error('[auth-server] 无法启动 HTTP 服务', error)
+    process.exitCode = 1
+  })
+
+  server.listen(PORT, () => {
+    process.env.PROJECTDREAM_SERVER_STARTED_AT = new Date().toISOString()
+    console.log(`Auth server is running at http://localhost:${PORT}`)
+    console.log(`Database: mysql://${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}`)
+    console.log(`SMS provider: ${smsRuntime.provider}`)
+    console.log(`SMS ready: ${smsRuntime.ready} (${smsRuntime.reason})`)
+    console.log(`Demo account: ${DEMO_PHONE}`)
+    void recoverGenerationJobs().catch((error) => console.error('[auth-server] generation recovery failed', error))
+    void resumeExportJobs().catch((error) => console.error('[auth-server] export recovery failed', error))
+  })
+}
+
+const queuedGenerationJobSweep = setInterval(() => void resumeQueuedGenerationJobs(), 15000)
+queuedGenerationJobSweep.unref()
+
+if (isWorkerRuntime) {
+  const pipelineQueueSweep = setInterval(() => {
+    void resumeQueuedAgentPipelines().catch((error) => console.error('[worker] agent pipeline queue scan failed', error))
+  }, appRuntimeRole.queuePollIntervalMs)
+  pipelineQueueSweep.unref()
+
+  startExportQueueSweep({
+    sweep: resumeExportJobs,
+    intervalMs: appRuntimeRole.queuePollIntervalMs,
+    onError: (error) => console.error('[worker] export queue scan failed', error),
+  })
+}

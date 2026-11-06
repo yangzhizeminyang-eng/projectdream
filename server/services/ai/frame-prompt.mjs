@@ -44,6 +44,7 @@ function shotBrief(storyboard = {}) {
 }
 
 function buildMockVisualPrompt(ctx = {}) {
+  // mock 模式下根据已有分镜字段拼出可直接用于图片生成的视觉提示词。
   const project = ctx.project || {}
   const scene = ctx.scene || {}
   const storyboard = ctx.storyboard || {}
@@ -76,6 +77,8 @@ function normalizePayload(payload, ctx) {
 }
 
 export function buildFramePromptRewritePrompts(ctx = {}) {
+  // systemPrompt 规定模型角色，userPrompt 提供项目、场景、分镜和角色上下文。
+  // 重点要求模型只优化画面动作和构图，不改角色外貌设定。
   const project = ctx.project || {}
   const outline = ctx.outline || {}
   const scene = ctx.scene || {}
@@ -126,6 +129,7 @@ export function buildFramePromptRewritePrompts(ctx = {}) {
 }
 
 export async function rewriteFrameVisualPrompt(ctx = {}) {
+  // 对已有分镜画面提示词做 AI 重写，失败时按配置回退到本地规则。
   const config = getAiConfig()
   if (isMockProvider(config)) {
     return {

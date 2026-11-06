@@ -14,6 +14,7 @@ import {
   bindCharacterVoice,
   confirmCharacterImage,
   createCharacter,
+  deleteCharacter,
   generateCharacterImages,
   generateCharacterProfile,
   getGenerationJob,
@@ -22,6 +23,7 @@ import {
   listCharacterImages,
   previewCharacterRename,
   previewCharacterVoice,
+  setCharacterLock,
   updateCharacter,
   type CharacterDTO,
   type CharacterImageDTO,
@@ -91,6 +93,7 @@ interface CharacterDraft {
   roleTag: string
   personality: string
   appearance: string
+  costume: string
   voiceSetting: string
   ageGroup: string
   gender: string
@@ -103,6 +106,7 @@ const emptyDraft = (): CharacterDraft => ({
   roleTag: '',
   personality: '',
   appearance: '',
+  costume: '',
   voiceSetting: '',
   ageGroup: '',
   gender: '',
@@ -132,6 +136,8 @@ const confirmingImageId = ref(0)
 const voiceGenerating = ref(false)
 const voiceLoading = ref(false)
 const voiceBinding = ref(false)
+const lockUpdating = ref(false)
+const deletingCharacter = ref(false)
 const characterImages = ref<CharacterImageDTO[]>([])
 const voicePreviewUrl = ref('')
 const voicePreviewText = ref('')
@@ -187,6 +193,7 @@ const isDraftDirty = computed<boolean>(() => {
     draft.value.roleTag !== (character.value.roleTag || '') ||
     draft.value.personality !== (character.value.personality || '') ||
     draft.value.appearance !== (character.value.appearance || '') ||
+    draft.value.costume !== (character.value.costume || '') ||
     draft.value.voiceSetting !== (character.value.voiceSetting || '') ||
     draft.value.ageGroup !== (character.value.ageGroup || '') ||
     draft.value.gender !== (character.value.gender || '') ||
@@ -205,6 +212,7 @@ function hasAnyField(d: CharacterDraft): boolean {
     d.roleTag.trim() ||
       d.personality.trim() ||
       d.appearance.trim() ||
+      d.costume.trim() ||
       d.voiceSetting.trim() ||
       d.ageGroup.trim() ||
       d.gender.trim() ||
@@ -224,6 +232,7 @@ function syncDraftFromCharacter(ch: CharacterDTO): void {
     roleTag: ch.roleTag || '',
     personality: ch.personality || '',
     appearance: ch.appearance || '',
+    costume: ch.costume || '',
     voiceSetting: ch.voiceSetting || '',
     ageGroup: ch.ageGroup || '',
     gender: ch.gender || '',
@@ -345,6 +354,7 @@ function characterDraftPayload(syncNameReferences?: boolean) {
     roleTag: draft.value.roleTag.trim() || null,
     personality: draft.value.personality.trim() || null,
     appearance: draft.value.appearance.trim() || null,
+    costume: draft.value.costume.trim() || null,
     voiceSetting: draft.value.voiceSetting.trim() || null,
     ageGroup: draft.value.ageGroup || null,
     gender: draft.value.gender || null,
@@ -481,6 +491,28 @@ async function onGenerateProfile(): Promise<void> {
   }
 }
 
+async function onDeleteCharacter(): Promise<void> {
+  if (!characterId.value || deletingCharacter.value || isCreateMode.value || !character.value) return
+  const confirmed = window.confirm(
+    `确认删除角色“${character.value.name}”吗？\n删除后会从角色库隐藏，但历史分镜和音频引用会保留。`,
+  )
+  if (!confirmed) return
+  deletingCharacter.value = true
+  errorMsg.value = ''
+  infoMsg.value = ''
+  try {
+    await deleteCharacter(characterId.value)
+    router.push({
+      path: '/workspace/character/library',
+      query: { projectId: String(projectId.value) },
+    })
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '删除角色失败'
+  } finally {
+    deletingCharacter.value = false
+  }
+}
+
 async function onGenerateImages(): Promise<void> {
   if (!characterId.value || imageGenerating.value || editing.value) return
   imageGenerating.value = true
@@ -604,6 +636,32 @@ async function onBindVoice(profileKey = selectedVoiceProfileKey.value): Promise<
   }
 }
 
+async function onToggleLock(
+  group: 'appearance' | 'costume',
+  locked: boolean,
+): Promise<void> {
+  if (!characterId.value || lockUpdating.value) return
+  if (isDraftDirty.value) {
+    errorMsg.value = '请先保存角色档案，再锁定外貌或服装'
+    return
+  }
+  lockUpdating.value = true
+  errorMsg.value = ''
+  infoMsg.value = ''
+  try {
+    const result = await setCharacterLock(characterId.value, group, locked)
+    character.value = result.character
+    syncDraftFromCharacter(result.character)
+    infoMsg.value = locked
+      ? `${group === 'appearance' ? '外貌' : '服装'}已锁定，后续生成将沿用当前版本`
+      : `${group === 'appearance' ? '外貌' : '服装'}已解锁，修改后会创建新版本`
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '角色锁定状态更新失败'
+  } finally {
+    lockUpdating.value = false
+  }
+}
+
 function ageGroupLabel(value?: string | null): string {
   return ageGroupOptions.find((item) => item.value === value)?.label || '未识别'
 }
@@ -652,6 +710,24 @@ function startEdit(): void {
 function goBack(): void {
   router.push({
     path: '/workspace/character',
+    query: { projectId: String(projectId.value) },
+  })
+}
+
+/**
+ * @description 去资产画布给这个角色摆不同时空的形象。
+ *              画布上每个节点是一次形象变体，不会互相覆盖，
+ *              也不会像定妆图那样把角色的全局参考图改掉。
+ * @returns {void}
+ */
+function goAssetCanvas(): void {
+  if (!projectId.value) {
+    router.push('/dashboard')
+    return
+  }
+
+  router.push({
+    path: '/workspace/assets/canvas',
     query: { projectId: String(projectId.value) },
   })
 }
@@ -732,27 +808,27 @@ onUnmounted(() => {
         <!-- 顶部条：返回 + 标题 + 操作按钮 -->
         <div class="flex h-full flex-1 flex-col">
           <header
-            class="flex flex-shrink-0 items-center justify-between gap-4 border-b border-outline-variant bg-surface-container-lowest px-margin-md py-4"
+            class="flex flex-shrink-0 flex-col items-stretch gap-4 border-b border-outline-variant bg-surface-container-lowest px-margin-md py-4 sm:flex-row sm:items-center sm:justify-between"
           >
-            <div class="flex items-center gap-3">
+            <div class="flex min-w-0 items-center gap-3">
               <button
                 type="button"
-                class="flex items-center gap-1 border border-outline-variant bg-surface-container-low px-3 py-1.5 text-xs uppercase tracking-widest text-on-surface-variant hover:border-primary hover:text-primary"
+                class="flex shrink-0 items-center gap-1 border border-outline-variant bg-surface-container-low px-3 py-1.5 text-xs uppercase tracking-widest text-on-surface-variant hover:border-primary hover:text-primary"
                 @click="goBack"
               >
                 <span class="material-symbols-outlined text-sm">arrow_back</span>
                 返回列表
               </button>
-              <nav class="flex items-center gap-2 font-label-sm text-on-surface-variant">
-                <span>角色库</span>
-                <span class="material-symbols-outlined text-xs">chevron_right</span>
-                <span class="text-primary">
+              <nav class="min-w-0 flex flex-1 items-center gap-2 font-label-sm text-on-surface-variant">
+                <span class="shrink-0 whitespace-nowrap">角色库</span>
+                <span class="material-symbols-outlined shrink-0 text-xs">chevron_right</span>
+                <span class="truncate text-primary">
                   {{ isCreateMode ? '新建角色' : draft.name || '角色详情' }}
                 </span>
               </nav>
             </div>
 
-            <div class="flex flex-wrap items-center justify-end gap-2">
+            <div class="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
               <!-- 编辑模式按钮组 -->
               <template v-if="pageState === 'ready'">
                 <button
@@ -786,6 +862,18 @@ onUnmounted(() => {
                 >
                   <span class="material-symbols-outlined text-sm">edit</span>
                   编辑
+                </button>
+                <button
+                  v-if="!editing"
+                  type="button"
+                  class="flex items-center gap-1 border border-danger-red/40 bg-danger-red/10 px-4 py-1.5 text-xs uppercase tracking-widest text-danger-red hover:bg-danger-red/20 disabled:opacity-50"
+                  :disabled="deletingCharacter"
+                  @click="onDeleteCharacter"
+                >
+                  <span class="material-symbols-outlined text-sm" :class="{ 'animate-spin': deletingCharacter }">
+                    {{ deletingCharacter ? 'progress_activity' : 'delete' }}
+                  </span>
+                  删除
                 </button>
                 <template v-else>
                   <button
@@ -969,8 +1057,25 @@ onUnmounted(() => {
               <!-- 外貌与声音 -->
               <section class="border border-outline-variant bg-surface-container p-6">
                 <div class="mb-6 flex items-center justify-between border-b border-outline-variant pb-4">
-                  <h2 class="font-headline-md uppercase text-primary">外貌描述</h2>
-                  <span class="font-label-sm uppercase tracking-widest text-outline">Appearance</span>
+                  <div>
+                    <h2 class="font-headline-md uppercase text-primary">外貌描述</h2>
+                    <span class="mt-1 block font-label-sm uppercase tracking-widest text-outline">Appearance</span>
+                  </div>
+                  <button
+                    v-if="!isCreateMode"
+                    type="button"
+                    class="flex items-center gap-2 border px-3 py-1.5 text-xs disabled:opacity-50"
+                    :class="character?.appearanceLocked
+                      ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200'
+                      : 'border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary'"
+                    :disabled="editing || lockUpdating"
+                    @click="onToggleLock('appearance', !character?.appearanceLocked)"
+                  >
+                    <span class="material-symbols-outlined text-sm">
+                      {{ character?.appearanceLocked ? 'lock' : 'lock_open' }}
+                    </span>
+                    {{ character?.appearanceLocked ? '外貌已锁定' : '锁定外貌' }}
+                  </button>
                 </div>
                 <textarea
                   v-model="draft.appearance"
@@ -982,6 +1087,41 @@ onUnmounted(() => {
                     editing ? 'border-outline' : 'border-transparent',
                   ]"
                   placeholder="例如：身高 175cm，黑色短发，右眉骨有一道细长疤痕，眼神锐利。"
+                ></textarea>
+              </section>
+
+              <section class="border border-outline-variant bg-surface-container p-6">
+                <div class="mb-6 flex items-center justify-between border-b border-outline-variant pb-4">
+                  <div>
+                    <h2 class="font-headline-md uppercase text-primary">固定服装与物件</h2>
+                    <span class="mt-1 block font-label-sm uppercase tracking-widest text-outline">Costume & Props</span>
+                  </div>
+                  <button
+                    v-if="!isCreateMode"
+                    type="button"
+                    class="flex items-center gap-2 border px-3 py-1.5 text-xs disabled:opacity-50"
+                    :class="character?.costumeLocked
+                      ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200'
+                      : 'border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary'"
+                    :disabled="editing || lockUpdating"
+                    @click="onToggleLock('costume', !character?.costumeLocked)"
+                  >
+                    <span class="material-symbols-outlined text-sm">
+                      {{ character?.costumeLocked ? 'lock' : 'lock_open' }}
+                    </span>
+                    {{ character?.costumeLocked ? '服装已锁定' : '锁定服装' }}
+                  </button>
+                </div>
+                <textarea
+                  v-model="draft.costume"
+                  :readonly="!editing"
+                  rows="4"
+                  :class="[
+                    'w-full resize-y border bg-surface-container-lowest px-3 py-2 font-body-md text-on-surface',
+                    'focus:border-primary focus:outline-none focus:ring-0',
+                    editing ? 'border-outline' : 'border-transparent',
+                  ]"
+                  placeholder="例如：深灰色修复师制服、银色识别牌、左腕黑色终端手环；全季默认不变。"
                 ></textarea>
               </section>
 
@@ -1134,6 +1274,7 @@ onUnmounted(() => {
                   :src="voicePreviewUrl"
                   controls
                   preload="metadata"
+                  @error="errorMsg = '音色文件无法访问，请重新生成试听或检查媒体服务'"
                 ></audio>
               </section>
 
@@ -1143,17 +1284,29 @@ onUnmounted(() => {
                     <h2 class="font-headline-md uppercase text-primary">角色定妆图</h2>
                     <span class="mt-1 block font-label-sm uppercase tracking-widest text-outline">Character Reference</span>
                   </div>
-                  <button
-                    type="button"
-                    class="flex items-center gap-2 border border-primary bg-primary/10 px-4 py-2 text-xs uppercase tracking-widest text-primary hover:bg-primary/20 disabled:opacity-50"
-                    :disabled="isCreateMode || editing || imageGenerating || !draft.appearance.trim()"
-                    @click="onGenerateImages"
-                  >
-                    <span class="material-symbols-outlined text-base" :class="{ 'animate-spin': imageGenerating }">
-                      {{ imageGenerating ? 'progress_activity' : 'add_photo_alternate' }}
-                    </span>
-                    {{ imageGenerating ? `后台生成中 ${imageGenerationProgress}%` : '生成候选' }}
-                  </button>
+                  <div class="flex items-center gap-2">
+                    <!-- 定妆图只管身份基准；要摆这个角色在不同时空的形象，去资产画布 -->
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 border border-outline-variant px-4 py-2 text-xs uppercase tracking-widest text-on-surface-variant hover:border-primary hover:text-primary disabled:opacity-50"
+                      :disabled="isCreateMode"
+                      @click="goAssetCanvas"
+                    >
+                      <span class="material-symbols-outlined text-base">schema</span>
+                      去画布摆形象
+                    </button>
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 border border-primary bg-primary/10 px-4 py-2 text-xs uppercase tracking-widest text-primary hover:bg-primary/20 disabled:opacity-50"
+                      :disabled="isCreateMode || editing || imageGenerating || !draft.appearance.trim()"
+                      @click="onGenerateImages"
+                    >
+                      <span class="material-symbols-outlined text-base" :class="{ 'animate-spin': imageGenerating }">
+                        {{ imageGenerating ? 'progress_activity' : 'add_photo_alternate' }}
+                      </span>
+                      {{ imageGenerating ? `后台生成中 ${imageGenerationProgress}%` : '生成候选' }}
+                    </button>
+                  </div>
                 </div>
                 <img
                   v-if="draft.referenceImageUrl"

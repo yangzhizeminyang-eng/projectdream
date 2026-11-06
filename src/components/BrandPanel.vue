@@ -41,13 +41,15 @@ const props = withDefaults(defineProps<Props>(), {
   studio: '主创片场',
   latitude: '34.05°N',
   longitude: '118.24°E',
-  version: '梦绘片场 v2.4',
+  version: '帧心帧意 v2.4',
   bgImage:
     'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=A%20cinematic%20low-angle%20wide%20shot%20of%20a%20high-tech%20AI%20film%20production%20studio.%20Darkroom%20professional%20aesthetic%20with%20deep%20charcoal%20tones%20and%20sharp%20burning%20orange%20lighting%20accents.%20A%20backlit%20transparent%20storyboard%20table%20glows%20with%20digital%20sketches.%20Floating%20holographic%20film%20reels%20and%20advanced%20video%20editing%20workstations%20with%20multiple%20monitors%20in%20the%20background.%20Atmospheric%20smoke%20and%20anamorphic%20lens%20flares.%20High-contrast%2C%20moody%2C%20disciplined%20auteur%20atmosphere.&image_size=landscape_16_9',
 })
 
 /** 背景图 inline style */
 const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
+
+const productionSteps = ['故事', '场景', '分镜', '成片']
 </script>
 
 <template>
@@ -73,16 +75,20 @@ const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
     <span class="brand-corner brand-corner--bl" aria-hidden="true"></span>
     <span class="brand-corner brand-corner--br" aria-hidden="true"></span>
 
-    <!-- 5. 内容层：顶 / 中 / 底三段 -->
+      <!-- 5. 内容层：顶 / 中 / 底三段 -->
     <div class="brand-content">
       <!-- 顶部：品牌行 + 系统状态 -->
       <header class="brand-top">
-        <div class="brand-mark" aria-hidden="true">
-          <span class="material-symbols-outlined">movie_filter</span>
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">
+            <span class="material-symbols-outlined">movie_filter</span>
+          </div>
+          <div class="brand-wordmark">
+            <h2 class="brand-name">帧心帧意</h2>
+            <span class="brand-name-en">PanelFlow / studio</span>
+          </div>
         </div>
-        <h2 class="brand-name">PanelFlow</h2>
-        <span class="brand-divider" aria-hidden="true"></span>
-        <span class="brand-status" aria-hidden="true">
+        <span class="brand-status">
           <span class="brand-status-dot"></span>
           <span>系统在线</span>
         </span>
@@ -90,52 +96,70 @@ const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
 
       <!-- 中部：宣言 + 元数据 -->
       <div class="brand-mid">
-        <span class="brand-eyebrow" aria-hidden="true">— 第 {{ episode }} 章 / {{ label }}</span>
+        <span class="brand-eyebrow">进入帧心帧意 / {{ label }}</span>
         <p class="brand-headline">
-          开启 AI <br />叙事新纪元
+          <span>让故事先成形，</span>
+          <span>再成片</span>
         </p>
         <span class="brand-bar" aria-hidden="true"></span>
         <p class="brand-desc">
-          专为专业创作者打造的电影级 AI 分镜与视效创作平台。将灵感转化为精准的视觉语言，重塑叙事效率。
+          从故事总纲到镜头交付，把灵感变成可编辑、可复用、可交付的影像资产。
         </p>
 
-        <dl class="brand-meta" aria-label="系统参数">
+        <p class="brand-slogan">帧心帧意，每一帧都出自你的班底</p>
+
+        <div class="brand-process" aria-label="创作流程">
+          <div
+            v-for="(step, index) in productionSteps"
+            :key="step"
+            class="brand-process-step"
+            :class="{ 'is-current': index === 0 }"
+          >
+            <span class="brand-process-index">{{ String(index + 1).padStart(2, '0') }}</span>
+            <span class="brand-process-name">{{ step }}</span>
+          </div>
+        </div>
+
+        <dl class="brand-meta" aria-label="平台能力">
           <div class="brand-meta-item">
-            <dt>版本</dt>
-            <dd>{{ release }}</dd>
+            <dt>核心</dt>
+            <dd>AI 叙事</dd>
           </div>
           <div class="brand-meta-item">
-            <dt>片场</dt>
-            <dd>{{ studio }}</dd>
+            <dt>镜头</dt>
+            <dd>电影级分镜</dd>
           </div>
           <div class="brand-meta-item">
-            <dt>纬度</dt>
-            <dd>{{ latitude }}</dd>
-          </div>
-          <div class="brand-meta-item">
-            <dt>经度</dt>
-            <dd>{{ longitude }}</dd>
+            <dt>交付</dt>
+            <dd>成片可追踪</dd>
           </div>
         </dl>
       </div>
 
       <!-- 底部：工具集 + 版本号 -->
       <footer class="brand-bottom">
-        <div class="brand-tools" aria-hidden="true">
+        <div class="brand-tools" aria-label="创作工具">
           <div class="brand-tool" title="分镜">
             <span class="material-symbols-outlined">auto_stories</span>
+            <span class="brand-tool-label">分镜</span>
           </div>
           <div class="brand-tool" title="镜头">
             <span class="material-symbols-outlined">videocam</span>
+            <span class="brand-tool-label">镜头</span>
           </div>
           <div class="brand-tool" title="剪辑">
             <span class="material-symbols-outlined">movie_edit</span>
+            <span class="brand-tool-label">剪辑</span>
           </div>
           <div class="brand-tool" title="生成">
             <span class="material-symbols-outlined">auto_awesome</span>
+            <span class="brand-tool-label">生成</span>
           </div>
         </div>
-        <span class="brand-version">{{ version }}</span>
+        <div class="brand-version-block">
+          <span class="brand-version-label">CREATIVE WORKSPACE</span>
+          <span class="brand-version">{{ version }}</span>
+        </div>
       </footer>
     </div>
 
@@ -175,8 +199,8 @@ const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
   --color-primary-strong: #d97706;
   --color-bronze: #A48454;
   --color-outline: #554336;
-  --font-display: 'Playfair Display', 'Noto Serif SC', serif;
-  --font-body: 'Noto Sans', 'Noto Sans SC', sans-serif;
+  --font-display: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', serif;
+  --font-body: 'Noto Sans SC', 'Noto Sans', 'Microsoft YaHei', sans-serif;
 
   position: relative;
   display: none;
@@ -328,8 +352,16 @@ const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
 .brand-top {
   display: flex;
   align-items: center;
-  gap: 0.875rem;
+  justify-content: space-between;
+  gap: 1rem;
   animation: rise 800ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  min-width: 0;
 }
 
 .brand-mark {
@@ -352,19 +384,29 @@ const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
 .brand-name {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 1.5rem;
-  letter-spacing: -0.01em;
+  font-weight: 600;
+  font-size: 1.25rem;
+  letter-spacing: 0.02em;
   color: var(--color-primary);
-  line-height: 1;
+  line-height: 1.08;
 }
 
-.brand-divider {
-  display: inline-block;
-  width: 1px;
-  height: 1.25rem;
-  background: var(--color-outline);
-  margin: 0 0.25rem;
+.brand-wordmark {
+  display: grid;
+  gap: 0.24rem;
+  min-width: 0;
+}
+
+.brand-name-en {
+  overflow: hidden;
+  color: var(--color-text-mute);
+  font-family: var(--font-body);
+  font-size: 0.5625rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand-status {
@@ -374,7 +416,7 @@ const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
   font-family: var(--font-body);
   font-size: 0.6875rem;
   font-weight: 700;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--color-text-mute);
 }
@@ -403,9 +445,9 @@ const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
   display: inline-block;
   margin: 0 0 1.25rem;
   font-family: var(--font-body);
-  font-size: 0.6875rem;
+  font-size: 0.65625rem;
   font-weight: 700;
-  letter-spacing: 0.3em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--color-primary-strong);
 }
@@ -413,40 +455,109 @@ const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
 .brand-headline {
   margin: 0 0 1.5rem;
   font-family: var(--font-display);
-  font-weight: 700;
-  font-size: clamp(2.25rem, 3.4vw, 3.5rem);
-  line-height: 1.08;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  font-size: clamp(2.65rem, 4vw, 4.25rem);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
   color: var(--color-text);
-  text-wrap: balance;
+  text-wrap: pretty;
+  font-feature-settings: 'palt' 1;
+}
+
+.brand-headline span {
+  display: block;
 }
 
 .brand-bar {
   display: block;
-  width: 5rem;
+  width: 4.5rem;
   height: 2px;
   background: linear-gradient(
     90deg,
     var(--color-primary-strong) 0%,
     var(--color-primary) 100%
   );
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
   box-shadow: 0 0 12px rgba(217, 119, 6, 0.35);
 }
 
 .brand-desc {
-  margin: 0 0 2rem;
-  max-width: 30rem;
+  margin: 0 0 0.9rem;
+  max-width: 29rem;
   font-family: var(--font-body);
-  font-size: 1.0625rem;
+  font-size: 0.9375rem;
   font-weight: 400;
-  line-height: 1.65;
+  line-height: 1.78;
+  letter-spacing: 0.015em;
   color: var(--color-text-soft);
+}
+
+.brand-slogan {
+  display: inline-block;
+  margin: 0 0 1.85rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--color-primary-strong);
+  font-family: var(--font-display);
+  font-size: 0.96875rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--color-primary);
+}
+
+.brand-process {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 0 1.75rem;
+  border-top: 1px solid var(--color-outline);
+  border-bottom: 1px solid var(--color-outline);
+}
+
+.brand-process-step {
+  position: relative;
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  padding: 0.85rem 0.7rem 0.9rem 0;
+  color: var(--color-text-faint);
+}
+
+.brand-process-step + .brand-process-step {
+  padding-left: 0.75rem;
+  border-left: 1px solid var(--color-outline);
+}
+
+.brand-process-step.is-current {
+  color: var(--color-primary);
+}
+
+.brand-process-step.is-current::after {
+  content: '';
+  position: absolute;
+  right: 0.7rem;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: var(--color-primary-strong);
+}
+
+.brand-process-index {
+  font-family: var(--font-body);
+  font-size: 0.5625rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.brand-process-name {
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .brand-meta {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1.25rem 1.5rem;
   margin: 0;
   padding: 1.25rem 0 0;
@@ -466,10 +577,10 @@ const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
 }
 .brand-meta-item dd {
   margin: 0;
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-weight: 600;
-  font-size: 0.875rem;
-  letter-spacing: 0.02em;
+  font-size: 0.8125rem;
+  letter-spacing: 0.04em;
   color: var(--color-text);
   white-space: nowrap;
   overflow: hidden;
@@ -480,46 +591,81 @@ const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
 .brand-bottom {
   display: flex;
   align-items: center;
-  gap: 1.5rem;
+  gap: 1.25rem;
+  padding-top: 0.875rem;
+  border-top: 1px solid rgba(164, 132, 84, 0.42);
   animation: rise 1000ms cubic-bezier(0.16, 1, 0.3, 1) 200ms both;
 }
 
-.brand-tools { display: flex; margin-left: 0; }
+.brand-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding-right: 1.25rem;
+  border-right: 1px solid rgba(164, 132, 84, 0.42);
+}
 
 .brand-tool {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2.75rem;
-  height: 2.75rem;
-  border: 1px solid var(--color-outline);
-  background: rgba(26, 28, 26, 0.65);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  gap: 0.3rem;
+  width: auto;
+  height: auto;
+  padding: 0.25rem 0;
+  border: 0;
+  background: transparent;
   color: var(--color-text-soft);
-  margin-right: -0.875rem;
-  transition: transform 0.2s ease, border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+  transition: color 0.2s ease, transform 0.2s ease;
   position: relative;
 }
+.brand-tool + .brand-tool::before {
+  content: '';
+  position: absolute;
+  left: -0.5rem;
+  top: 50%;
+  width: 1px;
+  height: 0.75rem;
+  background: rgba(164, 132, 84, 0.42);
+  transform: translateY(-50%);
+}
 .brand-tool:hover {
-  transform: translateY(-3px);
-  border-color: var(--color-text-mute);
+  transform: translateY(-1px);
   color: var(--color-primary);
-  background: rgba(35, 36, 32, 0.85);
-  z-index: 1;
 }
 .brand-tool .material-symbols-outlined {
-  font-size: 20px;
+  font-size: 18px;
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
+.brand-tool-label {
+  font-family: var(--font-body);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--color-text-mute);
+  transition: color 0.2s ease;
+}
+.brand-tool:hover .brand-tool-label { color: var(--color-primary); }
 
+.brand-version-block {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+}
+.brand-version-label {
+  font-family: var(--font-body);
+  font-size: 0.5625rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: var(--color-text-faint);
+}
 .brand-version {
   font-family: var(--font-body);
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--color-text-mute);
+  letter-spacing: 0.12em;
+  color: var(--color-text-soft);
+  white-space: nowrap;
 }
 
 @keyframes rise {
@@ -585,10 +731,11 @@ const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
 /* 1280-1439：紧凑桌面，关键平衡点 */
 @media (min-width: 1280px) and (max-width: 1439px) {
   .brand-content { padding: 3rem 2.75rem; gap: 1.5rem; }
-  .brand-headline { font-size: clamp(2.25rem, 3.4vw, 2.75rem); }
-  .brand-desc { font-size: 1rem; }
+  .brand-headline { font-size: clamp(2.4rem, 3.6vw, 3.15rem); }
+  .brand-desc { font-size: 0.9375rem; }
+  .brand-process { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .brand-meta {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.875rem 1.25rem;
   }
   .brand-mega-num { font-size: clamp(6rem, 9vw, 9rem); }
@@ -597,14 +744,16 @@ const bgStyle = computed(() => ({ backgroundImage: `url('${props.bgImage}')` }))
 /* 1024-1279：桌面最低端，最关键适配点 */
 @media (min-width: 1024px) and (max-width: 1279px) {
   .brand-content { padding: 2.25rem 2.25rem; gap: 1.25rem; }
-  .brand-headline { font-size: 2.125rem; line-height: 1.1; }
+  .brand-headline { font-size: 2.25rem; line-height: 1.04; }
   .brand-eyebrow { margin-bottom: 1rem; }
-  .brand-desc { font-size: 0.9375rem; line-height: 1.55; margin-bottom: 1.5rem; }
+  .brand-desc { font-size: 0.9375rem; line-height: 1.55; margin-bottom: 0.8rem; }
+  .brand-slogan { margin-bottom: 1.5rem; }
   .brand-meta {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.75rem 1rem;
     padding-top: 1rem;
   }
+  .brand-process { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .brand-meta-item dt { font-size: 0.5625rem; letter-spacing: 0.16em; }
   .brand-meta-item dd { font-size: 0.8125rem; }
   .brand-mid { max-width: 100%; }

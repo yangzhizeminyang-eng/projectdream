@@ -23,6 +23,8 @@ function normalizeBaseUrl(value) {
 }
 
 export function getAiConfig() {
+  // 集中读取文本模型配置。
+  // 环境变量优先，模型设置中心持久化值会在服务启动时被合并到 process.env。
   const provider = String(process.env.AI_PROVIDER || 'mock')
     .trim()
     .toLowerCase()
@@ -37,10 +39,15 @@ export function getAiConfig() {
     storyboardModel: String(process.env.AI_MODEL_STORYBOARD || process.env.AI_MODEL || 'gpt-5.4').trim(),
     characterModel: String(process.env.AI_MODEL_CHARACTER || process.env.AI_MODEL || 'gpt-5.4').trim(),
     timeoutMs: parsePositiveInt(process.env.AI_TIMEOUT_MS, 60000),
+    longTaskTimeoutMs: parsePositiveInt(
+      process.env.AI_LONG_TASK_TIMEOUT_MS,
+      Math.max(parsePositiveInt(process.env.AI_TIMEOUT_MS, 60000), 180000),
+    ),
     fallbackToMock: parseBoolean(process.env.AI_FALLBACK_TO_MOCK, true),
   }
 }
 
 export function isMockProvider(config = getAiConfig()) {
+  // mock 模式用于本地演示和无密钥开发，不会发起真实模型请求。
   return config.provider === 'mock'
 }

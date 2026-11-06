@@ -1,0 +1,3139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>项目进度</title>
+  <style>
+    :root {
+      --ink: #17352D;
+      --muted: #5D7168;
+      --line: #D6E2DC;
+      --paper: #F3F8F6;
+      --surface: #FFFFFF;
+      --teal: #0B806A;
+      --teal-soft: #DDF2EB;
+      --amber: #A66300;
+      --amber-soft: #FFF0D1;
+      --red: #B42318;
+      --red-soft: #FFE8E4;
+      --blue: #1D4ED8;
+      --blue-soft: #E6EEFF;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: "Microsoft YaHei UI", "Segoe UI Variable", sans-serif;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    ::selection {
+      color: var(--ink);
+      background: #BBE7D9;
+    }
+
+    ::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      border: 3px solid var(--paper);
+      border-radius: 8px;
+      background: #A7BEB3;
+    }
+
+    .page {
+      width: min(1200px, calc(100% - 36px));
+      margin: 0 auto;
+      padding: 36px 0 64px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      align-items: flex-start;
+      padding-bottom: 26px;
+      border-bottom: 2px solid var(--ink);
+    }
+
+    .section-label,
+    .metric-label,
+    .phase-name,
+    th {
+      color: var(--muted);
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.3;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      max-width: 800px;
+      font-size: 32px;
+      line-height: 1.2;
+      font-weight: 800;
+    }
+
+    .goal {
+      max-width: 760px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.55;
+    }
+
+    .updated {
+      flex: 0 0 auto;
+      padding: 8px 0;
+      color: var(--muted);
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+
+    .overview {
+      display: grid;
+      grid-template-columns: minmax(300px, 1fr) minmax(380px, 1.85fr);
+      gap: 40px;
+      margin-top: 30px;
+    }
+
+    .progress-panel,
+    .phase-panel,
+    .task-panel,
+    .info-panel {
+      background: transparent;
+    }
+
+    .progress-panel {
+      display: grid;
+      align-content: space-between;
+      gap: 22px;
+      min-height: 250px;
+      padding: 24px 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .focus-copy {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .focus-copy h2 {
+      max-width: 32ch;
+      font-size: 24px;
+      line-height: 1.32;
+    }
+
+    .focus-copy p {
+      max-width: 42ch;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .focus-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .next-action {
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .progress-summary {
+      display: grid;
+      gap: 9px;
+    }
+
+    .progress-summary-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .progress-track {
+      height: 10px;
+      overflow: hidden;
+      background: #DBE6E0;
+    }
+
+    .progress-fill {
+      width: 100%;
+      height: 100%;
+      background: var(--teal);
+      transform: scaleX(var(--progress-ratio));
+      transform-origin: left center;
+      transition: transform 520ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .phase-panel {
+      padding: 24px 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-label {
+      margin-bottom: 22px;
+    }
+
+    .phase-track {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      position: relative;
+    }
+
+    .phase {
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .phase-marker {
+      display: grid;
+      width: 26px;
+      height: 26px;
+      place-items: center;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: var(--paper);
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .phase.is-complete .phase-marker {
+      border-color: var(--teal);
+      background: var(--teal);
+    }
+
+    .phase.is-current .phase-marker {
+      color: var(--surface);
+      border: 1px solid var(--teal);
+      background: var(--teal);
+    }
+
+    .phase-name {
+      overflow: hidden;
+      color: var(--muted);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .phase.is-current .phase-name {
+      color: var(--ink);
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0;
+      margin-top: 32px;
+    }
+
+    .metric {
+      min-height: 70px;
+      padding: 4px 0;
+    }
+
+    .metric + .metric {
+      padding-left: 14px;
+    }
+
+    .metric-value {
+      display: block;
+      margin-top: 8px;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 22px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .task-panel {
+      margin-top: 40px;
+      overflow: hidden;
+      border-top: 2px solid var(--ink);
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    .filters {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .filter {
+      min-width: 56px;
+      padding: 7px 9px;
+      color: var(--muted);
+      cursor: pointer;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: transparent;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .filter:hover,
+    .filter:focus-visible {
+      color: var(--ink);
+      border-color: var(--teal);
+      outline: none;
+    }
+
+    .filter.is-selected {
+      color: var(--surface);
+      border-color: var(--teal);
+      background: var(--teal);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+
+    th,
+    td {
+      padding: 15px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+
+    td {
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .task-id {
+      width: 64px;
+      color: var(--muted);
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .task-title {
+      min-width: 280px;
+      font-weight: 700;
+    }
+
+    .evidence {
+      min-width: 220px;
+      color: var(--muted);
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      min-width: 104px;
+      padding: 5px 8px;
+      border-radius: 4px;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1.1;
+      white-space: nowrap;
+    }
+
+    .status-todo {
+      color: var(--muted);
+      background: #EEF2EF;
+    }
+
+    .status-in-progress {
+      color: var(--blue);
+      background: var(--blue-soft);
+    }
+
+    .status-blocked {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .status-done {
+      color: var(--teal);
+      background: var(--teal-soft);
+    }
+
+    .empty {
+      padding: 28px 24px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .lower-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 40px;
+      margin-top: 42px;
+    }
+
+    .info-panel {
+      padding: 20px 0 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .info-panel h2 {
+      margin-bottom: 16px;
+    }
+
+    .info-list {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .info-list li {
+      padding: 12px 0;
+      color: var(--muted);
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .info-list.is-blocked li {
+      color: var(--red);
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        width: min(100% - 24px, 1200px);
+        padding-top: 24px;
+      }
+
+      .topbar,
+      .panel-header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .updated {
+        white-space: normal;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+
+      .overview,
+      .lower-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .metrics {
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+
+      .metric,
+      .metric + .metric {
+        padding: 4px 0;
+      }
+
+      th,
+      td {
+        padding: 13px 16px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        scroll-behavior: auto;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* Delivery console redesign */
+    :root {
+      --ink: #172026;
+      --muted: #5f6c72;
+      --line: #dbe1e4;
+      --paper: #f3f5f4;
+      --surface: #ffffff;
+      --teal: #247f69;
+      --teal-soft: #e5f2ec;
+      --red: #b64940;
+      --red-soft: #fae9e6;
+      --blue: #315fbd;
+      --blue-soft: #eaf0ff;
+      --sidebar: #151a1d;
+      --sidebar-muted: #a3aeab;
+      --sidebar-line: rgba(255, 255, 255, 0.09);
+      --accent: #c7e57b;
+      --shadow: 0 18px 45px rgba(23, 32, 38, 0.08);
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background: var(--paper);
+      font-family: "Segoe UI Variable", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: 232px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      padding: 28px 18px 20px;
+      color: #f4f7f4;
+      background: var(--sidebar);
+    }
+
+    .brand {
+      display: flex;
+      gap: 11px;
+      align-items: center;
+      padding: 0 8px 28px;
+      border-bottom: 1px solid var(--sidebar-line);
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      color: #1d2817;
+      border-radius: 10px;
+      background: var(--accent);
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: -0.04em;
+    }
+
+    .brand strong,
+    .brand small {
+      display: block;
+    }
+
+    .brand strong {
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .brand small {
+      margin-top: 3px;
+      color: var(--sidebar-muted);
+      font-size: 11px;
+    }
+
+    .sidebar-nav {
+      display: grid;
+      gap: 5px;
+      margin-top: 30px;
+    }
+
+    .nav-caption {
+      padding: 0 10px 9px;
+      color: #a3aeab;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .nav-item {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      min-height: 39px;
+      padding: 0 10px;
+      color: var(--sidebar-muted);
+      border: 1px solid transparent;
+      border-radius: 9px;
+      font-size: 13px;
+      font-weight: 650;
+      text-decoration: none;
+      transition: color 180ms ease, background 180ms ease, border-color 180ms ease, transform 180ms ease;
+    }
+
+    .nav-item:hover,
+    .nav-item:focus-visible {
+      color: #f4f7f4;
+      border-color: var(--sidebar-line);
+      background: rgba(255, 255, 255, 0.06);
+      outline: none;
+      transform: translateX(2px);
+    }
+
+    .nav-item.is-active {
+      color: #f8fbf7;
+      border-color: rgba(199, 229, 123, 0.18);
+      background: rgba(199, 229, 123, 0.12);
+    }
+
+    .nav-index {
+      display: grid;
+      width: 23px;
+      height: 23px;
+      place-items: center;
+      color: #74807d;
+      border: 1px solid var(--sidebar-line);
+      border-radius: 7px;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+    }
+
+    .nav-item.is-active .nav-index {
+      color: #253117;
+      border-color: transparent;
+      background: var(--accent);
+    }
+
+    .sidebar-note {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 5px 8px;
+      align-items: center;
+      margin-top: auto;
+      padding: 13px 10px;
+      border: 1px solid var(--sidebar-line);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .sidebar-note .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(199, 229, 123, 0.1);
+    }
+
+    .sidebar-note span:not(.live-dot) {
+      color: #e1e9e3;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .sidebar-note small {
+      grid-column: 2;
+      color: var(--sidebar-muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .page {
+      width: min(1440px, calc(100% - 64px));
+      padding: 28px 0 70px;
+    }
+
+    .topbar {
+      align-items: center;
+      padding: 0 0 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .topbar::before {
+      content: "Delivery board / Current project";
+      display: block;
+      margin-bottom: 14px;
+      color: var(--muted);
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 900px;
+      color: var(--ink);
+      font-size: 40px;
+      line-height: 1.08;
+      letter-spacing: -0.045em;
+    }
+
+    .goal {
+      max-width: 720px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .updated {
+      align-self: flex-start;
+      margin-top: 2px;
+      padding: 8px 10px;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.5);
+      font-size: 11px;
+      font-weight: 750;
+    }
+
+    .overview {
+      grid-template-columns: minmax(0, 1.2fr) minmax(440px, 0.95fr);
+      gap: 20px;
+      margin-top: 22px;
+    }
+
+    .progress-panel,
+    .phase-panel {
+      position: relative;
+      min-height: 302px;
+      overflow: hidden;
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(250, 252, 251, 0.92)),
+        var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .progress-panel::after,
+    .phase-panel::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, rgba(36, 127, 105, 0.055), transparent 34%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.34), transparent 42%);
+    }
+
+    .progress-panel > *,
+    .phase-panel > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .progress-panel {
+      gap: 20px;
+    }
+
+    .focus-copy h2 {
+      max-width: 28ch;
+      font-size: 26px;
+      line-height: 1.18;
+      letter-spacing: -0.035em;
+    }
+
+    .focus-copy p {
+      position: relative;
+      max-width: 68ch;
+      margin-top: 4px;
+      padding: 30px 14px 13px;
+      color: var(--muted);
+      border: 1px solid #e6ece9;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.58);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .focus-copy p::before {
+      content: "验收依据";
+      position: absolute;
+      top: 10px;
+      left: 14px;
+      color: #617078;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: 0.06em;
+    }
+
+    .focus-meta {
+      gap: 9px;
+      align-items: center;
+      margin-top: 4px;
+      padding: 11px 12px;
+      border: 1px solid #e6ece9;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.62);
+    }
+
+    .next-action {
+      max-width: 56ch;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 720;
+      line-height: 1.45;
+    }
+
+    .progress-summary {
+      gap: 10px;
+      margin-top: auto;
+      padding: 15px 16px 14px;
+      border: 1px solid #e4ebe8;
+      border-radius: 12px;
+      background: #f8faf9;
+    }
+
+    .progress-summary-row {
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.02em;
+    }
+
+    .progress-summary-row span:last-child {
+      color: var(--ink);
+      font-size: 14px;
+    }
+
+    .progress-track {
+      height: 13px;
+      padding: 2px;
+      border-radius: 99px;
+      background: #e5ebe8;
+    }
+
+    .progress-fill {
+      border-radius: inherit;
+      background: linear-gradient(90deg, #659c65, var(--teal));
+      box-shadow: none;
+    }
+
+    #progress-description {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .phase-panel {
+      display: grid;
+      align-content: start;
+      gap: 22px;
+    }
+
+    .section-label,
+    .metric-label,
+    .phase-name,
+    th {
+      color: #627074;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+    }
+
+    .section-label {
+      margin-bottom: 2px;
+    }
+
+    .phase-track {
+      gap: 0;
+      padding: 16px 14px 18px;
+      border: 1px solid #e6ece9;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.58);
+    }
+
+    .phase-track::before {
+      content: "";
+      position: absolute;
+      top: 30px;
+      right: 12%;
+      left: 7%;
+      height: 1px;
+      background: var(--line);
+    }
+
+    .phase {
+      position: relative;
+      z-index: 1;
+      gap: 9px;
+    }
+
+    .phase-marker {
+      width: 28px;
+      height: 28px;
+      color: var(--muted);
+      border: 2px solid var(--line);
+      background: var(--surface);
+      font-size: 11px;
+    }
+
+    .phase.is-complete .phase-marker,
+    .phase.is-current .phase-marker {
+      color: #20321b;
+      border-color: var(--accent);
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(199, 229, 123, 0.16);
+    }
+
+    .phase-name {
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    .phase.is-current .phase-name {
+      color: var(--ink);
+    }
+
+    .metrics {
+      gap: 10px;
+      margin-top: 0;
+    }
+
+    .metric {
+      min-height: 82px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 250, 248, 0.92)),
+        #fafbfa;
+    }
+
+    .metric + .metric {
+      padding-left: 14px;
+    }
+
+    .metric-value {
+      margin-top: 10px;
+      color: var(--ink);
+      font-size: 32px;
+      letter-spacing: -0.04em;
+    }
+
+    .metric.is-done .metric-value {
+      color: var(--teal);
+    }
+
+    .metric.is-active .metric-value {
+      color: var(--blue);
+    }
+
+    .metric.is-blocked .metric-value {
+      color: var(--red);
+    }
+
+    .task-panel {
+      margin-top: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header {
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      font-size: 20px;
+      letter-spacing: -0.025em;
+    }
+
+    .filters {
+      gap: 5px;
+    }
+
+    .filter {
+      min-width: auto;
+      padding: 7px 10px;
+      color: var(--muted);
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      font-size: 11px;
+      transition: color 180ms ease, background 180ms ease, border-color 180ms ease, transform 180ms ease;
+    }
+
+    .filter:hover,
+    .filter:focus-visible {
+      color: var(--ink);
+      border-color: var(--line);
+      background: #f7f9f8;
+      outline: none;
+      transform: translateY(-1px);
+    }
+
+    .filter.is-selected {
+      color: #263419;
+      border-color: transparent;
+      background: var(--accent);
+    }
+
+    table {
+      table-layout: fixed;
+    }
+
+    th,
+    td {
+      padding: 15px 18px;
+      border-bottom: 1px solid #edf0ef;
+    }
+
+    th:nth-child(1),
+    td:nth-child(1) { width: 8%; }
+    th:nth-child(2),
+    td:nth-child(2) { width: 26%; }
+    th:nth-child(3),
+    td:nth-child(3) { width: 14%; }
+    th:nth-child(4),
+    td:nth-child(4) { width: 52%; }
+
+    td {
+      color: #354147;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    tbody tr {
+      transition: background 160ms ease;
+    }
+
+    tbody tr:hover {
+      background: #fbfcfb;
+    }
+
+    .task-id {
+      color: #8b9699;
+      font-size: 11px;
+    }
+
+    .task-title {
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .evidence {
+      max-width: 0;
+      color: var(--muted);
+      display: -webkit-box;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 4;
+    }
+
+    .status {
+      min-width: 0;
+      padding: 6px 9px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+
+    .status::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      margin-right: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .status-todo {
+      color: #69777b;
+      border-color: #e0e5e4;
+      background: #f6f8f7;
+    }
+
+    .status-in-progress {
+      color: var(--blue);
+      border-color: #d8e1fb;
+      background: var(--blue-soft);
+    }
+
+    .status-blocked {
+      color: var(--red);
+      border-color: #f0d2ce;
+      background: var(--red-soft);
+    }
+
+    .status-done {
+      color: var(--teal);
+      border-color: #cee7dc;
+      background: var(--teal-soft);
+    }
+
+    .lower-grid {
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .info-panel {
+      min-width: 0;
+      padding: 20px 22px 22px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .info-panel h2 {
+      margin-bottom: 14px;
+    }
+
+    .info-list {
+      max-height: 360px;
+      overflow: auto;
+      padding-right: 6px;
+    }
+
+    .info-list li {
+      padding: 11px 0;
+      border-bottom: 1px solid #edf0ef;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .info-list li:last-child {
+      border-bottom: 0;
+    }
+
+    .info-list.is-blocked li {
+      color: #86534e;
+    }
+
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      border: 2px solid transparent;
+      border-radius: 99px;
+      background: #c4ceca;
+      background-clip: padding-box;
+    }
+
+    @media (max-width: 980px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        min-height: auto;
+        padding: 15px 18px;
+      }
+
+      .brand {
+        padding-bottom: 14px;
+      }
+
+      .sidebar-nav {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 6px;
+        margin-top: 14px;
+      }
+
+      .nav-caption,
+      .sidebar-note {
+        display: none;
+      }
+
+      .nav-item {
+        justify-content: center;
+        padding: 0 8px;
+        font-size: 11px;
+      }
+
+      .page {
+        width: min(100% - 32px, 1440px);
+        padding-top: 22px;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        width: min(100% - 24px, 1440px);
+        padding-top: 18px;
+      }
+
+      .topbar::before {
+        margin-bottom: 11px;
+      }
+
+      h1 {
+        font-size: 30px;
+      }
+
+      .overview,
+      .lower-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .overview {
+        gap: 12px;
+      }
+
+      .progress-panel,
+      .phase-panel {
+        min-height: auto;
+        padding: 20px;
+      }
+
+      .metrics {
+        gap: 8px;
+        margin-top: 28px;
+      }
+
+      .metric,
+      .metric + .metric {
+        padding: 11px 12px;
+      }
+
+      .panel-header {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 16px;
+      }
+
+      .filters {
+        width: 100%;
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        padding-bottom: 2px;
+      }
+
+      .filter {
+        flex: 0 0 auto;
+      }
+
+      th,
+      td {
+        padding: 13px 12px;
+      }
+
+      th:nth-child(1),
+      td:nth-child(1) { width: 14%; }
+      th:nth-child(2),
+      td:nth-child(2) { width: 34%; }
+      th:nth-child(3),
+      td:nth-child(3) { width: 22%; }
+      th:nth-child(4),
+      td:nth-child(4) { width: 30%; }
+
+      .evidence {
+        -webkit-line-clamp: 3;
+      }
+
+      .info-panel {
+        padding: 18px;
+      }
+    }
+
+    /* Final polish: project context and sidebar rhythm */
+    .app-shell {
+      grid-template-columns: 256px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 24px 16px 16px;
+    }
+
+    .brand {
+      padding: 0 8px 21px;
+    }
+
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 11px;
+    }
+
+    .brand strong {
+      font-size: 14px;
+      letter-spacing: -0.02em;
+    }
+
+    .brand small {
+      font-size: 10px;
+      letter-spacing: 0.02em;
+    }
+
+    .sidebar-context {
+      display: grid;
+      gap: 9px;
+      margin-top: 18px;
+      padding: 13px 12px 12px;
+      border: 1px solid rgba(199, 229, 123, 0.16);
+      border-radius: 11px;
+      background: #1b2421;
+    }
+
+    .context-topline,
+    .context-bottom {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .context-topline {
+      color: #9eafa7;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+    }
+
+    .context-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 3px rgba(199, 229, 123, 0.1);
+    }
+
+    .sidebar-context strong {
+      overflow: hidden;
+      color: #f2f6f2;
+      font-size: 13px;
+      font-weight: 750;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .context-meta {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      color: #b5c0ba;
+      font-size: 11px;
+    }
+
+    .context-divider {
+      color: #5a6d65;
+    }
+
+    .context-progress {
+      height: 4px;
+      overflow: hidden;
+      border-radius: 99px;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    #sidebar-progress-fill {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+      transform: scaleX(var(--sidebar-ratio, 0));
+      transform-origin: left center;
+      transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .context-bottom {
+      color: #b0bcb6;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+    }
+
+    #sidebar-progress-percent {
+      color: var(--accent);
+      font-weight: 800;
+    }
+
+    .sidebar-nav {
+      gap: 4px;
+      margin-top: 24px;
+    }
+
+    .nav-caption {
+      padding: 0 11px 8px;
+      font-size: 9px;
+      letter-spacing: 0.15em;
+    }
+
+    .nav-item {
+      min-height: 43px;
+      padding: 0 11px;
+      border-radius: 10px;
+    }
+
+    .nav-item.is-active {
+      border-color: rgba(199, 229, 123, 0.14);
+      background: rgba(199, 229, 123, 0.1);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+
+    .nav-index {
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+    }
+
+    .sidebar-note {
+      gap: 7px;
+      margin-top: auto;
+      padding: 12px;
+      border-color: rgba(255, 255, 255, 0.12);
+      background: #1b2022;
+    }
+
+    .sidebar-note-top {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .sidebar-note span:not(.live-dot) {
+      font-size: 11px;
+    }
+
+    .sidebar-note small {
+      grid-column: auto;
+      margin-left: 16px;
+      color: #a1aea8;
+      font-size: 11px;
+    }
+
+    .sidebar-sync {
+      display: block;
+      margin-left: 16px;
+      color: #8f9f98;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+    }
+
+    #focus-evidence {
+      display: -webkit-box;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      color: var(--muted);
+      border: 0;
+      background: transparent;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 4;
+      line-height: 1.65;
+    }
+
+    /* Focus panel polish */
+    .focus-heading {
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+      justify-content: space-between;
+      min-width: 0;
+    }
+
+    .focus-heading h2 {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .focus-heading .status {
+      flex: 0 0 auto;
+      margin-top: 2px;
+    }
+
+    .focus-evidence {
+      display: grid;
+      gap: 8px;
+      width: 100%;
+      min-width: 0;
+      margin-top: 8px;
+      padding: 13px 0 14px;
+      overflow: hidden;
+      border-top: 1px solid #e1e9e5;
+      border-bottom: 1px solid #e1e9e5;
+      background: transparent;
+    }
+
+    .focus-evidence-head {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .focus-evidence-label {
+      color: #2b383d;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: 0.06em;
+    }
+
+    .focus-evidence-note {
+      max-width: 50%;
+      overflow: hidden;
+      color: #82908f;
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .focus-copy p#focus-evidence {
+      max-width: none;
+      max-height: calc(1.65em * 4);
+      margin-top: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .focus-copy p#focus-evidence::before {
+      content: none;
+    }
+
+    .focus-meta {
+      min-width: 0;
+      margin-top: 0;
+      padding-top: 11px;
+      border-top: 1px solid #e6ece9;
+    }
+
+    @media (max-width: 760px) {
+      .focus-heading {
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .focus-heading .status {
+        margin-top: 0;
+      }
+
+      .focus-evidence-head {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .focus-evidence-note {
+        max-width: none;
+        overflow: visible;
+        white-space: normal;
+      }
+    }
+
+    #focus-evidence {
+      display: -webkit-box;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 4;
+    }
+
+    @media (max-width: 980px) {
+      .sidebar {
+        position: static;
+        height: auto;
+      }
+
+      .sidebar-context {
+        display: none;
+      }
+    }
+
+    /* Keep the navigation readable in narrow desktop windows. */
+    @media (max-width: 1120px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: static;
+        height: auto;
+        min-height: auto;
+        padding: 15px 18px 14px;
+      }
+
+      .brand {
+        padding-bottom: 14px;
+      }
+
+      .sidebar-context,
+      .sidebar-note,
+      .nav-caption {
+        display: none;
+      }
+
+      .sidebar-nav {
+        display: flex;
+        gap: 8px;
+        margin-top: 14px;
+        overflow-x: auto;
+        padding: 1px 0 2px;
+        scrollbar-width: none;
+      }
+
+      .sidebar-nav::-webkit-scrollbar {
+        display: none;
+      }
+
+      .nav-item {
+        flex: 0 0 auto;
+        min-height: 40px;
+        padding: 0 11px;
+        white-space: nowrap;
+      }
+
+      .nav-item.is-active {
+        box-shadow: inset 3px 0 0 var(--accent);
+      }
+
+      .page {
+        width: min(100% - 32px, 1440px);
+        padding-top: 22px;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .sidebar {
+        padding: 13px 12px 12px;
+      }
+
+      .brand {
+        padding: 0 4px 12px;
+      }
+
+      .sidebar-nav {
+        gap: 6px;
+        margin-top: 11px;
+      }
+
+      .nav-item {
+        min-height: 38px;
+        padding: 0 9px;
+        font-size: 12px;
+      }
+
+      .nav-index {
+        width: 22px;
+        height: 22px;
+        font-size: 11px;
+      }
+    }
+
+    /* Task queue polish */
+    .task-panel {
+      overflow: hidden;
+    }
+
+    .panel-heading {
+      display: grid;
+      gap: 7px;
+      min-width: 0;
+    }
+
+    .panel-heading p {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .filter {
+      display: inline-flex;
+      gap: 7px;
+      align-items: center;
+      min-height: 34px;
+      white-space: nowrap;
+    }
+
+    .filter-count {
+      display: grid;
+      min-width: 20px;
+      height: 20px;
+      place-items: center;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: rgba(23, 32, 38, 0.06);
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .filter.is-selected .filter-count {
+      background: rgba(21, 26, 29, 0.13);
+    }
+
+    .task-list-wrap {
+      padding: 0 18px 18px;
+    }
+
+    .task-list-header,
+    .task-card {
+      display: grid;
+      grid-template-columns: minmax(118px, 0.45fr) minmax(280px, 1fr) minmax(184px, 0.62fr) minmax(360px, 1.42fr);
+      gap: 20px;
+      align-items: stretch;
+    }
+
+    .task-list-header {
+      padding: 14px 14px 10px;
+      color: #627074;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .task-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .task-card {
+      position: relative;
+      min-height: 116px;
+      padding: 18px 16px;
+      overflow: hidden;
+      border: 1px solid #e6ece9;
+      border-radius: 12px;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.96)),
+        #fbfcfb;
+      box-shadow: 0 8px 24px rgba(23, 32, 38, 0.035);
+      transition: border-color 180ms ease, background 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+    }
+
+    .task-card:hover {
+      border-color: #cad6d2;
+      background: #ffffff;
+      box-shadow: 0 14px 34px rgba(23, 32, 38, 0.065);
+      transform: translateY(-1px);
+    }
+
+    .task-card::before {
+      content: "";
+      position: absolute;
+      top: 14px;
+      bottom: 14px;
+      left: 0;
+      width: 2px;
+      border-radius: 0 999px 999px 0;
+      background: #b9c3c1;
+    }
+
+    .task-card.status-done::before {
+      background: var(--teal);
+    }
+
+    .task-card.status-in-progress::before {
+      background: var(--blue);
+    }
+
+    .task-card.status-blocked::before {
+      background: var(--red);
+    }
+
+    .task-id-cell {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      min-width: 0;
+      width: 100%;
+    }
+
+    .task-id-badge {
+      display: block;
+      width: 100%;
+      min-width: 96px;
+      min-height: 42px;
+      padding: 8px 10px;
+      color: #607076;
+      border: 1px solid #dce4e2;
+      border-radius: 9px;
+      background: #f6f8f7;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: 0.01em;
+      line-height: 24px;
+      overflow: hidden;
+      text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .task-card.status-done .task-id-badge {
+      color: var(--teal);
+      border-color: #cee7dc;
+      background: var(--teal-soft);
+    }
+
+    .task-card.status-in-progress .task-id-badge {
+      color: var(--blue);
+      border-color: #d8e1fb;
+      background: var(--blue-soft);
+    }
+
+    .task-main {
+      display: grid;
+      align-content: start;
+      gap: 9px;
+      min-width: 0;
+      padding-top: 2px;
+    }
+
+    .task-stage {
+      width: fit-content;
+      padding: 4px 7px;
+      color: #5d6b70;
+      border: 1px solid #e1e7e5;
+      border-radius: 6px;
+      background: #f4f7f5;
+      font-size: 11px;
+      font-weight: 720;
+      line-height: 1;
+    }
+
+    .task-title {
+      min-width: 0;
+      color: var(--ink);
+      font-size: 16px;
+      font-weight: 780;
+      line-height: 1.38;
+      text-wrap: pretty;
+    }
+
+    .task-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .task-status-cell {
+      display: grid;
+      align-content: start;
+      gap: 9px;
+      min-height: 100%;
+      padding: 10px 11px;
+      border: 1px solid #e6ece9;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.56);
+    }
+
+    .task-status-cell .status {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .task-status-copy {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .task-evidence {
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      min-width: 0;
+      min-height: 100%;
+      padding: 11px 12px;
+      color: #58686e;
+      border: 1px solid #edf1ef;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.68);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .task-evidence strong {
+      display: block;
+      color: #2b383d;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .evidence-head {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      min-width: 0;
+    }
+
+    .task-evidence p {
+      display: -webkit-box;
+      margin: 0;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+
+    .task-card.status-in-progress .task-evidence p {
+      -webkit-line-clamp: 3;
+    }
+
+    .evidence-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .evidence-tag {
+      padding: 4px 7px;
+      color: #56676d;
+      border: 1px solid #e1e8e5;
+      border-radius: 6px;
+      background: #f7f9f8;
+      font-size: 11px;
+      font-weight: 720;
+      line-height: 1;
+    }
+
+    .task-card.status-done {
+      background:
+        linear-gradient(90deg, rgba(229, 242, 236, 0.52), rgba(255, 255, 255, 0.95)),
+        #fbfcfb;
+    }
+
+    .task-card.status-in-progress {
+      border-color: #d8e1fb;
+      background:
+        linear-gradient(90deg, rgba(234, 240, 255, 0.62), rgba(255, 255, 255, 0.95)),
+        #fbfcfb;
+    }
+
+    .task-card.status-todo {
+      background:
+        linear-gradient(90deg, rgba(246, 248, 247, 0.65), rgba(255, 255, 255, 0.95)),
+        #fbfcfb;
+    }
+
+    .task-card.status-todo .task-title,
+    .task-card.status-todo .task-evidence p {
+      color: #5b676b;
+    }
+
+    .empty-task-list {
+      padding: 34px 20px;
+      color: var(--muted);
+      border: 1px dashed #d8dfdd;
+      border-radius: 12px;
+      background: #fafbfa;
+      font-size: 14px;
+    }
+
+    @media (max-width: 980px) {
+      .task-list-header {
+        display: none;
+      }
+
+      .task-list-wrap {
+        padding: 10px 12px 14px;
+      }
+
+      .task-card {
+        grid-template-columns: 112px minmax(0, 1fr);
+        gap: 12px 14px;
+        min-height: auto;
+      }
+
+      .task-status-cell,
+      .task-evidence {
+        grid-column: 2;
+      }
+
+      .task-status-cell {
+        order: 3;
+      }
+
+      .task-evidence {
+        order: 4;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .app-shell,
+      .sidebar,
+      .page {
+        min-width: 0;
+        max-width: 100%;
+      }
+
+      .sidebar {
+        width: 100%;
+        overflow: hidden;
+      }
+
+      .sidebar-nav,
+      .filters {
+        max-width: 100%;
+      }
+
+      .page {
+        width: calc(100% - 24px);
+      }
+
+      h1,
+      .goal {
+        overflow-wrap: anywhere;
+      }
+
+      .task-card {
+        grid-template-columns: 1fr;
+      }
+
+      .task-id-badge {
+        width: auto;
+        max-width: 100%;
+      }
+
+      .task-id-cell,
+      .task-status-cell,
+      .task-evidence {
+        grid-column: 1;
+      }
+
+      .task-id-cell {
+        justify-content: space-between;
+      }
+
+      .task-status-copy {
+        max-width: none;
+      }
+
+      .evidence-head {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="项目导航">
+      <div class="brand">
+        <span class="brand-mark" id="sidebar-brand-mark">PB</span>
+        <div>
+          <strong id="sidebar-brand-name">Progress Board</strong>
+          <small>delivery workspace</small>
+        </div>
+      </div>
+      <div class="sidebar-context" aria-label="当前项目状态">
+        <div class="context-topline">
+          <span>ACTIVE PROJECT</span>
+          <span class="context-dot" aria-hidden="true"></span>
+        </div>
+        <strong id="sidebar-project-name">ProjectDream AI 漫剧内容工厂</strong>
+        <div class="context-meta">
+          <span id="sidebar-phase">验证阶段</span>
+          <span class="context-divider">·</span>
+          <span id="sidebar-task-total">0 项任务</span>
+        </div>
+        <div class="context-progress" aria-hidden="true">
+          <span id="sidebar-progress-fill"></span>
+        </div>
+        <div class="context-bottom">
+          <span id="sidebar-progress-label">7 / 12 已验收</span>
+          <span id="sidebar-progress-percent">58%</span>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        <div class="nav-caption">Workspace</div>
+        <a class="nav-item is-active" href="#overview"><span class="nav-index">01</span><span>项目总览</span></a>
+        <a class="nav-item" href="#tasks-heading"><span class="nav-index">02</span><span>任务队列</span></a>
+        <a class="nav-item" href="#blocker-list"><span class="nav-index">03</span><span>阻塞与风险</span></a>
+        <a class="nav-item" href="#scope-list"><span class="nav-index">04</span><span>范围变化</span></a>
+      </nav>
+      <div class="sidebar-note">
+        <div class="sidebar-note-top">
+          <span class="live-dot" aria-hidden="true"></span>
+          <span>本地看板已连接</span>
+        </div>
+        <small>数据来自当前项目进度文件</small>
+        <span class="sidebar-sync" id="sidebar-sync">同步于 2026-09-19</span>
+      </div>
+    </aside>
+    <main class="page">
+    <header class="topbar">
+      <div>
+        <h1 id="project-name"></h1>
+        <p class="goal" id="project-goal"></p>
+      </div>
+      <p class="updated" id="updated-at"></p>
+    </header>
+
+    <section class="overview" id="overview" aria-label="项目概览">
+      <article class="progress-panel">
+        <div class="focus-copy">
+          <div class="focus-heading">
+            <h2 id="focus-title"></h2>
+            <span class="status" id="focus-status"></span>
+          </div>
+          <div class="focus-evidence">
+            <div class="focus-evidence-head">
+              <span class="focus-evidence-label">验收依据</span>
+              <span class="focus-evidence-note">摘要 · 悬停查看全文</span>
+            </div>
+            <p id="focus-evidence"></p>
+          </div>
+          <div class="focus-meta">
+            <span class="next-action" id="next-action"></span>
+          </div>
+        </div>
+        <div class="progress-summary">
+          <div class="progress-summary-row">
+            <span>验收进度</span>
+            <span id="progress-count"></span>
+          </div>
+          <div class="progress-track" id="progress-track" role="progressbar" aria-label="项目完成率" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+          <span id="progress-description"></span>
+        </div>
+      </article>
+
+      <article class="phase-panel">
+        <p class="section-label">Delivery Phase</p>
+        <div class="phase-track" id="phase-track"></div>
+        <div class="metrics">
+          <div class="metric is-done">
+            <span class="metric-label">Done</span>
+            <span class="metric-value" id="done-count"></span>
+          </div>
+          <div class="metric is-active">
+            <span class="metric-label">In Progress</span>
+            <span class="metric-value" id="active-count"></span>
+          </div>
+          <div class="metric is-blocked">
+            <span class="metric-label">Blocked</span>
+            <span class="metric-value" id="blocked-count"></span>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="task-panel" aria-labelledby="tasks-heading">
+      <div class="panel-header">
+        <div class="panel-heading">
+          <h2 id="tasks-heading">任务清单</h2>
+          <p id="task-summary">按验收状态整理当前项目交付队列。</p>
+        </div>
+        <div class="filters" id="filters" aria-label="筛选任务状态"></div>
+      </div>
+      <div class="task-list-wrap">
+        <div class="task-list-header" aria-hidden="true">
+          <span>ID</span>
+          <span>交付项</span>
+          <span>状态</span>
+          <span>验收证据</span>
+        </div>
+        <div class="task-list" id="task-list"></div>
+      </div>
+    </section>
+
+    <section class="lower-grid">
+      <article class="info-panel">
+        <h2>阻塞项</h2>
+        <ul class="info-list is-blocked" id="blocker-list"></ul>
+      </article>
+      <article class="info-panel">
+        <h2>范围变化</h2>
+        <ul class="info-list" id="scope-list"></ul>
+      </article>
+    </section>
+    </main>
+  </div>
+
+  <script>
+    const projectProgress = {
+      projectName: "ProjectDream AI 漫剧内容工厂",
+      goal: "把 ProjectDream 重构为面向漫剧的一体化创作工作台，按“市场验证 -> 单集蓝图 -> 情绪段落 -> 资产连续性 -> 多候选 -> 人工/Agent筛选 -> 连续声音剪辑 -> 剪映式时间线 -> 质检导出 -> 小样本发布 -> 数据复盘 -> 扩大生产”稳定产出可发布、可复盘的内容。",
+      focusTaskId: "P76",
+      updatedAt: "2026-10-21",
+      phase: "verification",
+      tasks: [
+        {
+          id: "P1",
+          title: "市场观察、题材机会卡、内容实验基础",
+          status: "DONE",
+          evidence: "npm test 通过；类型检查、构建和真实数据库接口冒烟通过"
+        },
+        {
+          id: "P2",
+          title: "市场研究 Agent 与题材自动分析",
+          status: "DONE",
+          evidence: "Agent 单测通过；空样本正确拒绝；生产构建通过"
+        },
+        {
+          id: "P3",
+          title: "题材机会一键创建三集试制实验",
+          status: "DONE",
+          evidence: "84 项测试通过；幂等创建、401、404 和接口冒烟已验证"
+        },
+        {
+          id: "P4",
+          title: "故事圣经、整季结构和分集质量门禁",
+          status: "DONE",
+          evidence: "基础故事质量门禁与市场爆款结构代理均已接入；项目 12 的 story_bibles.id=1 与 season_structures.id=1 已完成三集复核并锁定，故事圣经 100 分、整季结构 100 分、市场结构代理 100 分；project-story-draft.test.mjs 3/3"
+        },
+        {
+          id: "P5",
+          title: "角色资产版本与一致性回归测试",
+          status: "DONE",
+          evidence: "111 项测试、类型检查和生产构建通过；隔离 HTTP 冒烟确认角色 v5 升级至 v7、旧确认静帧视频请求返回 409、对白音频快照写入 v7；跨用户读取、修改、视频生成 4 个端点均返回 404/4004；临时项目、账号与会话已清理"
+        },
+        {
+          id: "P6",
+          title: "3D 竖屏生产模板、音频和成片质检",
+          status: "DONE",
+          evidence: "126 项测试、类型检查、构建、服务端语法和 diff 检查通过；项目 #12 终剪、音频库、质检报告接口均返回 200；桌面/390px 页面验收通过"
+        },
+        {
+          id: "P7",
+          title: "队列、对象存储、成本和发布合规包",
+          status: "IN PROGRESS",
+          evidence: "技术生产链路已有真实受控终剪、对象存储、音频同源绑定和发布门禁；但 export-69.mp4 虽通过规格/字幕等机器检查，连续表演、声音层、情绪递进不达标，不能作为发布候选。10 条终剪回归、平台证据、历史媒体、CDN、跨机器恢复、账单对账和收入验证仍未完成。"
+        },
+        {
+          id: "P8",
+          title: "真实三集/十集试制与平台数据复盘",
+          status: "TODO",
+          evidence: "待实现"
+        },
+        {
+          id: "P9",
+          title: "工作台壳层、字体与返回导航统一",
+          status: "DONE",
+          evidence: "WorkspaceLayout 已增加逻辑父页面返回按钮；中文标题改用 Noto Serif SC；新建项目和模型设置页脱离旧项目侧栏；导航合同测试、桌面浏览器检查和 346 项全量测试通过"
+        },
+        {
+          id: "P10",
+          title: "全局滚动条、控件与暗色令牌收拢",
+          status: "DONE",
+          evidence: "所有嵌套滚动容器已统一为细轨、无箭头、低对比滑块；角色一致性页、角色库、资产中心和 AI 剧本已明确主滚动上下文，成片编辑已将纵向滚动收回内容区并保留时间线横向滚动；项目 12 浏览器实测 AI 剧本窄视口仅保留一个纵向滚动源，角色库/角色一致性/资产中心无无意义横向滚动；503 项测试、类型检查、生产构建、diff 检查和 Impeccable detector 通过"
+        },
+        {
+          id: "P11",
+          title: "主要业务页面视觉批次重设计",
+          status: "DONE",
+          evidence: "导出页已完成交付驾驶舱重排；终剪回归工作台完成左右层级、样本操作和窄屏布局优化；AI 剧本在内容宽度不足时自动切换为结构、剧本、场景列表的纵向工作区，成片编辑的 Inspector 随内容流排列，资产中心关闭无意义横向滚动；保留导出、终审、合规、归档和编辑功能，503 项测试、类型检查、生产构建和 Impeccable detector 通过。"
+        },
+        {
+          id: "P12",
+          title: "全局浏览器回归与交付复盘",
+          status: "DONE",
+          evidence: "项目 12 的 AI 剧本、资产中心、成片编辑、角色库、角色一致性、导出页完成真实浏览器滚动边界回归；后端健康检查返回 200；npm test 503/503、npm run build、Impeccable detector 和 git diff --check 通过。"
+        },
+        {
+          id: "P13",
+          title: "[P0] 市场成片标准与创作质量门禁",
+          status: "IN PROGRESS",
+          evidence: "已实测 c1 (4).mp4：5.167s、24fps、AAC、平均帧差 0.34、平均音量 -51.5dB、静音占比 80.7%；动作超载、近静帧、近静音分别提示；候选报告额外记录视线目标数、声音 cue 数和连续底床要求，视线/剧情语义仍保持 pending_review"
+        },
+        {
+          id: "P14",
+          title: "[P0] 单集生产蓝图与情绪段落",
+          status: "DONE",
+          evidence: "production-run.mjs 已读取项目 12 详细分镜脚本；第 1 集生成 24 镜头蓝图，保留来源 storyboard ID、台词、表演节拍、声音方向和起止帧；“六。别怕，小夏。”、“五”省略、“四”独立约束进入质量门禁；全量 npm test 490/490、类型检查、生产构建和 diff 检查通过"
+        },
+        {
+          id: "P15",
+          title: "[P0] 角色、场景与连续性资产包",
+          status: "TODO",
+          evidence: "角色正侧背面、全身、表情、服装和光照参考；场景全景/局部、道具和前后镜头锚点可追溯；跨镜头人物与空间连续性可复核"
+        },
+        {
+          id: "P16",
+          title: "[P0] 批量候选生成与人工筛选工作台",
+          status: "IN PROGRESS",
+          evidence: "工作台单镜头卡支持视频/音频候选内嵌预览、版本对照、确认采用、多选复核、全选待复核和真实批量归档；新增跨镜头候选总览 contact sheet，可按视频/声音/待复核/主版本筛选，支持批量归档和加入本地返工队列；返工队列会把项目、场景、分镜、候选 ID 带入视频/音频生成页，并在生成成功后回写 completed。项目 28 桌面端真实加载到 1 条主版本音频候选，390px 无横向溢出。批量真实待复核候选筛选和服务端 ProductionRun 级返工编排仍未完成"
+        },
+        {
+          id: "P17",
+          title: "[P0] 连续表演与动作视频生产",
+          status: "IN PROGRESS",
+          evidence: "已接入 continuity-contract-v1 与 gaze-control-v1；最终视频请求强制注入视线时间轴、眼睛先动/头部后跟和结束锁定，拆分子分镜也保存方向快照；人工逐镜播放、候选筛选、口型绑定和终剪仍未完成"
+        },
+        {
+          id: "P18",
+          title: "[P0] 真实声音生产与声音剪辑",
+          status: "IN PROGRESS",
+          evidence: "旁白轨也已强制写入 voice-lock-v1；视频请求强制携带持续环境底床、动作拟音 cue、时间点和静音策略，近静音进入技术质检；环境声/BGM/混音、口型绑定和人工听感仍未完成"
+        },
+        {
+          id: "P19",
+          title: "[P0] 可用时间线剪辑与情绪节奏",
+          status: "TODO",
+          evidence: "支持裁切、切分、转场、音频先行、节拍卡点、情绪曲线、BGM/SFX 轨道、字幕预览和场景级粗剪，不再只是自动拼接镜头"
+        },
+        {
+          id: "P20",
+          title: "[P1] ProductionRun 与多 Agent 编排",
+          status: "IN PROGRESS",
+          evidence: "已建立生产运行、9 个阶段、4 个人工检查点、阶段状态、Agent 执行计划、输入/输出快照、预算和候选策略持久化；新增 /workspace/production-run 页面和 owner-scoped API；多 Agent 接入可行性报告已补齐；真实 Agent 工具执行、暂停/恢复、失败重试和候选筛选仍未完成"
+        },
+        {
+          id: "P29",
+          title: "[P1] 多 Agent 协作接入可行性报告",
+          status: "DONE",
+          evidence: "多 Agent 报告已明确现有阶段、数据库、API、Agent 分工、事件与状态机、上下文契约、P0 缺口和受控双 Agent 垂直切片验收标准"
+        },
+        {
+          id: "P35",
+          title: "[P0] 受控双 Agent 资产到分镜闭环",
+          status: "DONE",
+          evidence: "项目 45 真实验收：资产解析 Agent 写入角色/场景与画布节点，人工确认后分镜 Agent 生成 6 个镜头并自动进入分镜视频创作页；Pipeline 事件、刷新恢复、角色/场景图片、@ 资产调用、角色音色入口和本地导出入口均已验证；定向测试 28/28、类型检查、生产构建、服务端语法、1440px/390px 浏览器验收通过"
+        },
+        {
+          id: "P36",
+          title: "[P0] 项目入口总览与创意输入入口",
+          status: "DONE",
+          evidence: "项目入口统一进入 /workspace/studio，创作总览提供创意输入和剧本生成、资产管理、分镜视频生成三阶段路径；定向测试 31/31、类型检查、生产构建和 diff 检查通过。"
+        },
+        {
+          id: "P37",
+          title: "[P0] 剧本三 Agent 接入统一执行器",
+          status: "DONE",
+          evidence: "story-agent、season-agent、script-agent 已注册并写入对应版本表；未知 Agent 会阻断；契约测试 4/4、服务端语法、类型检查、生产构建和 diff 检查通过。"
+        },
+        {
+          id: "P21",
+          title: "[P0] 两场景小样片验证",
+          status: "IN PROGRESS",
+          evidence: "ProductionRun #2 已真实进入 candidate-generation；场景一 5 个视频候选与对白候选已生成/复用，场景二 10 个分镜已生成 24 个视频候选，广播“六/四”新音频候选已生成；候选仍未人工/Agent 筛选，口型、连续剪辑和小泽人工完整播放验收仍未完成；旧 #72/#73 只保留为失败/历史证据"
+        },
+        {
+          id: "P22",
+          title: "[P1] 平台数据与商业验证闭环",
+          status: "TODO",
+          evidence: "记录平台、题材、标题、封面、首 3 秒留存、完播、互动、涨粉、成本、收入和收入/成本比，区分能生成、能发布、有人看、能转粉和能变现"
+        },
+        {
+          id: "P23",
+          title: "[P0] 漫剧一体化工作台信息架构",
+          status: "IN PROGRESS",
+          evidence: "阶段 1 壳层 + 垂直切片完成；桌面与移动端共用 4 个主阶段，内部 ProductionRun 阶段已与真实阶段键对齐，中央画布收敛为上下文、单集任务、场景条、横向镜头选择带、单镜头生产卡、候选总览和底部时间线；顶部下一步改为当前镜头真实动作，阶段项和高级剪辑会保留 project/scene/storyboard 上下文；跨镜头候选总览已接入真实视频/音频候选，可批量归档和加入返工队列；底部时间线 Dock 在桌面端和 390px 下均真实占用高度，打开/收起不再压住阶段栏，并保留打开剪辑器的真实入口。项目 28 真实显示第 1 集、阶段已完成/被阻塞和当前镜头阻塞；本轮通过 npm test 550/550、npm run type-check、npm run build-only、git diff 检查、Impeccable detector、1440px 和 390px 浏览器验收。后续仍需把 Studio 底部时间线 Dock 与 FinalEdit 可编辑草稿状态联动，并接入受控 Agent 入口。"
+        },
+        {
+          id: "P24",
+          title: "[P0] 分镜故事板与单镜头生产卡",
+          status: "IN PROGRESS",
+          evidence: "单镜头生产卡已增加“这个镜头怎么做”工作流和候选内嵌复核：按真实静帧、视频、声音、首尾帧状态输出已完成/现在处理/被阻塞/待后续，并给出唯一下一步；视频候选可播放、音频候选可试听、可切换待选与主版本并确认采用，确认后刷新服务端状态；Inspector 改为镜头诊断/证据面板，按连续性、声音锁定、质量门禁和资产快照折叠展示；阶段栏、检查面板和候选复核均有进入/退出过渡；通过 npm test 545/545、npm run type-check、npm run build-only、git diff 检查、Impeccable detector；浏览器自动化因无登录态未执行真实确认 mutation，contact sheet、连续性实际执行和后续编辑能力仍未完成"
+        },
+        {
+          id: "P25",
+          title: "[P0] 角色、场景、道具与声线资产画布",
+          status: "IN PROGRESS",
+          evidence: "统一管理角色多视图、服装/光照、场景、道具、声线、BGM/SFX 和版本；画布读取、生成、重新关联和提示词补齐入口统一注入题材技能；单角度重试保持旧确认版本，只有确认新候选后才替换同一视角。定向资产/契约测试 56/56、全量 npm test 799/799、类型检查、生产构建、服务端语法和 diff 检查通过；真实模型重跑、云端部署和人工媒体验收仍未完成。"
+        },
+        {
+          id: "P25.1",
+          title: "[P0] 资产画布切片一：无限画布 + 单节点形象生成",
+          status: "DONE",
+          evidence: "资产画布、单节点生成、候选采用、角色/场景视图组、提示词身份约束、任务队列分派和独立对象存储键已接入；全量 672/672、类型检查、生产构建、Impeccable detector 和 390px 验收通过。"
+        },
+        {
+          id: "P25.2",
+          title: "[P0] Agent 结构化资产分组与组级画布",
+          status: "DONE",
+          evidence: "asset-grouping.mjs 输出稳定角色/场景/道具/素材组，单节点组也有边界和状态统计；画布与资产中心统一使用后端 groups DTO，剧本解析写入稳定 groupKey，保留角色三视图、场景全景与九宫格节点结果。npm run test:asset-groups 9/9、npm run type-check、npm run build-only、node --check server/index.mjs、git diff --check 通过。"
+        },
+        {
+          id: "P25.3",
+          title: "[P0] 角色基础全身图与聊天式创作工作流",
+          status: "DONE",
+          evidence: "角色先生成并确认基础正面全身图，三视图接口只接受已确认 single 基础图；角色卡与资产库主图优先显示基础图；画布检查器改为聊天式提示词创作区，结果组按基础图 -> 三视图排序。角色资产定向测试 35/35、UI 合同测试 2/2、类型检查、生产构建、服务端语法、diff 检查和 Impeccable detector 空结果通过。"
+        },
+        {
+          id: "P25.4",
+          title: "[P0] 资产与视频色彩连续性契约",
+          status: "DONE",
+          evidence: "参考 GitHub cinematic-video-prompt-skill 的色彩分层、光源/时间一致和人物肤色保护方法，新增 buildColorContinuityConstraints；场景全景/九宫格与视频请求快照均注入色彩契约，修复 environmentPromptText-only 场景提示词被判空。色彩与资产定向测试 24/24、视频测试 18/18、服务端语法和 git diff --check 通过；真实候选仍需人工复核。"
+        },
+        {
+          id: "P26",
+          title: "[P0] 首尾帧连续性链与跨镜头衔接",
+          status: "TODO",
+          evidence: "下一镜默认继承上一镜结束状态；支持首尾帧确认、预告/揭示、连续性契约、衔接预览和跨镜头人物/空间/道具差异检查"
+        },
+        {
+          id: "P27",
+          title: "[P1] 声音相关性、声线与音画同步门禁",
+          status: "TODO",
+          evidence: "声音服务当前镜头情节；角色声线、语言、情绪、空间和时序可锁定；禁止无关声音、英文串音和错误角色声线；最终人声后再口型同步"
+        },
+        {
+          id: "P28",
+          title: "[P0] 剪映式非破坏成片编辑工作台",
+          status: "DONE",
+          evidence: "v2 已完成剪映式非破坏草稿能力：支持视频镜头裁切、切分、拖拽排序、候选替换、转场记录、对白/旁白/环境声/SFX/BGM 音轨启用与偏移/音量调整、音频先行、字幕 cue 微调、节拍卡点、情绪曲线、撤销/重做、版本快照与回退；本轮补齐共享播放头、时间标尺、时间码和播放器/时间线联动，支持标尺与片段点击定位、指针拖动、Home/End/方向键步进；操作反馈改为不占布局的悬浮 Toast，时间线改为稳定高度的轨道滚动视口，所有视频、对白、旁白、音乐、音效和字幕轨道均可通过内部纵向/横向滚动查看。保存只写 final_edit_drafts，替换候选透传 storageKey，不覆盖原始候选和历史素材。验证通过：定向测试 15/15、npm run type-check、npm run build-only、git diff 检查、Impeccable detector；项目 28 当前只有 1 个确认视频，唯一音频绑定在另一个未确认分镜上，因此真实音频先行保存未在数据库写入，只做了 UI 冒烟和服务层测试。"
+        },
+        {
+          id: "P28.1",
+          title: "[P0] 时间线缩放、吸附、裁切与主轨拖动增强",
+          status: "DONE",
+          evidence: "已接入时间线缩放、吸附开关、左右边缘非破坏裁切、时间线高度拖拽、稳定高度变量和主视频轨指针拖动换序；拖动目标吸附到主轨片段边界，不破坏连续导出模型。1440px 宽屏真实浏览器验收通过：主轨片段可真实拖拽换序，撤销/未保存状态正确出现；项目 28 右边缘裁切由 3s -> 2s，左边缘再裁切入点为 0.5s，Inspector、素材库和时间线同步更新；时间线高度拖拽已真实改变布局且无横向溢出。浏览器测试结束后已刷新，未把临时草稿写入数据库。定向测试 12/12、npm run type-check、低内存 npm run build-only、git diff 检查、Impeccable detector 通过。"
+        },
+        {
+          id: "P28.2",
+          title: "[P0] 整集主预览与时间线连续播放",
+          status: "DONE",
+          evidence: "播放器新增默认“整集”模式和“当前镜头”模式；整集模式从当前播放头开始，按启用片段顺序连续切换，跳过停用片段，播放头/时间码/当前镜头标签联动，裁切和拖拽排序结果实时生效；支持上一镜、下一镜、暂停和重新播放。1440px 真实浏览器验证自动切镜，390px 页面无横向溢出。全量 npm test 567/567、npm run type-check、npm run build-only、git diff 检查、Impeccable detector 通过。"
+        },
+        {
+          id: "P28.3",
+          title: "[P0] 整集音画混合预览与字幕同步",
+          status: "DONE",
+          evidence: "FinalEdit 按镜头起点 + 音频偏移调度对白、旁白、音乐和音效，应用轨道/单条音量与启停状态；播放、暂停、时间线跳转、自动切镜和静帧片段统一重定位音频，并叠加当前时间点字幕。定向时间线测试 15/15、npm run type-check、npm run build-only、git diff 检查、Impeccable detector 通过；项目 28 1440px 真实浏览器确认音频随整集播放头启动推进，390px 无横向溢出。底栏不重叠的结论在后续真实浏览器验收中被推翻，已由 P28.5 修正。"
+        },
+        {
+          id: "P28.4",
+          title: "[P0] 音频与画面镜头绑定防错",
+          status: "DONE",
+          evidence: "服务端将对白/旁白限制在存在对应已确认画面片段的镜头内；未匹配音频保留为 unmatchedAudio，不进入整集预览或导出音轨；全局音乐/音效不受影响。服务测试 5/5、时间线测试 21/21、项目 28 真实接口和类型检查通过。"
+        },
+        {
+          id: "P28.5",
+          title: "[P0] 预览底栏真实可点与音频提示收口",
+          status: "DONE",
+          evidence: "真实浏览器验收推翻 P28.3 的底栏结论：.fe-preview-frame 为 flex 0 0 auto 加固定 16:9 高度，把三行底栏整体挤出 overflow hidden 的播放面板，1440x900 下播放按钮、时间码、音画状态和音量全部落在面板外并被时间线 Dock 覆盖（elementFromPoint 命中 fe-timeline-dock，播放按钮不可点）。改为画布 flex 1 1 auto 加 min-height 0，头尾不参与收缩；桌面时间线行最小高度 300 到 260px、默认高度 340 到 300px，小于等于 1180px 播放行最小高度 390 到 440px 并移除画布 270px 固定高度。1440x900 与 390x844 实测：面板 scrollHeight 等于 clientHeight、底栏完整落在面板内、播放按钮 elementFromPoint 命中自身、四区零重叠、无横向溢出。同时新增纯函数 resolveFinalEditAudioWarning，只有确实一条已确认音频都没有时才提示缺音频，避免把创作者推向再生成音频而不是先确认对应镜头。全量 npm test 573/573、类型检查、生产构建、diff 检查和 Impeccable detector 通过。"
+        },
+        {
+          id: "P28.6",
+          title: "[P0] 剪映对照七项交互收口",
+          status: "DONE",
+          evidence: "对照剪映专业版逐项落实 7 项：①研究文档落盘项目开发文档/剪映工作台运作方式研究.md（74KB，含证据分级与 28 行对照表）；②素材库列宽 248-300 到 300-360px，缩略图加时长与在时间线徽标，新增场景/镜头搜索（54 镜头即时过滤）与拖动提示；③布局行改为 minmax(380px,1fr) 加 minmax(180px, 时间线高度)，时间线默认 200px、钳制 180-620，1440x900 画布由 143px 提升到 265px，真实拖动把时间线上提 300px 后预览仍保底 380px 且不再裁切；④素材库卡片可原生拖入主轨按落点插入，真实 CDP 拖拽把 Scene 01/03 插到第 1 位并置脏草稿；⑤图标按钮悬浮提示改由 aria-label 驱动，移除 7 处重复的原生 title；⑥新增 V2 画中画轨，拖入即建叠加片段（起点/时长/锚点/缩放/不透明度），预览按播放头实时合成，Inspector 可调参或移除，服务端新增 normalizeFinalEditOverlayClips 纯函数与 overlay-not-rendered 告警；⑦播放头由 left 改为 translate3d 加 will-change 独立合成层，拖动中 left 恒为 0px、不再重绘轨道文字，时间线与素材库加 user-select:none。全量 npm test 578/578、类型检查、生产构建、diff 检查和 Impeccable detector（空结果）通过；1440x900 与 390x844 无横向溢出。画中画尚未接入导出合成，范围外已如实标注。"
+        },
+        {
+          id: "P34",
+          title: "[P0] 交付包与外部 NLE 交接",
+          status: "IN PROGRESS",
+          evidence: "方向收敛为「生成 + 装配 + 验收 + 交接」：项目负责脚本、资产、分镜、候选、装配、质检，精细剪辑（转场/特效/画中画/关键帧/调色）交给剪映或 DaVinci。触发证据：小云雀 2.0 在单集/全集列表提供「下载到本地 / 导出到剪映 / 带品牌水印」三个出口，即小云雀自己不做精细剪辑；同时 P28 六轮迭代暴露出每加一个编辑能力都要在编辑器与导出渲染两侧各做一遍。P34.1 已完成交付包，P34.2 剪映草稿包实测不可行。"
+        },
+        {
+          id: "P34.1",
+          title: "[P0] 交付包导出（素材 / 音轨 / SRT / 清单 / ZIP）",
+          status: "DONE",
+          evidence: "新增 server/services/delivery-package.mjs：按草稿顺序与启用状态生成有序命名（01_E01-S01-01_场景.mp4）、分离音轨（audio/对白/01_E01_DLG_*.mp3）、标准 SRT、剪辑说明.csv（含源入出点）与 README.md（含剪映导入 4 步）；挂在没进时间线的镜头上的音频与字幕会被剔除并计入 orphanAudioCount/orphanSubtitleCount，不让声音和字幕错误落到 0 秒。新增零依赖 store ZIP 写入器 server/services/zip-archive.mjs（CRC32 校验、UTF-8 文件名、字节稳定）。接口 GET /api/projects/:id/delivery-package 与 .../archive。项目 12 真实数据：24 个启用镜头、12 条字幕、9:16 1080x1920、成片 60s；archive?includeMedia=0 返回 5214 字节 3 条目且 CRC 全对，archive?limit=1 真实从 COS 下载 788KB 素材进 ZIP；1440px 浏览器打开交付包面板并成功触发下载。修了一个真实缺陷：归档响应漏 CORS 头导致跨域被拦成 Failed to fetch，补 Access-Control-Allow-Origin 后 status=200。定向测试 15/15、全量 npm test 579/579、类型检查、生产构建、diff 检查和 Impeccable detector 通过。"
+        },
+        {
+          id: "P34.2",
+          title: "[P0] 剪映明文草稿兼容性实测",
+          status: "DONE",
+          evidence: "推翻旧结论。单轨明文探针写入剪映 8.9 草稿目录后：剪映启动时收下并回写明文 draft_meta_info.json（补 21 个字段、把 draft_id 换成真 GUID），双击后完整打开并渲染——视频、文本、时间线、逐帧缩略图都正常；加载瞬间生成 .backup/_load.bak（6720 B，与写入的明文一致），随后按自己格式加密保存（16268 B，首字节 0x47）。结论：剪映读明文、自己升级 schema 并加密保存，「导出到剪映」可行。原先判定不可行是把输出格式当成了输入能力。"
+        },
+        {
+          id: "P34.3",
+          title: "[P0] 四轨明文草稿实测与生成器",
+          status: "DONE",
+          evidence: "四轨探针（V1 两段 + V2 画中画 + 对白音轨 + 字幕轨 + 叠化，6s）实测：①视频主轨保留裁切入点 source_timerange.start=0.5s；②画中画独立上层轨、clip.scale/transform 生效，但真机发现剪映 clip.transform 的 Y 轴向上为正，写 y:0.6 得到右上角而非右下角，已修正为 bottom-right={x:0.6,y:-0.6}；③对白音轨小泽确认有声音，剪映把本地音频认成 type:music；④字幕轨两条绝对时间字幕都在；⑤叠化占位 effect_id 被保留但不生效、实际硬切，转场需剪映内置特效 ID（本地无清单），本轮不伪造转场按硬切导出并计入 unsupportedTransitions。最重要的工程发现：剪映会补全最小 schema（视频段自动挂 6–7 个 extra_material_refs、音频段 4 个、素材复用处克隆实例），生成器只写最小结构即可。据此新增 server/services/jianying-draft.mjs 生成器 + 10/10 测试。仍未做：素材落地本机、写入草稿目录并登记索引、API 与编辑器入口。"
+        },
+        {
+          id: "P34.4",
+          title: "[P0] 素材落地、安装器、编排与 API",
+          status: "DONE",
+          evidence: "三个新服务 + 23 项测试：①jianying-media.mjs 复用 downloadMediaToFile 把素材落到本机缓存，按 URL 去重（主轨与画中画共用同一素材只下一次；写测试时抓到同一 URL 被下载两次的真 bug）、同名不同源加序号、失败逐条记账；②jianying-draft-installer.mjs 写草稿并登记 root_meta_info.json，守住三条安全规则——只删带 .projectdream-draft.json 标记的目录、首次安装备份原始索引且只备份一次、别人的条目一个不动，索引先写临时文件再改名；③jianying-export.mjs 编排空跑收集→落地→生成→安装，缺素材不让整体失败而是剔除并上报。API：GET 演练（175ms、不下载不写盘）、POST 正式导出（install:false 只落地、install:true 才写剪映）、GET status（草稿库是否就绪 + 剪映是否运行）、DELETE 卸载还原；剪映运行时安装会被其退出时覆盖，实测已被 409 拦住。真实数据：项目 12 素材 24/24 落地 0 失败 3.8 秒；临时草稿库完整安装 18/18 断言通过（明文 67017 字节、主轨 24 段首尾相接、23 静帧 + 1 视频、12 字幕、别人草稿零改动、索引有备份）。全量 npm test 631/631、type-check、diff check 通过。"
+        },
+        {
+          id: "P34.5",
+          title: "[P0] 静帧镜头支持",
+          status: "IN PROGRESS",
+          evidence: "演练接口暴露真实数据问题：项目 12 的 24 个镜头里 23 个只有 imageUrl、没有 videoUrl，原生成器只认 videoUrl，等于只能导出 1/24 个镜头。已让生成器按 imageUrl 走剪映静帧素材形态（materials.images + type:photo，素材时长容得下入点+展示时长，否则剪映会截断），素材命名跟着走 .png 而不是伪装成 .mp4；定向测试 12/12、真实数据 24/24 不再缺素材。但 type:photo 这条路径尚未在真机剪映上验证过——需要一次实测确认静帧能正常显示，未验证前不宣称可用。"
+        },
+        {
+          id: "P34.6",
+          title: "[P0] 成片编辑页「导出到剪映」入口",
+          status: "DONE",
+          evidence: "顶部工具条新增「导出到剪映」，面板三块：①环境状态卡——剪映草稿库路径 + 是否就绪 + 剪映是否正在运行，运行中显示橙色拦截态并说明「剪映退出时会重写草稿索引，运行中导出会被它覆盖」，同时禁用安装按钮（只留只下载素材到本机）；②演练摘要——草稿名/画布/成片时长/主轨镜头/字幕/素材 6 张卡（3 列，390px 降 2 列），并写明真视频 N 个、静帧 M 个、静帧按镜头时长定格；③上次导出结果 + 已导出草稿列表（可逐个移除，剪映运行时禁用）。转场告警如实写明按硬切导出、需要剪映内置特效 ID 得手动补。新增 4 个 API 封装与类型。1440x900 与 390x844 真实浏览器验收：面板在视口内、无横向溢出、卡片列数正确、剪映运行中安装按钮确实 disabled。顺手修掉自己引入的 1 个 CRLF 混行尾。全量 npm test 632/632、type-check、build、diff check、Impeccable detector 空结果通过。仍未做：真机剪映验收。"
+        },
+        {
+          id: "P34.7",
+          title: "[P0] 画布跟真实素材走（含交付包同源 bug）",
+          status: "DONE",
+          evidence: "新增 media-probe.mjs（读 PNG/JPEG/GIF/WebP/MP4 文件头，不依赖 ffprobe）+ 7 项测试。挖出两个真 bug：①已上线的交付包对项目 12 报的画布是 9:16，而它声明 2.39:1、素材实际 16:9，三边都不一致；②根因是 fetchProjectForUser 返回数据库原始行（SELECT *），字段名是 snake_case 的 aspect_ratio，而 4 处路由都读 project.aspectRatio，永远是 undefined，声明比例被静默丢掉。修法：新增 projectAspectRatio() 兼容两种命名；画布优先级改为真实素材像素 > 项目声明比例 > 兜底并留痕，canvasSource 如实回报 media/declared/fallback，认不出来的比例不再静默变 9:16 而是按 W:H 实算（2.39:1 → 2582×1080）。真机踩坑：mp4 tkhd 宽高是 16.16 定点数，直接当整数读会得到 83886080，已写专门回归测试；项目 12 素材实测 mp4 1280×720、23 张 PNG 1312×736。"
+        },
+        {
+          id: "P34.8",
+          title: "[P0] 真机安装到剪映草稿库验收",
+          status: "IN PROGRESS",
+          evidence: "剪映关闭状态下真实导出成功（0.6 秒）：索引 8 → 9 条、原有 8 个草稿文件名与字节数全部不变且仍是密文、新增草稿目录带删除门禁标记、draft_content.json 明文 66992 字节（画布 1280×720、时长 60s、video(24)+text(12)、1 视频 + 23 静帧 + 12 字幕）。剪映启动后自己发现并登记了草稿（meta 从 1106 改写成 1935 字节），草稿列表显示「帧心帧意...E01　26.0M　01:00」——时长与体积都对上，说明 23 个静帧素材被成功解析（否则算不出 60s/26MB）。仍待确认：双击进入后静帧画面是否正常渲染（type:photo 是唯一没被眼睛验证过的环节），故记 IN PROGRESS 不记 DONE。"
+        },
+        {
+          id: "P34.9",
+          title: "[P0] 草稿格式版本对齐 + 更正运行版本认定",
+          status: "DONE",
+          evidence: "①更正一个此前写错的结论：我先前把用户剪映记为「8.9.0.13361」，那是从 %LOCALAPPDATA%\\JianyingPro\\Apps 目录里挑了个版本号就报的，没有核对运行中的进程。实际运行的是 D:\\剪映\\剪映会员版6.0.1\\6.0.1.11779\\JianyingPro.exe（破解版），它按 11.5.0.14471 的资源格式写草稿（草稿里 font_path 指向 Apps\\11.5.0.14471\\Resources\\Font）。教训：报版本必须来自运行中的进程。②草稿格式版本：我原先写 new_version:110.0.0，剪映就地升级成 164.0.0；已抽成常量 JIANYING_DRAFT_FORMAT_VERSION=164.0.0 并加测试锁住，避免首次打开弹「草稿版本较新，是否升级」——那个升级按钮对破解版用户是危险的。该常量版本脆弱，剪映升级格式后需同步改。",
+        },
+        {
+          id: "P34.10",
+          title: "[P0] 静帧改走编码成短 mp4",
+          status: "DONE",
+          evidence: "真实剪映渲染证明图片素材会从时间线消失，已改为把静帧编码为等长 mp4；项目 12 的 23 张静帧全部编码成功，草稿只使用可渲染的 video 素材。"
+        },
+        {
+          id: "P29",
+          title: "[P1] 漫剧创作质量门禁与导出联动",
+          status: "TODO",
+          evidence: "技术检查、人物一致性、连续动作、声音层、情绪递进、字幕和平台规格统一展示；blocker 可定位到具体场景、镜头或音轨"
+        },
+        {
+          id: "P30",
+          title: "[P1] 小云雀式阶段联动与受控 Agent 入口",
+          status: "TODO",
+          evidence: "从单集蓝图联动资产、分镜、候选、筛选、剪辑和质检；Agent 仅通过登记工具执行，保留审批、暂停、恢复、重试、预算、版本和输入输出快照"
+        },
+        {
+          id: "P31",
+          title: "[P0] 沉浸式漫剧首页与高级登录弹窗重构",
+          status: "DONE",
+          evidence: "首屏默认不弹登录；不引用项目成片或角色图片；使用原创故事装置首页与登录视觉；点击入口后打开双栏登录弹窗；验证码/密码、注册/找回和 ESC 关闭保留；桌面端与 390px 移动端首页及登录弹窗截图验收通过；类型检查、生产构建和 Impeccable detector 通过"
+        },
+        {
+          id: "P32",
+          title: "[P0] 登录入口视觉重构与可用性收口",
+          status: "DONE",
+          evidence: "登录弹窗左侧使用真实深夜剪辑工作台照片与自有无文字分镜/接触表/马克笔 overlay；首页保持独立背景；保留真实认证接口、首屏不自动弹登录、ESC、遮罩关闭、焦点循环和 390px 视觉条；修复 Tab 离场过渡卡死；1440px/390px 截图、横向溢出、#app 范围浏览器 a11y、类型检查、生产构建、Impeccable detector 和 diff 检查通过"
+        },
+        {
+          id: "P33",
+          title: "[P0] 工作台账户导航与项目生命周期收口",
+          status: "DONE",
+          evidence: "桌面端用户信息移至左侧导航底部，默认显示账户卡，点击后向上展开同一面板内的项目总览、新建项目、模型设置、退出登录；支持 aria-expanded、ESC 和路由切换自动收起，右上角仅保留跨页面工具；移动端保留顶部个人入口；删除确认统一使用页面显示名，未命名项目可用未命名项目 PF-001等兜底名称确认，删除失败在弹窗内显示；定向生命周期测试16/16、全量 npm test 538/538、类型检查、生产构建、diff检查和 Impeccable detector 通过；1440px/390px浏览器验收无横向溢出且未执行真实删除"
+        },
+        {
+          id: "P58",
+          title: "[P0] 分镜提示词去重与镜头内时间轴严格校验",
+          status: "DONE",
+          evidence: "Agent 输出固定时间轴/镜头/位置/动作/要求分镜单，内部时长依据不暴露；解析器仅补缺失 @ 引用；视频提交消除重复字段；时间轴连续覆盖与单镜时长严格校验，重试修复无效结果；资产图片引用保持原流程。npm test 946/946、npm run build、node --check server/index.mjs、git diff --check 通过；提交 bbe2a0b 已推送 Gitee 并部署云端，API 健康 ok、公网 8002 返回 HTTP 200。"
+        },
+        {
+          id: "P59",
+          title: "[P1] FastAPI + LlamaIndex + Milvus RAG 旁路原型",
+          status: "IN PROGRESS",
+          evidence: "新增独立 rag-service，支持显式文档入库、项目/分集过滤检索、智谱 embedding-3 和 Milvus Lite 持久化；修复进程重启后 collection 未加载导致检索失败的问题。契约测试 18 项通过，真实 Milvus Lite 入库/项目过滤检索通过；云端尚未部署，因服务器可用内存约 498MB、Swap 几乎耗尽、磁盘剩余约 2.5GB。"
+        },
+        {
+          id: "P60",
+          title: "[P1] RAG 安全、评测与 Node API 受控调用",
+          status: "IN PROGRESS",
+          evidence: "写入/查询接口已增加 X-RAG-Internal-Token 服务间认证；缺少令牌 401、错误令牌 403、未配置 503；新增检索评测函数检查项目/分集边界、期望资产命中和禁止资产泄漏，相关契约测试通过。调用方 allowlist、索引幂等/版本更新、可观测性和 Node API 旁路调用仍未完成。"
+        },
+        {
+          id: "P61",
+          title: "[P1] Node API 到 FastAPI 的渐进迁移决策门",
+          status: "IN PROGRESS",
+          evidence: "FastAPI gateway 已建立；密码登录、项目读写与最新大纲/故事圣经/整季结构读取、项目资产读取/归档/音频确认/候选归档/时间线定位/静帧确认、静帧候选列表、声线目录、场景/分镜读写与排序、生成任务详情、项目任务中心读取、真实 generation job 重试和视频字幕清理任务入队已原生接管；取消保留供应商不支持安全中断的 409，普通资产 Mock 操作继续代理 Node。项目列表恢复最近完成导出 DTO 与 5% 进度，详情/创建/更新保留裸项目 DTO；token 数据库校验在线程池执行，避免阻塞 ASGI 事件循环。声线目录与项目资产读取按 Node 契约映射。项目音轨列表仍由 Node 代理，因为 Node 动态签名私有 COS 音频 URL，FastAPI 尚无同等签名合同。静帧确认按拥有者校验，在事务中只替换同分镜同帧角色候选，并同步起始/结束帧引用；候选列表验证分镜归属并按版本号/id 倒序返回，图片生成 POST 继续代理 Node；分镜排序整批验证同用户/同场景后事务更新，允许序号从 0 开始；字幕清理由现有 Worker/Node 执行；音频时间线定位限制本项目分镜和 0–60 秒偏移，解绑分镜保留原场景归属。FastAPI 全量测试 65/65、编译通过；云端 API、Node、MySQL 均 healthy，公网匿名鉴权行为兼容。完整已登录 DTO 对照、生成入队切流指标、回滚演练和 Node 下线仍未完成。"
+        },
+        {
+          id: "P62",
+          title: "[P1] FastAPI 全业务迁移与 Node API 下线",
+          status: "IN PROGRESS",
+          evidence: "2026-10-19 云端独立 release 已部署：mysql/api/worker-node/rag/frontend healthy；旧 backend/worker 已停止保留，宿主无 3001 监听；公网 smoke 两轮 PASS 4 / SKIP 1 / FAIL 0；备份已校验且迁移 0001-0004 成功；pytest 1003、npm test 975、部署/smoke/runbook 定向测试 32 全绿。剩余：24-48h 观察、演示账号登录 CRUD 链路、SMS 真实凭据、RAG/媒体走查和费用授权后的 Worker 消费 E2E。"
+        },
+        {
+          id: "P63",
+          title: "[P1] 可复现的后端容器干净构建与 FFmpeg 验收",
+          status: "DONE",
+          evidence: "依赖边界测试 4/4、完整 npm test 959/959、类型检查、前端构建、服务端语法、git diff --check、生产审计 0 vulnerabilities 和 Compose 静态配置通过。云端已备份并同步最新 package/package-lock/server，增加持久化 2GiB Swap；串行构建 backend/worker 完成，镜像内 ffmpeg 8.1.2、ffprobe 8.1.2 可执行并实际生成/探测 1 秒 MP4。backend/worker 已重建且健康，MySQL、API、RAG、Frontend 未重启；/nginx-health、/api/health 与首页返回 200。",
+          nextAction: "保留回滚标签、生产卷和 BuildKit 缓存；待确认后清理 29 个无标签 projectdream/api 镜像、1 个已退出 drill 容器及本机残留 dockerInference 监听文件。"
+        },
+        {
+          id: "P64",
+          title: "[P1] 生产部署保护、资源清理预览与重建验收闭环",
+          status: "DONE",
+          evidence: "新增并同步 scripts/deploy-production.sh：构建前检查 Docker、Compose、内存、Swap、磁盘；backend/worker/api/frontend 串行构建；重建使用 --no-build；统一执行容器健康与 FFmpeg/FFprobe 1 秒 MP4 冒烟；cleanup-preview 只列候选资源，不删除镜像、容器、卷或缓存。云端 check、清理预览和 verify 实测通过；6 个服务健康，FFmpeg/FFprobe 8.1.2 可执行。",
+          nextAction: "待小泽确认具体资源 ID 后再执行精确删除；继续保留回滚镜像、生产卷和 BuildKit 缓存。"
+        },
+        {
+          id: "P65",
+          title: "[P1] 并发部署互斥与公网入口验收",
+          status: "DONE",
+          evidence: "scripts/deploy-production.sh 增加全局 flock 部署锁，缺少锁工具或 Docker/curl 时直接阻断；verify 增加首页、/nginx-health、/api/health 入口检查，并展示受保护 ProjectDream 卷。云端同步后 check、verify 通过，6 个服务健康，公网入口与 FFmpeg/FFprobe 冒烟均通过。",
+          nextAction: "待小泽确认具体资源 ID 后再执行精确删除；继续保留回滚镜像、生产卷和 BuildKit 缓存。"
+        },
+        {
+          id: "P66",
+          title: "[P1] 原子批量发布与整批自动回滚",
+          status: "DONE",
+          evidence: "发布前先为本批全部服务保留旧镜像；逐服务启动/健康检查及整栈验收通过后才清理本轮临时标签。任一检查失败时整批恢复，恢复标签保留供诊断。node --test scripts/deploy-production.test.mjs 5/5，包含第二个服务健康失败时恢复整批的 Bash 模拟；Bash 语法和 git diff --check 通过。云端 check 与 verify 通过，未执行生产重建。",
+          nextAction: "后续代码发布使用受保护脚本；生产资源清理仍需按候选 ID 单独确认。"
+        },
+        {
+          id: "P67",
+          title: "[P1] Docker 清理候选标签与容器引用保护",
+          status: "DONE",
+          evidence: "cleanup-preview 扫描带 ProjectDream 标签的镜像，只列五类正式服务中的无标签且无运行/停止容器引用候选，并区分虚拟体积与实际回收空间；关键 Docker 查询失败时中止。cleanup-image <full-id> 重复核验完整 ID、标签、项目/服务归属和容器引用后非强制删除。node --test scripts/deploy-production.test.mjs 8/8，覆盖允许/拒绝路径；Bash 语法、git diff --check 通过。云端删除 29 个 dangling API 镜像、1 个 worker 镜像和 1 个 backend dangling 镜像；剩余 ProjectDream 镜像均带标签并保留。退出 drill 容器因挂载持久卷而保留，BuildKit 缓存未清理。镜像统计由 34 降到 32，实际回收约 25 MB；清理后六服务健康，磁盘剩余约 18 GB。",
+          nextAction: "保留挂载持久卷的退出容器和有助于快速构建的 BuildKit 缓存；云机暂无空间压力。"
+        },
+        {
+          id: "P68",
+          title: "[P1] Worker readiness 与整栈健康门禁",
+          status: "DONE",
+          evidence: "Worker 镜像 healthcheck 验证 APP_RUNTIME_ROLE=worker、Node 主进程和 generation_jobs 查询；生产发布要求 Worker healthy，整栈验收要求六个服务均配置且通过 healthcheck，旧版 Worker 回滚只报告 legacy running。定向测试 13/13（含运行级 verify 全健康、缺检查和 unhealthy 场景）；云端备份后仅构建并重建 Worker，实测 healthy；整栈容器、公网首页/API 与 FFmpeg/FFprobe MP4 冒烟全部通过。",
+          nextAction: "后续发布继续使用受保护脚本；Docker 清理只对经过候选和引用校验的 dangling 镜像执行。"
+        },
+        {
+          id: "P69",
+          title: "[P1] 品牌首页滚动叙事与访客了解路径",
+          status: "DONE",
+          evidence: "首页改为公开可浏览的角色、分镜、成片叙事；演示素材明确标注，登录入口提示保存边界。首页契约测试 6/6、类型检查和生产构建通过；全量 npm test 959/959（早于最后两项首页断言）。生产预览在 390px 截图复核无横向溢出，导航和 CTA 有可访问名称，登录弹层可关闭且未提交认证；弹层 axe 0 violations，仍有 1 条渐变/叠层背景对比度 incomplete 需人工判断。"
+        },
+        {
+          id: "P71",
+          title: "[P1] 分镜视频生成入口的生产节奏与状态收口",
+          status: "IN PROGRESS",
+          evidence: "EpisodeWorkbench.vue 增加 4 阶段生产流、每集镜头完成度、下一动作和真实 Agent 检查点层级；保留现有 Pipeline、审批、刷新恢复与数据边界。定向测试 14/14、npm run type-check、npm run build、git diff --check、Impeccable detector 均通过。未登录浏览器访问按认证守卫返回首页，真实项目数据下的桌面/移动截图验收待登录态。"
+        },
+        {
+          id: "P72",
+          title: "[P0] 剧本解析与资产确认阶段门禁闭环",
+          status: "IN PROGRESS",
+          evidence: "修正旧场景节点匹配并统一引用/分组键/唯一标题与场景号规则；工具、道具和材料纳入必需资产确认；保存剧本立即失效前端解析状态；侧栏门禁失败默认拒绝并提示。定向测试 31/31、全量 npm test 975/975、类型检查、生产构建、服务端语法和 diff 检查通过；新版 frontend 已同步云端并通过公网 smoke。登录态真实项目验证仍待演示凭据。"
+        },
+        {
+          id: "P73",
+          title: "[P1] 10-19 本地优化同步生产",
+          status: "DONE",
+          evidence: "只构建并同步 frontend、worker-node；本地 npm test 975/975、npm run build、FastAPI pytest 1003/1003、Compose 配置通过。云端新镜像 healthy 且重启数 0，首页 HTML 与本地构建逐字一致，静态资源、首页、Nginx/API health 均可访问；公网 smoke PASS 4 / SKIP 1 / FAIL 0。未更改数据库、未触发付费生成，旧镜像以 rollback tag 保留。"
+        },
+        {
+          id: "P74",
+          title: "[P0] FastAPI 501 用户功能迁移与云端闭环",
+          status: "IN PROGRESS",
+          evidence: "pytest 1100、npm test 975、门禁/部署/runbook 49 全绿；FastAPI-only 0 违规，矩阵 118 native / 0 route-level 501；四镜像构建并以独立 release 标签部署云端，四应用容器 + MySQL healthy，smoke PASS 4 / SKIP 1 / FAIL 0，首页 390px 无溢出。DashScope/COS 凭据已配置；真实调用可能计费，未获单次计费测试授权前不触发。剩余：音频产出/回读、演示账号 CRUD、SMS/Worker 任务和 24-48h 观察。"
+        },
+        {
+          id: "P75",
+          title: "[P0] 项目 21 分镜单候选生成与跨镜首帧像素连续性",
+          status: "DONE",
+          evidence: "FFmpeg 视频流 checksum/JPEG full-range 回归和 Worker 文件操作导入修复；定向 5/5、全量 npm test 978/978、类型检查和构建通过。云端 job 462 复用既有供应商 URL 成功，单条 candidate 待采用；回读视频首帧与上一镜 confirmed 尾帧均为 768x1344，framemd5 完全一致。Worker release-20261020-framefix3 healthy，公网 smoke PASS 4 / SKIP 1 / FAIL 0；Gitee ebac2d9。"
+        },
+        {
+          id: "P76",
+          title: "[P0] 单镜采用、分集成片与整集导出闭环",
+          status: "IN PROGRESS",
+          evidence: "已落实单条待采用视频、用户采用后才成为主视频、分集按镜头顺序导出的完整代码路径；质检阻断卡支持按建议重新规划：只按同场景硬切、换场短淡入淡出改写剪辑草稿转场，绝不改写已确认源视频、顺序、裁切或音轨。后端统一为共享非破坏草稿服务，刷新后保留分割片段、裁切、人工转场覆盖、音频偏移、字幕、节拍/情绪、版本和画中画。音频下载失败、必需音频缺失/近静音和媒体检查未完成均阻断并保留问题镜头。npm run test:cinematic 73/73、全量 npm test 1003/1003、FastAPI pytest 1110/1110、类型检查、生产构建和差异检查通过。Gitee 提交 1ef9265 与构建源修复 6f7960b 已推送；2026-10-21 独立 release 部署后 API/Worker/Frontend healthy，首页、/api/health、/nginx-health 与 FFmpeg 8.1.2 验证通过，MySQL/RAG 未重启，旧应用镜像保留用于回滚。未触发付费任务；真实视频生成与认证整集导出仍待授权项目验收。"
+        }
+      ],
+      blockers: [
+          "P74 未闭环：dd76d16 已推送并在独立云端 release 发布，生产 smoke/健康检查通过。DashScope/COS 凭据已配置但真实调用可能计费，未获单次计费测试授权前不触发；仍缺音频产出/回读、演示账号 CRUD、SMS 发送、Worker/导出/RAG/媒体业务走查及 24-48h 观察。mock 不可替代真实证据。生产主 checkout 与旧 release 的脏文件均原样保留，数据卷未触碰。",
+          "P76 云端代码和容器发布已完成并通过服务健康/公网入口检查；剩余验收需在有授权的项目中确认已有分镜素材，再执行一次真实视频生成与整集导出播放检查。该操作可能产生模型费用，本次未代为触发，也未用 mock 结果替代。",
+          "P62 生产切换已完成但观察期未完：发布使用独立目录，远端原 main=c6111c7 的 54 项改动及缺失报告均未覆盖；旧 Node 容器已停止但保留。生产 SMS 当前为 mock，登录态生产 CRUD 未测（无演示凭据），Worker 真实生成未触发（避免未授权费用），RAG 实连和媒体人工验收待补；继续监控 24-48 小时后再完成该项。",
+          "清理保留项：已退出的 agent-enterprise-drill-backend-1 挂载 agent_enterprise_drill_data 持久卷，因此容器和卷均保留；BuildKit 缓存保留以避免后续重建重新下载/安装依赖。云机磁盘剩余约 18 GB，不存在空间紧急风险。本机 Docker Desktop 的 dockerInference 残留仍待单独确认。",
+          "P24 当前已形成可执行的镜头工作流引导和机器可读状态；P16 已补上跨镜头候选总览和本地返工队列，但还不是 ProductionRun 级自动生产完成。下一步要把真实静帧/视频/声音候选筛选、首尾帧确认和 Agent 可执行动作接入同一状态机。",
+          "当前镜头 Inspector 已完成结构与视觉收口，但仍是只读证据面板；不能把“已闭合/已锁定/通过”的展示替代真实首尾帧确认、声音试听或质量审批。",
+          "export-69.mp4 的技术规格和部分机器质检通过，但创作质量不达标：镜头更像静帧/短片段拼接，连续动作、情绪递进、环境声和对白戏剧节奏不足；不得作为发布候选，也不能继续沿用为第一集标准。",
+          "单集生产蓝图的结构化门禁已经完成；剩余问题是执行闭环，ProductionRun 还没有把项目 12 的 24 个详细镜头逐条调度到候选生成、筛选和连续剪辑。",
+          "跨镜头 contact sheet 和本地批量返工入口已完成；当前仍缺服务端 ProductionRun 级返工编排、真实多条待复核候选的批量筛选验收和首尾帧连续性确认。",
+          "候选生产脚本此前在视频/音频阶段可能重复创建任务；本轮已补入当前生产批次、模型、确认静帧、角色条件和声线快照的幂等复用与缺口补生成，项目 12 音频阶段已真实验证只补缺口；视频候选重跑和完整生产闭环仍需继续验证。",
+          "当前声音层不完整：对白之外缺持续环境底噪、动作音效、广播距离处理、情绪 BGM、对白闪避和有意静默，无法达到 c1 (13).mp4 的声音递进标准。",
+          "当前终剪 P28 v2 已补齐非破坏裁切、切分、拖拽排序、转场、音频先行、字幕微调、节拍卡点、情绪曲线、撤销/重做、版本回退，以及剪映式播放头/标尺/时间码联动；下一步要把 Studio 底部时间线 Dock 与 FinalEdit 草稿状态打通，并继续补时间线缩放、磁吸、波形和关键帧，避免用户在一体化工作台和精剪页之间重复定位。",
+          "P28.1 已完成宽屏真实交互验收；后续范围转入波形、胶片缩略图、关键帧，以及 Studio Dock 与 FinalEdit 草稿状态联动。",
+          "P28.3 已完成浏览器内音画混合预览，但它仍是编辑预览，不等同于最终导出试听；当前项目 28 只有少量确认视频/音频，需补齐真实对应镜头并由小泽完成完整听感、对白相关性和情绪递进验收。",
+          "工作台底部时间线仍是预览和入口，真正编辑在 FinalEdit.vue；后续要把 Studio 的时间线 Dock 与可编辑时间线状态联动，避免用户在预览、筛选和精剪之间丢失上下文。FinalEdit 当前已具备播放头联动和完整轨道滚动，但尚未实现时间线缩放、磁吸、音频波形和关键帧。",
+          "多 Agent 目前只有分散服务和任务队列，缺少可暂停、可恢复、可审批、可追踪的 ProductionRun 总导演编排。",
+          "当前页面仍是多个独立生产模块，缺少围绕单集、场景和镜头的一体化工作区；制作上下文容易断裂，用户需要手工在剧本、分镜、画面、视频、音频和剪辑页面之间搬运。",
+          "当前尚未把上一镜结束帧到下一镜开始帧的连续性链做成强制工作流；已有连续性契约能写入生成请求，但缺少可视化确认、衔接预览和跨镜头差异阻断。",
+          "当前声音锁定基础已存在，但声音是否服务当前情节、空间是否连续、无关音频/英文串音和最终人声到口型同步的完整门禁仍未形成。",
+          "项目 28 当前只有 1 个确认视频，唯一确认音频绑定在另一个未确认分镜上；P28 的音频先行逻辑已由服务层测试和 UI 控件验证，但真实保存音画对齐需要先补齐对应镜头视频和字幕。",
+          "登录入口已完成小云雀式沉浸式漫剧首页与登录弹窗重构；后续视觉调整必须保持首屏先展示创作世界，用户主动点击后再登录的交互边界。",
+          "两个代表性场景已完成真实导出（#72/#73），但尚未完成小泽的完整播放验收；场景一实际 24 秒、场景二实际 47 秒，和蓝图目标时长存在偏差，需先确认节奏是否接受或进入镜头裁切返工。平台数据仍未证明留存、完播、转粉或收入。",
+          "静帧生成阻塞已完成单条修复：#279 曾因只有 API 没有 Worker 停在 queued；#282 已由单条 Worker 成功生成并在结果页显示。后续要避免再次卡队列，开发启动必须同时运行 API 和 Worker；视频任务仍需逐条受控执行，不能直接批量消费。",
+          "火山方舟图片通道已统一为 volcengine / doubao-seedream-4-5-251128，旧的 doubao-seedream-4.5-251128 会在请求前兼容归一化；该配置只证明静帧生成可用，不代表视频、口型、真人听感或平台发布通过。",
+          "本轮完成的是连续性与声线生产约束，不是成片质量结论。当前批次苏岚广播已完成带锁定快照的 TTS 重生成，场景二动作视频候选也已生成，但仍需人工筛选、口型绑定、连续剪辑和逐镜播放验收；已有图片/视频/音频的分镜受保护，不会直接覆盖旧素材。",
+          "API 3001 已重启并完成数据库迁移；健康检查、五个分镜表演字段和项目 12 分镜列表接口均已真实验证，旧分镜按兼容默认值读取。",
+          "表演节拍拆分已接入预览确认边界：GET /api/storyboards/:storyboardId/performance-plan 只读返回计划和 applyBlockers；前端只有在 applyAllowed=true 且小泽点击“确认执行拆分”后才调用 POST 拆分。storyboard #267 已真实拆成说话分镜 01 和反应分镜 01-2；本次只写入分镜结构，未生成媒体、未启动模型。全量 npm test 457/457、类型检查、生产构建、服务端语法和 git diff --check 通过。",
+          "export #60 已完成新版广播视觉和 lip-sync 音频同源绑定的真实受控终剪：video #198 的生成音频 #170 与终剪对白 #170 一致；机器规格和技术审计通过，但仍未完成小泽人工完整播放，不能把它宣称为发布候选。export #58、#59 已分别回滚并留存媒体/失败证据。",
+          "2026-09-21：完成项目 12 导出页交付驾驶舱视觉收口。保留现有导出、终审、发布合规、成本、平台收入证据和 10 条终剪回归逻辑；导出历史默认展示最近 6 条，其余 40 条放入展开区；机器审计样本清单和已保存复核记录默认收起；终剪回归工作台改为更宽的样本列表、按钮下置和自然断行；主工作区、证据区和镜头列表明确使用 CSS Grid，修复窄屏布局规则失效；移动 Hero 增加明确纵向节奏，解决标题与导出参数区叠压。导出页专测 40/40、全量 npm test 438/438、npm run type-check、npm run build-only、git diff --check 和 Impeccable detector 通过；未修改后端接口、数据库字段、路由或业务门禁。",
+          "2026-09-21：针对声音仍未与嘴型同步和字幕不明显反馈，复核 #51/#52 的真实视频、对白 WAV、silencedetect 和逐帧抽样后确认 0.52s 默认补偿会把对白推迟到约 0.605s，故恢复 lip-sync 默认源锁定 0s，并将字幕提升为 64px 白色粗体、5px 黑色描边。video #198 -> export #53 已完成真实单条受控竖屏终剪，COS 独立 ffprobe 为 1080x1920 / 24fps / H.264 + AAC / 48000Hz / stereo / 3.0s；第一段混音可听起点约 0.085s，音频为 -16.01 LUFS / -5.17 dBTP，字幕像素/文字/时间轴、黑边/冻结帧/跳帧风险、角色版本证据通过。最新审计报告 .codex-runtime/market-quality-reports/market-quality-project-12-20260921051044840-28332.json 显示选取 10 条、可审计 8/10、缺失对象 2、技术机器通过 3/10、完整发布代理 0/10。全量 npm test 438/438、类型检查、生产构建和 git diff --check 通过；人工完整播放、真实口型、听感、人物一致性和平台合规仍需小泽亲自完成。",
+          "2026-09-20：video #197 -> export #36 完成真实单条受控竖屏终剪和技术审计。该条历史记录已保留；后续 2026-09-21 审计以 export #44 为最新样本。人工完整播放、听感、人物一致性和平台合规仍需小泽亲自完成。",
+          "2026-09-20：导出页新增机器审计样本清单，真实浏览器确认项目 12 页面渲染 10 条样本和 13 条 action。机器检查只读，不自动修复、不启动 Worker、不调用模型。",
+          "项目 12 的故事 bible #1 和 season structure #1 已在故事质量工作台完成三集复核并锁定；这只代表故事正典和整季结构已锁定，不等同于详细台词已完成人工听审。",
+          "项目 12 的 video #198 -> export #53 已完成单条真实受控竖屏终剪；COS 独立审计为 1080x1920 / 24fps / H.264 + AAC / 48000Hz / stereo / 3.0s，综合响度 -16.01 LUFS、真峰值 -5.17 dBTP、削波样本 0，字幕和角色版本证据通过。原始 lip-sync 口型视频的对白源时钟约从 0.085s 开始，#53 不再额外延后 0.52s。数据库已保留 single-video-final-edit-v1、源候选、回滚信息和 reviewDecision=null。人工完整播放、音质/响度/爆音/对白同步、人物外貌服装体型、AI 标识和红果/抖音平台合规仍未保存；productionReadiness=blocked，不能宣称可发布或稳定赚钱。",
+          "本轮新增生产发布准备度总闸门：GET /api/projects/:projectId/production-readiness 聚合当前 5 大剩余项，只有终剪回归、市场机器质检、发布合规、存储运维和成本全部通过时才允许进入 ready-for-controlled-publish；真实发布数据和收入证据齐全后才会进入 stable-revenue-evidence-ready。当前不会伪造人工审核、平台审核或收入。",
+         "本轮修复恢复终剪渲染配置边界：恢复终剪在 Worker 中优先使用数据库实时重建的 audioMix / subtitleCues / videoClips，避免旧持久化草稿覆盖音频时间轴字幕；新增回归测试，单测与全量测试均通过。当前仍不能把自动抽帧、波形和 ffprobe 当作小泽的真实听感确认。",
+         "本轮新增失败任务分诊工具：项目 12 真实扫描出 17 条失败任务，其中 13 条为 COS 源图可读但 ToAPI 网络超时，推荐 job 257-269 逐条受控重试；另 4 条旧任务缺少 imageStorageKey，先修复源图链路。焦点分诊测试 4/4，全量 npm test 335/335、类型检查、生产构建、服务端语法和 diff 检查通过。只读报告已保存到 .codex-runtime/recovery-worker-failure-reports/，没有重新入队、启动 Worker 或调用模型。",
+         "本轮新增单条控制重试入口 retry:recovery-once：默认只读检查失败分类、COS HeadObject、签名 URL 和重复重试状态；只有 --apply --confirm=CONFIRM_RECOVERY_SINGLE_RETRY 才会保留原失败任务并创建一条 max_attempts=1 的新 queued 任务，且不会启动 Worker。job 257 的真实 dry-run 已通过，报告保存到 .codex-runtime/recovery-worker-retry-reports/；本轮没有创建任务、没有调用模型。待明确确认后才能进入单条 apply 和后续 Worker dry-run。",
+         "小泽确认后，已创建 job 270 并使用 worker:recovery-once --job-id=270 --apply 完成一次真实单条消费：Worker 并发 1、只执行目标任务，退出码 0，job 270=success，videoAsset=195=candidate；queueBoundary.boundarySafe=true，其他恢复任务没有新增、消失或状态变化。COS 视频和三张抽帧均可读，候选仍为 1920x1088 / 30fps 横版素材，下一步是人工复核后进入竖屏终剪。成本台账记录为 Agnes unpriced，没有伪造成本金额。",
+         "本轮先修正终剪回归统计查询口径，再增加受控 Worker 只读预检：worker:recovery-once 现在必须显式选择 --dry-run 或 --apply，预检只验证任务、COS 起始图和非 mock Provider，不启动 Worker、不调用模型、不修改任务；人工听感门禁仍要求小泽实际播放 export #33 后再填写音频证据。统计查询、预检和页面空态修正未改变 export #33 的 rework 结论。",
+         "本轮修复恢复视频人工复核字段兼容问题：页面发送的 checklist.characterChecks 原先未被后端读取，导致 videoId=195 的复核无法落库；现在兼容顶层和嵌套结构。videoId=195 已真实保存为 rework，角色林夏为 matched；焦点测试 16/16，全量 npm test 346/346、类型检查和生产构建通过。",
+         "本轮补强返工候选处理：恢复复核队列输出视频级与角色级 reworkReasons，并给出 nextAction=regenerate-recovery-candidate；任务中心只导航回当前视频生成页，不自动调用模型，终剪仍保持 blocked-by-rework。焦点测试通过，全量 npm test 348/348、类型检查和生产构建通过。",
+           "本轮市场质量只读审计已更新为真实当前口径：最近 10 条导出中 8/10 可审计，缺失对象 2，技术机器门禁通过 4/10，完整发布代理通过 0/10。export #58 的独立媒体规格、48kHz、字幕像素、时间轴、响度和角色版本证据通过；其余样本仍有缺失媒体、历史规格、人工听感或平台证据阻塞。该结果不能推导平台审核通过或稳定收入。",
+          "本轮完成 lip-sync 终剪对白同源绑定闭环：新增 lip-sync-audio-binding 服务和 6 项定向测试，#59 因单条 payload 漏带绑定字段被正确阻断，修复后由受控 Worker 只消费 #60；video #198 的 audio #170 与终剪对白 #170 一致，sameSource=true，COS 和市场机器审计均通过。",
+          "2026-09-23：续接上一轮改动完成最终验证：全量 npm test 490/490 通过；npm run type-check、npm run build 和 git diff --check 通过。此前核对时项目 12 的 ProductionRun #1/#2 尚未启动候选生产；随后 ProductionRun #2 已进入 candidate-generation 并完成场景二 10 个分镜的视频候选生成，ProductionRun #1 仍停在 waiting_approval / market-validation，历史媒体未删除；P20/P21 仍保持 IN PROGRESS。",
+          "2026-09-23：补强第一集候选生产幂等边界。新增 pilot-candidate-idempotency 服务与 2 项测试；视频候选按 episode-one-v2-continuity、模型和确认静帧复用，音频候选按当前批次、分镜和角色复用，已有部分候选时只生成缺口；候选仍保持 candidate，不会自动确认。尚未启动真实模型任务。",
+          "2026-09-29：P28.5 修复后 1440x900 下预览面板 scrollHeight 等于 clientHeight（零溢出），底栏三行和播放按钮均可点；代价是画布只剩约 159px 高，预览舞台偏小。垂直预算被页头约 104px、统计条约 59px 和默认 300px 时间线 Dock 占用。要放大舞台需要另行压缩页面外壳或调低默认时间线高度，本轮没有擅自改动工作台外壳视觉。",
+           "2026-09-29：P28.6 完成后确认了一个方向性问题：自研编辑器每加一个能力都要在“编辑器 + 导出渲染”两侧各做一遍（本轮画中画只在预览生效，导出合成尚未接入），而剪映专业版是十年量级的专业 NLE，功能面无法追平。候选路线是把项目定位收敛为“生成 + 装配 + 验收 + 一键交接”，把精细剪辑交给剪映，优先做素材清单/SRT/剪映草稿包导出，而不是继续补波形、关键帧和特效。该路线待小泽确认后再动 P28 的后续范围。",
+      ],
+      scopeChanges: [
+        "2026-10-20：新增 P75，完成项目 21 分镜 129 的真实视频闭环：精确处理 FFmpeg 视频流 checksum 与 JPEG full-range，补齐 Worker rename/rm 导入；复用已完成供应商任务，避免重复付费生成；云端生成单条待采用候选并逐像素验证首帧连续性，不代用户采用。",
+        "2026-10-19：P62 从生产切换阻塞转为进行中观察。云端使用 /opt/projects/projectdream/releases/20261019-fastapi-only/ 隔离发布，先校验 SQL 备份，再应用迁移并切换 FastAPI-only；旧 Node backend/worker 容器停止保留，未覆盖脏工作树、未删镜像/卷、未触发付费生成。公网烟测、readiness 与五服务健康证据写入 docs/node-retirement-final-report.md；余项为观察期、真实 SMS 凭据、登录态链路及媒体/RAG/Worker 验收。",
+        "2026-10-19：新增 P72 剧本解析与资产确认阶段门禁：统一旧场景匹配规则、纳入工具/道具/材料确认、剧本保存后重新解析、门禁查询失败默认拒绝并提示。定向测试 31/31、全量 npm test 975/975、类型检查、构建和服务端语法通过；frontend 已随 P73 同步云端，真实项目登录态验收待演示凭据。",
+        "2026-10-19：新增 P73，同步上午本地修改的 frontend 与 worker-node 镜像到独立云端 release。通过全量 Node/FastAPI 测试、前端构建、Compose 配置和公网 smoke；云端只重建两个服务，未改 API/RAG/MySQL、未执行迁移或付费任务，旧镜像以 rollback tag 保留。登录态 CRUD 与真实供应商闭环仍未完成。",
+        "2026-10-16：新增 P71 分镜视频生成入口的生产节奏与状态收口：补充 4 阶段定位、单集镜头完成度和唯一下一动作；保留真实 Agent Pipeline 审批与刷新恢复。代码测试、类型检查、生产构建和 Impeccable detector 通过；真实项目视觉验收待登录态。",
+        "2026-10-16：完成 P69 品牌首页滚动叙事与访客了解路径。生产预览已复核桌面/390px 行为，首页契约测试 6/6、生产构建通过；登录弹层 axe 0 violations，未提交真实登录或验证码请求。",
+        "2026-10-16：新增 P69 品牌首页滚动叙事与访客了解路径：保留黑金识别，把公开首页改为角色、分镜、竖屏成片的叙事体验；演示内容如实标记，登录只在进入工作台/保存创作时出现，并覆盖 390px 可读性与可访问名称。",
+        "2026-10-16：完成 P67 Docker 清理候选保护与执行：删除 29 个旧 API 镜像、1 个 worker 镜像和 1 个 backend dangling 镜像；剩余 ProjectDream 镜像均有标签并保留。共享层使总计回收约 25 MB；数据卷容器、卷和 BuildKit 缓存保留。清理预览扫描所有 ProjectDream 服务镜像、区分虚拟体积与实际回收空间，并在关键查询失败时中止；受保护命令要求完整镜像 ID，复核后非强制删除。",
+        "2026-10-16：完成 P68 Worker readiness 门禁：角色、Node Worker 主进程和 generation_jobs 查询均通过才报告 Docker healthy；部署要求新 Worker healthy，旧镜像回滚不冒充健康。云端备份后单独重建 Worker，整栈、入口和 FFmpeg/FFprobe 冒烟验收通过。",
+        "2026-10-16：新增 P66 原子批量发布与自动回滚：整批发布前保存各服务旧镜像，所有服务和整栈入口验收通过后才清理临时标签；任一环节失败则恢复本批全部服务并保留回滚标签。",
+        "2026-10-16：新增 P65 并发部署互斥与公网入口验收：部署脚本使用全局 flock，并在容器检查之外验证首页、/nginx-health、/api/health；清理预览明确打印受保护数据卷。",
+        "2026-10-16：新增 P64 生产部署保护范围：构建前资源检查、backend/worker/api/frontend 串行构建、--no-build 重建、FFmpeg/FFprobe 冒烟验收和清理候选预览；清理默认不删除生产镜像、容器、卷或 BuildKit 缓存。",
+        "2026-10-16：P63 已完成云端串行构建与生产验收：新增持久化 2GiB Swap，备份并同步最新 Node 依赖/服务源码，backend/worker 镜像内 FFmpeg/FFprobe 冒烟通过，两个容器健康且公网端点返回 200。剩余清理仅包括待确认的无标签镜像、退出 drill 容器和本机残留 inference 监听文件。",
+        "2026-10-15：新增 P63，单独跟踪后端 FFmpeg 镜像的可复现干净构建与耗时验收，避免将临时同步已验证生产产物误记为 Dockerfile 根因已修复。",
+        "2026-09-29：新增 P34「交付包与外部 NLE 交接」范围，方向从「把自研编辑器做成剪映」收敛为「生成 + 装配 + 验收 + 交接」。触发证据：小云雀 2.0 全流程视频截图显示它在单集/全集列表里提供「下载到本地 / 导出到剪映 / 带品牌水印」三个并列出口，即小云雀不做精细剪辑而是交给剪映；同时 P28 六轮迭代暴露出「每加一个编辑能力都要在编辑器加导出渲染两侧各做一遍」（画中画本轮只有预览、导出合成未接）。P34.1 完成交付包导出；P34.2 实测剪映 8.9 草稿加密，记 BLOCKED。范围外且不冒充完成：交付包不含媒体合成，画中画仍需在外部 NLE 手动叠加；未写入项目 12 草稿，未启动模型、未生成新媒体、未删除历史候选。",
+        "2026-09-29：新增并完成 P28.6 剪映对照七项交互收口。小泽对照剪映专业版提出 7 项差距（研究剪映运作方式、素材库太小要翻页、播放器太小且时间线一往上提就压没、素材不能拖进时间线、按钮没有悬浮提示、时间线内不能拖素材且没有画中画、拖播放头时文字被描边）。逐项落实后新增：素材库搜索与卡片徽标、播放区行最小值与时间线下限重算、素材库到主轨原生拖拽、aria-label 悬浮提示、V2 画中画轨（编辑器预览合成加草稿字段加导出告警）、播放头 transform 化与 user-select none。范围外且不冒充完成：画中画未接入导出合成（导出渲染链路本轮未改，质检新增 overlay-not-rendered 告警）；未写入项目 12 草稿，未启动模型、未生成新媒体、未删除历史候选。",
+        "2026-09-29：新增并完成 P28.5 预览底栏真实可点与音频提示收口。真实浏览器验收发现 P28.3 交付的预览底栏三行网格在真实工作台尺寸下整体被裁到播放面板之外并被时间线 Dock 覆盖，属于看起来完成但点不到的交互缺陷，因此单独拆成一项修正：画布成为唯一可伸缩子项、重新分配播放区与时间线 Dock 的垂直预算、新增底栏结构回归断言 final edit keeps the preview footer inside the clipped player panel。同时把音频防错提示的判定收口为纯函数 resolveFinalEditAudioWarning，避免已确认音频只因缺对应画面而不能播放被误报为还没有已确认音频。本轮未启动模型、未生成新媒体、未写入数据库草稿、未删除历史候选。",
+        "2026-09-28：新增 P28.2 整集主预览范围。保留当前镜头播放器作为精确检查模式，新增默认整集画面连续播放、自动切镜、播放头/时间码联动和移动端验收。",
+        "2026-09-28：新增并完成 P28.3 整集音画混合预览范围。把对白、旁白、音乐、音效和字幕按时间线接入编辑预览；编辑预览不等同最终导出试听，真实音频相关性、声音层和情绪递进仍需人工验收。",
+        "2026-09-28：新增并完成 P28.4 音频与画面镜头绑定防错范围。对白/旁白若找不到对应已确认画面，则保留为 unmatchedAudio 并从可播放音轨隔离；编辑器显示待对应画面说明，防止声音错落到 00:00 或错误镜头；全局音乐/音效仍可独立使用。",
+        "2026-09-28：继续收口 P28 时间线可见性：撤销、重做、分割、保存、候选替换和音频调整等操作反馈移出统计栏，改为右下角可关闭、自动消失、支持 reduced-motion 的悬浮 Toast；时间线增加独立内部滚动视口和稳定的桌面/移动最小高度，避免对白、旁白、音乐、音效和字幕轨道被底部 overflow hidden 裁掉。新增时间线结构回归断言，定向测试 15/15、类型检查、生产构建、diff 检查和 Impeccable detector 通过。",
+          "2026-09-28：完成 P28 播放头与时间码联动验收。FinalEdit 时间线增加可键盘操作的时间标尺、橙色播放头、当前/总时长码和播放器 timeupdate 同步；实测 1440px 下片段点击、标尺拖动、Home/End/方向键均能定位，390px 下页面无横向溢出。定向测试 12/12、串行全量测试 562/562、类型检查、生产构建、diff 检查和 Impeccable detector 通过。范围仍不包含 Studio Dock 状态联动、时间线缩放、磁吸、波形和关键帧。",
+        "2026-10-13：按视线表演与环境音复盘新增 gaze-control-v1、sound-design-v1；结构化计划持久化到分镜资产快照并注入最终视频请求，候选报告记录视线/声音待复核要求且不把机器检查冒充语义通过。全量 npm test 953/953、类型检查、生产构建、服务端语法和 git diff --check 通过。",
+        "2026-09-28：开始 P28.1 时间线交互增强。FinalEdit 增加缩放百分比、缩小/放大、吸附开关、左右边缘非破坏裁切、时间线顶部高度拖拽把手和主视频轨指针拖动换序；吸附目标使用主轨片段边界与节拍点，拖动后抑制误点击定位。定向测试12/12、npm run type-check、低内存 npm run build-only、git diff 检查、Impeccable detector 通过；下一步是桌面浏览器真实拖拽验收，再进入波形、胶片缩略图和关键帧。",
+        "2026-09-28：完成 P28.1 桌面宽屏真实验收。1440px Chrome/CDP 下真实拖拽主轨片段完成换序并出现撤销/未保存状态；项目 28 真实拖动右边缘将片段从 3s 裁到 2s，再拖动左边缘将入点设为 0.5s，Inspector、素材库和时间线同步；时间线高度拖拽真实改变布局；页面无横向溢出。验收结束后刷新页面清理临时内存草稿，未写入数据库。定向测试 12/12、npm run type-check、低内存 npm run build-only、git diff 检查、Impeccable detector 通过，P28.1 标记 DONE。",
+          "2026-09-28：完成 P28.2 整集主预览。FinalEdit 新增默认整集/当前镜头模式切换；整集播放从当前播放头开始，按启用主轨连续切镜并在镜头结束时自动推进，停用片段不会进入播放；时间线播放头、时间码、预览标签和上一镜/下一镜控件联动。项目 12 1440px 浏览器实测播放头跨镜头持续前进并自动换源，项目页面 390px 无横向溢出；全量 npm test 567/567、npm run type-check、生产构建、git diff 检查、Impeccable detector 通过。",
+          "2026-09-28：完成 P28.3 整集音画混合预览。FinalEdit 按镜头起点 + 音频偏移调度对白、旁白、音乐和音效，应用轨道/单条音量与启停状态；播放、暂停、时间线跳转、自动切镜和静帧片段统一重定位音频，并叠加当前时间点字幕。真实项目 28 1440px 浏览器确认音频随整集播放头启动推进；390px 无横向溢出；修复预览底栏时间码覆盖播放按钮的问题。定向时间线测试 15/15、npm run type-check、npm run build-only、git diff 检查、Impeccable detector 通过。编辑预览不等同最终导出试听，仍需补齐对应音视频并进行人工听感验收。",
+        "2026-09-28：修复 P28 两个剪辑基础交互问题：剪辑画布恢复为可观看的 16:9 工作区，竖屏素材在画布内完整 contain 显示；分割改为严格使用当前播放头所在片段的位置，不再默认从中点切分，播放头不在片段内部或两侧不足 0.25 秒时明确阻止。Inspector 显示当前播放头时间，按钮文案改为在播放头处分割。定向测试 14/14、npm run type-check、低资源生产构建、git diff --check、Impeccable detector 和 1440px 浏览器尺寸验收通过；页面级横向溢出仍为 0。",
+        "2026-09-28：完成 P16/P23 候选总览与返工入口阶段。新增 CandidateOverview 跨镜头 contact sheet、rework-queue 本地返工状态机、视频/音频页 reworkCandidateId 消费与生成成功后 completed 回写；工作台可打开候选总览、批量归档、加入返工队列、处理下一项，并保留底部只读时间线到 FinalEdit 的真实入口。项目 28 浏览器验收：1440px 候选总览真实加载 1 条主版本音频候选、时间线高度 306px、无横向溢出；390px 候选总览和时间线同时可用，时间线高度 280px、无横向溢出。npm test 550/550、npm run type-check、npm run build-only、git diff 检查、Impeccable detector 均通过。本轮未启动模型、未生成新媒体、未删除历史候选；当时 P28 可编辑时间线本体尚未完成，现已由 P28 v2 补齐。",
+        "2026-09-28：同步小泽对项目 28 漫剧工作台顶部区域的验收：图标位置和“项目总览”返回入口显示正常。P23 继续保持 IN PROGRESS；当时项目进度为 14/33（42%），候选筛选、可编辑时间线和受控 Agent 入口尚未完成。",
+        "2026-09-24：继续推进 P23/P24 工作台视觉升级。收起阶段栏新增阶段状态窄轨，单集头部、场景条、分镜故事板和单镜头生产卡重新调整内外层间距、选中态和信息层级；空镜头明确显示尚未生成静帧，不改变真实状态。npm run type-check、git diff 检查、Impeccable detector 和可见浏览器 675px 无横向溢出检查通过；未启动模型、未生成新媒体、未删除历史候选。",
+        "2026-09-24：完成 P23/P24 本轮工作台复评与修正。修复真实 ProductionRun 阶段键与前端旧映射不一致的问题，项目 28 现显示“规划/分镜与资产已完成、候选与声音/剪辑与交付被阻塞”；未传 episodeNo 时从当前 run 自动补回“第 1 集 · 别签字”。时间线预览增加真实刻度、播放头、轨道语义和由音频轨兜底计算的时长，仍保持只读边界；删除顶部重复导出入口，保留全局唯一导出按钮。1440px 默认/检查器/时间线、390px 默认/检查器/时间线均完成浏览器截图检查；npm test 541/541、npm run type-check、npm run build-only、git diff --check、Impeccable detector 通过，未启动模型、未生成新媒体、未删除历史候选。",
+        "2026-09-24：P24 增加“用户下一步可执行”范围：单镜头详情输出稳定的 workflowSteps、blockingItems、nextAction 和 nextActionKey；界面按真实资产状态引导用户从主动作、静帧、视频、声音、首尾帧进入剪辑，跳转保留项目/场景/镜头上下文，为后续受控 Agent 复用同一状态契约。",
+        "2026-09-24：完成 P23/P24 本轮深度用户收口：顶部下一步改为当前镜头真实 nextAction；阶段项和高级剪辑保留当前上下文进入对应模块；候选版本可进入视频/音频模块；故事板显示画面完成数与阻塞数；阶段阻塞计数读取真实阶段状态并明确标注。npm test 542/542、类型检查、生产构建、git diff 检查和 Impeccable detector 通过；浏览器验证进入 /workspace/frame?projectId=28&sceneId=925&storyboardId=308，未启动模型、未生成新媒体、未删除历史候选。",
+        "2026-09-24：继续修复 P23/P24 工作台视觉问题：阶段栏使用 flex-basis 与 opacity/transform/max-height 过渡，收起时隐藏内部焦点目标并裁切宽度，避免文字伸入主画布；侧栏按内容自然收束，去除大块空白；检查面板增加滑入/滑出过渡。npm test 542/542、类型检查、生产构建、git diff 检查和 Impeccable detector 通过。",
+        "2026-09-24：继续收口 P23/P24 的镜头 Inspector。桌面端检查面板作为右侧工作区真实让位，移动端使用全宽覆盖；内部重排为当前判断、待处理、连续性/声音/质量证据、资产快照，放大侧栏内间距并将连续性证据改为可读两列；保留全部真实字段、折叠行为和“未接入/未确认”边界。npm test 542/542、npm run type-check、npm run build-only、git diff 检查、Impeccable detector 通过；浏览器无障碍树验证打开/关闭面板和折叠段可用，390px 检查无横向溢出；未启动模型、未生成新媒体、未删除历史候选。",
+        "2026-09-24：继续修复 P23/P24 时间线工作区。底部时间线改为从桌面阶段栏右侧开始的常驻 Dock，展开时真实让出主画布高度，收起/展开使用高度、透明度和位移过渡；关闭状态增加 aria-hidden 与 inert，避免隐藏的打开剪辑器按钮进入键盘路径；轨道区改为独立横纵向滚动视口并压缩轨道行高，防止环境声、字幕等尾部轨道被 Dock 截断；390px 实测无横向溢出。npm test 542/542、npm run type-check、npm run build-only、git diff 检查、Impeccable detector 全部通过；未启动模型、未生成新媒体、未删除历史候选。",
+        "2026-09-24：修复检查面板过渡在部分视口下卡住的问题。右侧 Inspector 改为常驻、可折叠的工作区，使用 is-open 控制 flex-basis/宽度/位移，关闭时通过 aria-hidden 与 inert 隔离交互；打开/关闭后主画布恢复，移动端使用同一定位上下文。最终 npm test 542/542、npm run type-check、npm run build-only、git diff 检查、Impeccable detector 通过；可见浏览器无障碍树验证面板打开、关闭和折叠证据段可用。",
+        "2026-09-24：细化 P33 账户菜单范围：左下账户卡作为唯一桌面账户入口，点击后向上展开同一面板内的四项操作；保留真实路由与 clearAuthSession() 退出逻辑，不新增独立浮层或重复账户按钮。",
+        "2026-09-24：修复删除确认弹窗的误导性反馈：项目名不再作为看似已填入的 placeholder，而是显示“请输入：完整项目名称”；用户重新输入时清除旧的删除错误提示。浏览器验证未输入时按钮禁用，输入未命名项目 PF-001后按钮启用；未执行真实删除。",
+        "2026-09-24：修复永久删除仍被拒绝的根因：前端对损坏项目显示并提交未命名项目 PF-001，后端原先却校验未命名项目 001；统一服务端兜底确认名为未命名项目 PF-001。服务端契约测试 13/13、全量 npm test 538/538、npm run type-check 和 git diff --check 通过；未执行真实删除。",
+        "2026-09-24：完成 P33 工作台账户与项目生命周期收口。桌面端账户信息移至左下导航，移动端保留顶部入口；删除确认与页面显示名统一，未命名项目使用可读兜底名称，删除错误在确认弹窗内呈现。浏览器实测 1440px/390px 无横向溢出，未执行真实删除。",
+        "2026-09-24：小泽指出当前背景太 AI。复核确认现有两个 SVG 同时堆叠几何拱门、数据图表、网格、曲线、蓝橙光晕和颗粒噪声，缺少真实片场叙事；P32 调整为单一电影化漫剧片场视觉资产加克制界面光效，不再继续叠加抽象 AI 装饰。",
+        "2026-09-24：新增 P32 登录入口二次优化范围。参考用户提供的两张界面截图，继续保留先展示创作世界、用户主动点击后登录的交互边界；本轮由 Claude 按 frontend-design、impeccable、redesign-existing-projects、design-taste-frontend 和 browser 技能执行，先优化登录界面，不引入新的 UI 组件库，不复制小云雀品牌素材或文案。",
+        "2026-09-24：P32 背景方向调整：不再沿用拱门、网格、图表、光晕、抽象曲线的 AI 科技背景；优先使用一张原创、低信息噪声、具有真实镜头关系的漫剧片场静帧或电影化位图，首页与登录弹窗共享同一世界观但使用不同裁切和遮罩。",
+        "2026-09-24：P31 视觉资产重做完成：移除项目成片/角色图引用，新增原创故事装置首页背景和登录弹窗视觉，分别使用 brand-hero-generated-v3.svg 与 brand-login-generated-v2.svg。",
+        "2026-09-24：P31 完成验收：首屏不自动弹登录，采用独立本地电影化背景，桌面端和 390px 移动端均完成截图验证；登录弹窗只在点击入口后打开。",
+        "2026-09-24：小泽确认开始实施 P31。登录页将保留真实认证接口，重构为“全屏漫剧视觉首页 -> 暗化/模糊背景 -> 居中双栏登录弹窗”，并以桌面端和 390px 移动端浏览器截图作为验收证据。",
+        "2026-09-24：登录页重构允许使用 frontend-design、impeccable、redesign-existing-projects 和浏览器验收能力；先完成视觉方案与代码现状审计，再实施页面改造，不直接复制小云雀品牌素材或文案。",
+        "2026-09-24：根据小云雀 2.0 参考视频，确认产品形态从多个生产后台页面升级为漫剧一体化创作工作台；新增 P23-P30，保留角色版本、连续性契约、候选制、质量门禁、成本和历史版本优势。",
+        "2026-09-24：页面重构第一阶段只聚焦漫剧制作，不扩展真人短片、3D 导演台或完整小云雀商业入口；先做单集工作区、分镜故事板、单镜头生产卡和资产引用。",
+        "2026-09-24：明确单镜头生产原则：静帧锁定视觉，视频默认只生成动作，声音独立生成，最终人声确定后再口型同步，最后由非破坏时间线完成混音和字幕。",
+        "2026-09-24：明确跨镜头连续性原则：下一镜默认继承上一镜结束状态；新增首尾帧确认、预告/揭示、允许/禁止实体和跨镜头差异检查的产品化范围。",
+        "2026-09-22：参考 c1 (13).mp4 与两个 AI 漫剧制作教程后，范围从“技术链路可生成”扩展为“连续表演、声音空间、情绪递进和商业验证可验收”；新增 P13-P22 共 10 项任务。",
+        "2026-09-22：将两个代表性场景小样片设为第一优先验证门槛，先验证广播机启动和“六。别怕，小夏”，通过后才扩展 18～30 镜头第一集，避免再次整集生成后才发现成片质量不达标。",
+        "2026-09-22：新增批量候选筛选、角色/场景连续性资产包、真实 BGM/SFX 与时间线剪辑范围；这些能力用于接近市场可发布成片，不把单次生成结果直接视为成片。",
+        "2026-09-22：新增 ProductionRun 与多 Agent 编排范围，要求 Agent 通过受控领域工具执行，并记录审批、预算、版本、输入输出和失败恢复证据。",
+        "本轮新增火山方舟图片 Provider：支持 Seedream 请求体、参考图输入、地址去重拼接和旧模型标识兼容归一化；单条任务 #282 真实消费成功。该范围只解决静帧生成链路，不改变人工终审、视频生成或发布门禁。",
+        "本轮新增表演节拍与对白镜头拆分模块：长对白不自动加速，至少规划一个说话节拍和一个无对白反应节拍；模型漏返回反应镜头时由后端兜底补齐；新增核心功能开发文档 19-表演节拍与对白镜头拆分开发流程.md，并增加只读预览和明确确认执行边界。",
+        "本轮新增 lip-sync 音频同源绑定门禁：终剪必须使用生成口型时的同一条已确认对白，缺失或不一致时阻断；同一分镜的其它对白版本不会混入，旁白仍作为独立音轨。",
+        "本轮继续推进 P11：导出页采用交付驾驶舱信息层级，首屏保留核心导出入口，长历史与证据清单改为渐进展开，终剪回归改为左右工作台并补齐窄屏 Grid 响应式；只调整前端组织与视觉，不改变导出、终审、合规和回归接口行为。",
+        "本轮新增导出页生产发布准备度总闸门和 actionQueue 定位：按 action code 跳到终剪回归、发布合规、成本、平台/收入或存储区域；入口只读，不触发模型、Worker 或平台发布。",
+        "顶部导航本轮补入个人中心菜单的展开/收起过渡、箭头旋转、菜单项错峰进入和通知中心 ESC 关闭；真实浏览器验证保持现有路由、导出、记录位置、历史、同步和退出登录功能不变。",
+        "本轮资产中心改为单一主滚动上下文，右侧结果区在宽屏承载滚动，窄屏由外层承载滚动；保留候选/草稿资产的单选、批量归档，已确认和定稿资产由后端保护，归档不物理删除源文件。",
+        "本轮继续收口导出页反馈层：成功、返工和错误提示改为紧凑行内状态，返工提示保留返回成片编辑和关闭操作，避免反馈条横跨整页挡住交付内容；前后端联调已恢复，项目 12 导出页真实浏览器可正常加载。",
+        "P3 让题材机会卡直接进入三集试制，减少手动重复录入。",
+        "P4 先实现规则型质量基础，再接入模型生成，避免未经质检的整季生产；本轮增加市场爆款结构代理，未把代理结果当作爆款或收入证明。",
+        "P4 本轮新增项目 12 原创三集草稿装配器与事务写入脚本；默认 dry-run，实际写入必须使用 --apply --confirm=SAVE_PROJECT_STORY_DRAFT，只保存 draft，不覆盖 locked 版本。",
+        "P5 按已确认方案拆分为角色版本快照、锁定失效、回归样例、规则报告和项目级工作台；视觉模型评分保留适配接口，不作为本阶段唯一门禁。",
+        "P5 本轮补入静帧、视频、对白音频的角色版本快照与门禁，并新增角色一致性工作台；真实视觉相似度评估仍属于后续范围。",
+        "P6 补入可编辑字幕草稿和导出双重门禁：字幕不再只从分镜临时生成；BGM/SFX 授权、有效字幕、成片规格和人工三项签核均需留痕。",
+        "P7 补入生成任务、音频资产和导出任务成本台账，以及成片规格、字幕、授权、人工签核和 AI 标识的发布合规包；本轮完成新生成图片、视频、口型和导出对象存储迁移，旧地址保持兼容，历史批量迁移与云端恢复仍在范围内。",
+        "P7 本轮增加历史媒体迁移规划器和默认 dry-run；真实扫描结果显示本地可迁移、远程可恢复和 unresolved 记录分离，未把远程地址伪装为已迁移。",
+        "P7 本轮增加远程媒体精确域名白名单、URL 有效期检查、最大文件大小和媒体文件头校验；项目 12 已成功恢复 23 条远程媒体，过期 URL 与 pending:// 继续保持 unresolved。",
+        "P7 本轮将已确认过期视频恢复改为稳定重试队列：相同项目/分镜使用确定性 job key，运行中、已成功、已有新确认视频或达到重试上限时跳过；21 条 retry-2 已使用 Agnes 入队验证，因 ToAPI 源图上传不可达暂停，保留 4 条失败和 17 条取消证据。",
+        "P7 本轮增加 --public-only 恢复模式和源图协议/公网分类：项目 12 仅筛出 5 条公网起始帧，16 条本地源图明确跳过；修复恢复请求遗漏 projectId 导致对象存储写入失败的问题，并将后续恢复请求默认改为人工确认前的候选状态。",
+        "P7 本轮真实恢复 5 条公网源图视频（job 249-253），对象存储和 ffprobe 均验证文件可读取；输出实际为 1920x1088 / 30fps / H.264 + AAC，尚未满足项目 1080x1920 / 9:16 / 24fps 的终剪发布规格，因此不能计为平台可发布成片。",
+        "P7 本轮增加 legacy 恢复结果回退脚本：5 条旧 autoConfirm=true 资产已由 confirmed 改为 candidate，对应分镜主视频指针已清空；对象文件和任务记录保留。",
+        "P7 本轮修复人工确认旧远程视频时遗漏 projectId 的对象存储参数，并完成全量回归。",
+        "P7 本轮补入恢复视频人工复核门禁：恢复候选必须保存画面、人物一致性、动作连续性三项检查，且结论为 approved 才能确认主版本；rework 备注会留痕但不会放行。项目 12 的候选视频页面已验证未完成检查会被后端拒绝。",
+        "P7 本轮将恢复视频复核入口集中到任务中心：新增项目级只读清单，按待复核、返工、已批准排序；项目 12 当前显示 5 条待复核候选，点击可定位到准确的场景和分镜，不自动保存复核结果或确认主版本。",
+        "P7 本轮接入腾讯云 COS 私有桶 Provider：对象存取、删除、过期扫描和短时签名 URL 与本地适配器保持同一接口；视频模型会直接使用 COS 公网签名图片 URL，避免本地源图被迫经过 ToAPI 上传。真实 COS 凭证、Bucket、CDN 与迁移验证仍保留在 P7。",
+        "P7 本轮完成依赖安全收尾：生产与开发依赖的完整 npm audit 均为 0 漏洞；188 项测试、类型检查、生产构建、Compose 配置和服务端语法检查均通过。真实 COS 验收范围不变。",
+        "P7 本轮新增 COS 只读预检：环境缺少真实凭证、Bucket 或区域会在创建客户端前失败；配置完整时只生成短时签名 URL 并执行 HeadObject，不会写入、删除或迁移媒体。",
+        "P7 本轮新增本地对象到 COS 回填工具：限定 projects/{projectId}/ 范围，默认只生成计划；执行上传必须显式传入 --apply --limit，每条对象上传后从 COS 回读并计算 SHA-256；不删除本地文件、不修改数据库、不触发 AI 任务。",
+        "P7 本轮将长任务执行拆为 API/Worker 角色：API 只写入任务，Worker 独占轮询、生成重试与 FFmpeg 导出；Compose 增加无公网端口的单 Worker 服务，并给 2 核 2G 机器重新划分资源。真实 Worker 消费没有在本轮启动，避免产生模型费用。",
+        "P7 本轮完成真实 COS 配置核验：私有桶签名与 HeadObject 读取权限通过；项目 12 的 5 个本地对象均被 dry-run 判定为待复制。未执行 --apply，因此没有上传或删除任何对象。",
+        "P7 本轮完成 COS 真实小批量回填：先上传 5 个历史导出成片并回读 SHA-256 验证；发现字典排序不能保证优先覆盖恢复源图后，补充精确 --keys 筛选与测试，再上传 16 个恢复起始帧，16/16 回读 SHA-256 一致。本地文件、数据库和既有对象均未删除。",
+        "P7 本轮修复过期视频恢复任务遗漏 imageStorageKey：恢复脚本从确认静帧写入稳定对象 Key，Worker 会优先生成 COS HTTPS 签名 URL，不再因旧 127.0.0.1 地址回退到 ToAPI 上传。项目 12 的 16 条 retry-3 任务已入队 254-269，尚未启动真实 Worker 消费。",
+        "P7 本轮新增空景恢复约束和 queued 快照修复脚本：空景任务会追加中英双语禁止新增人物、脸、轮廓、倒影、影子规则；默认 dry-run，--apply 仅改 queued 恢复任务。job 255 经 COS 受控链路生成成功，抽帧未见人物，但仍仅为候选横版视频，不可自动确认或发布。",
+        "P7 本轮新增恢复候选自动检查报告：用 ffprobe 记录技术规格、保存三张不同 COS 抽帧，并在确认主版本前重新校验报告；项目 12 的资产 192、193 抽帧 6/6 可读，187-191 的 COS 视频缺失被写入 failed 报告。该检查不做人物或人脸自动识别，所有结果仍需人工三项复核和竖屏终剪。",
+        "P7 本轮补入恢复视频角色快照辅助核对：新报告保存角色版本、固定外貌、服装和定妆参考对象 Key；历史报告的空角色清单会从确认静帧快照即时补齐，并明确展示“历史快照未记录”，不伪造版本或服装信息。该模块只辅助人工复核，不是人物/人脸自动识别 Agent。",
+        "P7 本轮将恢复视频人物复核细化为逐角色证据：每位预期角色必须记录通过或返工，返工必须填写原因；后端保存和确认主版本时都会按静帧快照重新校验，不能只凭全局人物勾选放行。",
+        "P7 本轮统一恢复视频的审核口径：项目级复核清单也会按恢复检查报告和确认静帧快照计算预期角色，只有全局三项检查和全部角色 matched 才显示“已批准”，避免任务中心与确认接口结论不一致。",
+        "P7 本轮补入角色复核进度可视化：任务中心显示“角色复核 x/y”及“待补/返工/已完成”，只对有预期角色的恢复候选展示，帮助人工按缺口处理，不把空景或历史空快照伪装成角色审核完成。",
+        "P7 本轮将技术检查状态从人工复核状态中分离：队列会把 ready、无检查报告和 failed 分别显示为“可人工复核”“待技术检查”“技术阻塞”，并在同一审核状态内按此顺序排列；技术阻塞展示首条检查原因，但不宣称完成任何人物或画面视觉判断。",
+        "P7 本轮为技术阻塞增加可追溯的处理建议：队列根据首个自动检查问题的类型，提示检查媒体规格、抽帧证据或对象可读性；建议只引导人工进入详情排查，不会自动重试或触发新的模型费用。",
+        "P7 本轮将技术检查前置为恢复视频批准门禁：技术阻塞或待检查的记录不会在队列中显示为有效批准，接口拒绝保存 approved 但允许保存 rework 留痕；页面将角色复核状态明确为先完成技术检查，避免错误安排人工工作。",
+        "P7 本轮新增受控恢复 Worker 启动器：必须明确传入 --job-id 和 --apply，启动前验证 queued 恢复任务、COS 起始图和非 mock 视频配置；Worker 的 running 恢复与 queued 拉取均锁定该 ID，并且不会恢复导出队列。项目 12 的 job 256 真实验证成功后自动退出，未消费后续 13 条 queued 任务。",
+        "P7 本轮增加竖屏终剪前置分流：恢复候选新增 finalEditReadiness，区分可进终剪、复核后终剪、返工阻塞、技术检查后终剪和无需终剪；项目 12 当前 3 条为复核后终剪、0 条为可进终剪。该分流只生成可审计状态和统计，不自动创建 FFmpeg 导出、不调用模型、不产生新费用。",
+        "P7 本轮新增受控竖屏终剪计划合同：每条恢复候选输出固定 1080x1920 / 24fps / H.264 + AAC / MP4 / 字幕烧录目标；只有人工复核完整批准的候选才标记 ready，其余记录技术检查、人工复核或返工阻塞原因。执行模式固定为 manual-gate，当前不写库、不启动 FFmpeg、不调用模型。",
+        "P7 本轮完成单条终剪执行闭环收口：任务中心显示恢复终剪导出状态和回滚终剪按钮；回滚前需要明确确认，服务端只将导出状态改为 canceled 并记录时间，不删除媒体、不切换源候选；Worker 重启时可以继续处理已处于 running 的导出任务；完成态仍保留恢复终剪专用 pipeline，确保后续回滚和合规识别不断链。238/238 自动化测试和项目 12 只读 dry-run 通过。",
+        "P7 本轮补强并发幂等：为 export_records 增加 idempotency_key 唯一约束；相同计划的并发确认只保留一条任务，重复请求安全复用；回滚清空数据库幂等键但保留配置审计信息，允许后续重新执行。241/241 自动化测试通过。",
+        "P7 本轮补强回滚服务端门禁：除了页面确认框，回滚接口也必须携带 confirm=true 和精确口令 ROLLBACK_RECOVERY_FINAL_EDIT；错误或缺失参数返回 400，不会改变任务状态。242/242 自动化测试、类型检查、生产构建和服务端语法检查通过。",
+        "P7 本轮补强成片技术质检：ffprobe 结果现在同时硬校验 1080x1920、24fps、H.264、AAC 和 MP4；30fps 或未知帧率会被阻断，不能进入发布候选。243/243 自动化测试、类型检查、生产构建和服务端语法检查通过。",
+        "P7 本轮完成项目 12 的真实受控竖屏终剪验收：export #28 暴露已解析配置对象被误判为普通导出的缺陷，已回滚；export #29 暴露 API/Worker 未加载 COS 环境导致私有媒体读取 404，已回滚；修复后 export #30 只处理 videoId=193 一个片段，COS 成片通过独立 ffprobe。新增失败终剪可回滚、恢复终剪意图识别和 API/Worker 环境合同测试；发布合规包仍保留人工签核和 AI 标识阻塞。",
+        "P7 本轮增加普通 Worker 对 recover-video-* 的隔离：普通队列拉取和 Worker 重启恢复都会跳过恢复任务，只有带精确 jobId 的受控 Worker 才能执行。对 export #30 终审发现 AAC 轨实际静音 input_i=-inf，因此成片质检新增声音信号检测；静音或旧报告缺少有效声音证据时，自动质量、人工批准和发布合规均会阻断。",
+        "P7 本轮追加持续黑边门禁：终剪会抽样检测上下边与画面中心亮度，只有边缘接近黑、中心明显更亮且差异稳定时才判为横版塞入竖版的结构性黑边；该问题会阻断自动质量和发布候选，人工终审仍负责画面审美判断。",
+        "P7 本轮将终剪缩放策略由等比缩小后填黑改为填满 9:16 后居中裁切，并用 export #30 的本地源片生成只读预览验证无上下黑边；预览没有音频、不会写库或覆盖正式样片，真实重剪仍需补齐有效音频并人工确认裁切构图。",
+        "P7 本轮将终剪语音源前置为硬门禁：必需对白或旁白下载失败、静音或无法测量时，Worker 在混音与 COS 成片上传前失败，不再用静音底轨伪造成功导出；针对 export #30 已定位到 audioAsset #120 返回 HTTP 404，COS HeadObject 和旧本地目录均确认不存在对应文件，因此不执行伪回填，后续只能单条重新生成再验收。",
+        "P7 本轮新增缺失语音单条修复器：默认 dry-run，必须指定 --project-id、--audio-id、--apply --confirm=REGENERATE_MISSING_SPEECH_AUDIO 才会调用一次真实 TTS；audioAsset #169 已替代缺失的 #120 成为分镜 180 的确认对白，旧资产保留为候选证据。",
+        "P7 本轮新增受控导出 Worker 开关 EXPORT_WORKER_ONLY_EXPORT_ID：指定后跳过普通生成队列，只恢复/消费目标导出并在完成后退出。已用它消费 export #31，没有批量跑模型或其他导出。",
+        "P7 本轮完成 export #31 单条重剪技术验收：1080x1920 / 24fps / H.264 + AAC / MP4 / 5.0s，源片段数 1、真实视频数 1、绑定语音数 1，声音 input_i=-22.27，黑边检测未触发；仍需真人终审和平台合规确认。",
+        "P7 本轮补强人工终审批准入口：服务端 normalizeFinalQualityReview 要求 confirm=true 和精确口令 APPROVE_FINAL_QUALITY_REVIEW 才能把成片批准为发布候选；导出页新增口令输入，npm test 264/264、类型检查、生产构建、服务端语法和 diff 检查通过。",
+        "P7 本轮将人工终审从三个勾选升级为结构化证据：画面、字幕、音频必须分别填写终审备注，发布合规包会阻断缺少证据备注的批准；npm test 267/267、类型检查、生产构建、服务端语法和 diff 检查通过。",
+        "P7 本轮将 AI 标识和平台合规从总开关升级为逐平台证据：红果、抖音等每个目标平台都必须分别确认 AI 标识、版权/投稿字段并填写规则备注，缺证据会返回 platform-evidence-incomplete 并保持 blocked；npm test 269/269、类型检查、生产构建、服务端语法和 diff 检查通过。该能力只是内部门禁，不代表真实平台审核通过或稳定盈利。",
+        "P7 本轮继续补强发布合规保存门禁：保存 AI 标识或逐平台合规证据必须输入精确口令 CONFIRM_RELEASE_COMPLIANCE_REVIEW，页面和接口双重阻断误保存；npm test 271/271、类型检查、生产构建、服务端语法和 diff 检查通过。该能力仍只是内部审计门禁，不代表真实平台审核通过或稳定盈利。",
+        "P7 本轮为发布合规包增加稳定证据指纹：服务端返回 audit.snapshotVersion=release-compliance-v1 和 SHA-256 audit.evidenceHash，导出页展示前 16 位，便于人工终审截图、复盘和确认同一份证据包；npm test 273/273、类型检查、生产构建、服务端语法通过。该指纹只是内部审计依据，不代表平台审核通过或收益证明。",
+        "P7 本轮新增发布候选快照：只有 status=release-candidate 且 canPublish=true 时才返回 releaseCandidateSnapshot，blocked 合规包返回 null；快照归档项目 ID、导出 ID、目标平台、技术规格、字幕摘要、人工终审证据、AI 标识和一致的 evidenceHash。焦点测试 release-compliance.test.mjs 9/9、Export.final-quality-review.test.mjs 6/6 通过；全量 npm test 276/276、类型检查、生产构建、服务端语法和 diff 检查通过。该快照仍只是内部归档证据，不代表平台审核或稳定收入。",
+        "P7 本轮新增 10 条终剪回归只读入口：GET /api/projects/:projectId/final-quality-regression 汇总最近导出、最终质检和成本台账，导出页展示样本数、批准率、平均耗时、单条均摊成本和返工原因；少于 10 条样本时返回 insufficient-samples。焦点测试 final-quality-regression.test.mjs 2/2、Export.final-quality-review.test.mjs 7/7 通过；全量 npm test 279/279、类型检查、生产构建、服务端语法和 diff 检查通过。该入口不会启动 Worker、不会调用模型，也不代表真实 10 条回归已经完成。",
+        "P7 本轮继续补强 10 条终剪回归覆盖门禁：样本达到 10 条后还必须覆盖空镜头、单人、双人、对白、旁白、动作六类，缺任一类返回 coverage-incomplete；导出页展示覆盖 x/6 和缺失类型。焦点测试 final-quality-regression.test.mjs 3/3、Export.final-quality-review.test.mjs 8/8 通过；全量 npm test 281/281、类型检查、生产构建和服务端语法通过。该门禁只读统计已有证据，不会自动跑模型。",
+        "P7 本轮新增 10 条终剪回归覆盖标签人工保存入口：导出页可从回归样本中选择具体导出，标记空镜头、单人、双人、对白、旁白、动作六类覆盖，并保存备注；接口 PUT /api/exports/:exportId/final-quality-regression-tags 要求 confirm=true 和精确口令 CONFIRM_FINAL_QUALITY_REGRESSION_TAGS，只更新导出配置元数据，不启动 Worker、不调用模型、不创建新导出。焦点测试 final-quality-regression.test.mjs 4/4、Export.final-quality-review.test.mjs 10/10 通过；全量 npm test 284/284、类型检查、生产构建、服务端语法和 diff 检查通过。",
+        "P7 本轮继续补强 10 条终剪回归样本复核清单：导出页逐条展示样本技术状态、人工复核状态、发布状态、覆盖标签和待补缺口，并可一键切换到对应样本进行人工标注；该清单只读已有报告，不做自动视觉判断、不启动 Worker、不调用模型。焦点测试 Export.final-quality-review.test.mjs 11/11 通过；全量 npm test 285/285、类型检查、生产构建、服务端语法和 diff 检查通过。",
+        "P7 本轮继续补强 10 条终剪回归缺口摘要：导出页汇总未标记覆盖、技术阻塞、待人工复核、人工返工和人工通过数量，帮助先定位批量风险；该摘要只读当前回归样本，不写库、不启动 Worker、不调用模型。焦点测试 Export.final-quality-review.test.mjs 12/12 通过；全量 npm test 286/286、类型检查、生产构建、服务端语法、浏览器只读检查和 diff 检查通过。",
+        "P7 本轮继续补强 10 条终剪回归样本筛选：导出页可按全部、未标记、技术阻塞、待复核、返工、已通过过滤样本；项目 12 浏览器只读验证中，技术阻塞筛选将样本从 10/10 收敛到 9/10，未触发保存、Worker 或模型。焦点测试 Export.final-quality-review.test.mjs 13/13 通过；全量 npm test 287/287、类型检查、生产构建和服务端语法通过。",
+        "P7 本轮继续补强 10 条终剪回归下一步处理建议：服务端为每条样本输出 nextAction，按技术阻塞、人工返工、待人工复核、缺覆盖标签、样本已就绪给出处理建议；导出页逐条展示下一步。项目 12 浏览器只读验证中，export #31 显示完成人工复核，技术阻塞样本显示先处理技术阻塞，未触发保存、Worker 或模型。焦点测试 final-quality-regression.test.mjs 5/5、Export.final-quality-review.test.mjs 14/14 通过；全量 npm test 289/289、类型检查、生产构建和服务端语法通过。",
+        "P7 本轮将 10 条终剪回归覆盖状态与稳定生产判定拆开：新增 productionReadiness，只有 10 条样本全部技术通过且人工批准才为 ready；导出页显示稳定生产判定和阻塞原因。项目 12 浏览器只读验证为 blocked，显示技术和人工双通过样本 0/10、覆盖不足、技术通过不足、人工批准不足和人工复核缺口；未触发保存、Worker 或模型。焦点测试 final-quality-regression.test.mjs 6/6、Export.final-quality-review.test.mjs 15/15 通过；全量 npm test 291/291、类型检查、生产构建和服务端语法通过。",
+        "P7 本轮继续补强 10 条终剪回归人工复核证据缺口：服务端逐样本输出 reviewEvidenceGaps，覆盖人工结论、画面证据、字幕证据、音频证据和人物一致性证据；缺口计入 summary.reviewEvidenceGapCount 并阻断 productionReadiness.ready。导出页在缺口摘要和样本行展示人工证据缺口，只读展示已有证据，不启动 Worker、不调用模型、不自动批准。焦点测试 final-quality-regression.test.mjs 7/7、Export.final-quality-review.test.mjs 16/16 通过；全量 npm test 293/293、类型检查、生产构建和服务端语法通过。",
+        "P7 本轮继续补强 10 条终剪回归人工证据分组筛选：服务端新增 reviewEvidence.buckets，按人工结论、画面、字幕、音频、人物一致性五类缺口统计数量；导出页新增人工证据分组按钮，可一键筛出缺对应证据的样本。该能力只读已有报告，不保存筛选状态、不启动 Worker、不调用模型、不自动批准。焦点测试 final-quality-regression.test.mjs 7/7、Export.final-quality-review.test.mjs 17/17 通过；全量 npm test 294/294、类型检查、生产构建和服务端语法通过。",
+        "P7 本轮将人物一致性纳入成片人工终审批准门禁：服务端 normalizeFinalQualityReview 要求 approved 同时具备画面、字幕、音频和人物一致性四项结构化证据；导出页新增人物一致性已复核和备注输入，批准按钮也必须等人物一致性证据补齐后才能启用。该能力只保存人工证据，不做自动人物识别、不调用模型、不启动 Worker。焦点测试 final-quality-review.test.mjs 6/6、Export.final-quality-review.test.mjs 18/18 通过；全量 npm test 296/296、类型检查、生产构建和服务端语法通过。",
+        "P7 本轮新增单条回归样本人工复核工作台：导出页可从 10 条终剪回归样本中指定一条，回填已有画面、字幕、音频、人物一致性证据和复核备注，保存返工或批准结论；批准继续复用后端精确口令 APPROVE_FINAL_QUALITY_REVIEW，保存后刷新回归统计。人工复核保存本身不创建导出、不启动 Worker、不调用模型，也不代表整体 10 条回归或平台发布通过。焦点测试 Export.final-quality-review.test.mjs 19/19 通过；全量 npm test 297/297、类型检查、生产构建、服务端语法、UI 机械检测和 git diff --check 通过。",
+        "P7 本轮补强单条回归样本技术报告生成入口：当选中样本是已完成导出且缺少质量报告时，导出页可只对这一条调用 createExportQualityReport 生成技术质量报告，随后刷新回归统计和人工复核表单；该入口不创建新导出、不启动 Worker、不调用模型。焦点测试 Export.final-quality-review.test.mjs 20/20 通过；全量 npm test 298/298、类型检查、生产构建、服务端语法、UI 机械检测和 git diff --check 通过。",
+        "P7 本轮新增待补样本导航：导出页统计缺技术报告、技术阻塞、人工证据缺口和已补齐数量，并可按缺报告、技术阻塞、人工证据缺口、未批准顺序定位下一条待处理样本；该入口只切换当前复核目标，不保存、不启动 Worker、不调用模型。焦点测试 Export.final-quality-review.test.mjs 21/21 通过；全量 npm test 299/299、类型检查、生产构建、服务端语法、UI 机械检测和 git diff --check 通过。",
+        "P7 本轮新增当前样本待补项只读清单：导出页会按当前选中的回归样本列出缺少技术质量报告、技术质检阻塞、画面证据、字幕证据、音频证据、人物一致性证据和人工批准缺口；该清单只读，不保存、不启动 Worker、不调用模型。焦点测试 Export.final-quality-review.test.mjs 22/22 通过；全量 npm test 300/300、类型检查、生产构建、服务端语法、UI 机械检测和 git diff --check 通过。",
+        "P7 本轮新增终审证据摘要与审批前缺口只读面板：导出页区分质量报告中已留存的画面、字幕、音频、人物一致性四项人工证据，以及当前表单仍缺少的技术报告、技术门禁、四项勾选/备注和批准口令；不把当前未保存输入冒充为已留存，不保存、不启动 Worker、不调用模型。焦点测试 Export.final-quality-review.test.mjs 23/23 通过；全量 npm test 301/301、类型检查、生产构建、服务端语法、UI 机械检测、桌面/390px 浏览器只读验收和 git diff --check 通过。",
+        "P7 本轮新增单条复核保存影响范围说明：导出页在返工/批准控件前明确展示只更新当前质量报告、不会发布到平台、不会创建新导出、不会启动 Worker 或模型；该说明只读，不改变后端复核规则。焦点测试 Export.final-quality-review.test.mjs 24/24 通过；全量 npm test 302/302、类型检查、生产构建、服务端语法、UI 机械检测、桌面/390px 浏览器只读验收和 git diff --check 通过。",
+        "P7 本轮新增单条复核历史只读审计：导出页展示当前质量报告的人工结论、复核时间、最后更新和内部发布状态；该区域只读，不保存、不发布、不启动 Worker 或模型，也不代表平台审核通过。焦点测试 Export.final-quality-review.test.mjs 25/25 通过；全量 npm test 303/303、类型检查、生产构建、服务端语法、UI 机械检测、桌面/390px 浏览器只读验收和 git diff --check 通过。",
+        "P7 本轮新增当前输入保存状态只读对比：导出页会比较当前表单草稿与已保存质量报告快照，逐项提示尚未保存的改动或与报告一致，避免人工终审时把未保存输入误认为已留证；该面板只读，不保存、不发布、不启动 Worker 或模型。焦点测试 Export.final-quality-review.test.mjs 26/26 通过；全量 npm test 304/304、类型检查、生产构建、服务端语法、UI 机械检测、桌面/390px 浏览器只读验收通过。",
+        "P7 本轮新增终审摘要本地留档：导出页可复制或下载当前单条回归样本的终审摘要，内容包含项目/导出/质量报告、技术状态、人工结论、覆盖类型、当前输入保存状态、证据保存状态和审批前缺口；该摘要只读，不保存、不发布、不启动 Worker 或模型，不代表平台审核通过或稳定盈利。焦点测试 Export.final-quality-review.test.mjs 27/27 通过；全量 npm test 305/305、类型检查、生产构建、服务端语法、UI 机械检测、桌面/390px 浏览器只读验收通过。",
+        "P7 本轮新增打印版人工终审签核清单：终审摘要面板增加本地打印入口，打印内容包含样本信息、四项人工证据保存状态、当前输入保存状态、审批前缺口、复核历史和签核空栏；打印只调用 window.print()，不保存、不发布、不启动 Worker 或模型。焦点测试 Export.final-quality-review.test.mjs 28/28 通过；全量 npm test 306/306、类型检查、生产构建、服务端语法、Impeccable、桌面/390px 浏览器和打印媒体验收通过。该清单仍是内部终审留档，不代表平台审核通过或稳定盈利。",
+        "P7 本轮按真实证据完成 export #33 代理终审：画面抽帧与字幕安全区通过，广播机空镜明确记录人物一致性“不适用”，音频记录 AAC/响度/measurable 信号但不冒充真实听感，质量报告 #5 保存为 rework；同时新增并测试“人物一致性不适用”状态，避免空镜头被强行记录为人物一致性通过。该轮通过全量 npm test 310/310、类型检查、生产构建、服务端语法和 git diff --check，但没有创建新导出、没有启动 Worker、没有调用模型。",
+        "P7 本轮为 export #33 保存终剪回归覆盖标签 empty-scene 和 dialogue，仅更新导出配置审计元数据；不改变 rework 结论，不启动 Worker、不调用模型、不创建新导出。项目 12 的覆盖统计由 0/6 更新为 2/6，仍缺单人、双人、旁白、动作四类。",
+        "P7 本轮新增音频人工听感复核门禁：approved 必须记录实际完整播放、对白清晰度、响度平衡、爆音/失真、对白同步或同步不适用；回归统计和发布合规包都会重新验证这些字段，旧的“音频正常”泛化备注不能进入发布候选。最新 npm test 为 316/316，没有重新生成 export #33，没有启动 Worker 或调用模型。",
+        "P7 本轮继续补齐证据传播：发布候选快照同时保存音频六项结构化听感字段，导出页逐项展示完整播放、清晰度、响度平衡、失真和对白同步状态；焦点测试 60/60 通过，未触发真实发布、Worker 或模型。",
+          "P7 本轮继续收紧人工听感入口：最新导出和单条回归样本必须先播放到结尾，才可勾选“实际完整播放过成片”；切换样本会清空本地播放完成状态，且“对白同步”和“对白同步不适用”互斥。随后完成 export #35 同源播放真实验证：Chrome 前台播放到 ended=true、duration=5、readyState=4、error=null，听感复核复选框已解锁。焦点测试 34/34、全量测试 377/377、类型检查、生产构建和契约测试通过；没有自动填写人工结论、发布平台证据、启动 Worker 或调用模型。",
+          "P7 本轮完成同源播放链路真实验证：API 返回带短时签名的 playbackUrl，Vite /storage 代理正常，签名媒体支持 HEAD 与 Range 206；Chrome 前台实际播放 export #35 到 ended=true，听感门禁已解锁。该结果只证明浏览器播放链路和门禁可用，不代表人工听感已批准、平台审核通过或稳定收入。",
+          "P7 上一轮修正终剪回归取样口径：旧实现曾从最多 50 条混合状态候选记录中筛选 completed/failed，canceled/queued/running 不占用 10 条真实尝试名额，并返回 sampleScope.includedStatuses、sampleScope.excludedStatuses 和 excludedCount；导出页展示纳入/排除说明，且回归数据未加载时不会访问空对象。焦点测试 final-quality-regression.test.mjs 10/10、Export.final-quality-review.test.mjs 34/34、全量 npm test 320/320、类型检查、生产构建、服务端语法、diff 检查和 Impeccable 检测通过。该轮只修正统计口径，没有创建导出、启动 Worker、调用模型或把真实 10 条回归宣称为已完成。",
+           "P7 本轮继续修正终剪回归查询边界：数据库直接查询 completed/failed，取消、排队和运行中记录通过独立 COUNT(*) 统计，避免大量历史排除记录挤出较早的真实样本；服务层支持使用数据库排除计数，同时兼容纯函数调用的自动统计。焦点测试 final-quality-regression.test.mjs 11/11、全量 npm test 321/321、类型检查、生产构建、服务端语法、diff 检查和 Impeccable 检测通过。该轮没有启动 Worker、调用模型、创建导出或宣称真实 10 条回归已完成。",
+            "P7 本轮新增受控 Worker --dry-run 预检：--apply 与 --dry-run 互斥，二者都省略时拒绝；预检报告记录目标任务、COS 起始图可读性、签名 URL 生成、Provider 配置摘要、queueSnapshotBefore/After 和 queueBoundary 越界判定，但不启动 Worker、不调用模型、不修改 generation_jobs。焦点测试 controlled-recovery-worker.test.mjs 6/6；本轮未消费新的真实任务或宣称批量稳定。",
+            "P7 本轮完成项目 12 恢复队列只读核对：job 256 已 success，当前没有 queued 恢复任务；job 257-269 中 13 条因 ToAPI 源图上传连接超时失败。未重新入队、未调用模型；下一步是失败任务分诊与单条可回滚重试规划。",
+            "P7 本轮新增生产发布准备度总闸门：GET /api/projects/:projectId/production-readiness 聚合字幕/角色版本/缺失媒体/10 条回归/六类覆盖/发布合规/COS-CDN-备份-跨机器恢复/成本计价/平台数据/收入证据，输出阶段状态、阻塞项和 actionQueue；全量 npm test 396/396、类型检查、生产构建、服务端语法和 diff 检查通过。该入口只读，不写库、不启动 Worker、不调用模型，也不代表平台审核或稳定赚钱已完成。",
+            "P4 本轮新增市场爆款内容质量门禁：单集检查开场异常事件、冲突与代价、主角主动选择、不可逆变化、信息反转、结尾追更钩子和可视化场面；整季聚合反转/结尾钩子覆盖率，并接入整季结构锁定。新增 story-market-quality.test.mjs 3/3、story-quality.test.mjs 4/4 通过；尚未把规则代理结果宣称为爆款或收入证明。"
+      ]
+    };
+
+    const phaseOrder = [
+      ["planning", "规划"],
+      ["implementation", "开发"],
+      ["verification", "验证"],
+      ["complete", "完成"]
+    ];
+
+    const statusLabels = {
+      "TODO": "TODO",
+      "IN PROGRESS": "IN PROGRESS",
+      "BLOCKED": "BLOCKED",
+      "DONE": "DONE"
+    };
+
+    let activeFilter = "ALL";
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function statusClass(status) {
+      return `status-${status.toLowerCase().replaceAll(" ", "-")}`;
+    }
+
+    function projectInitials(name) {
+      const text = String(name || "").trim();
+      if (!text) return "PB";
+      const asciiWords = text.match(/[A-Za-z0-9]+/g);
+      if (asciiWords && asciiWords.length >= 2) {
+        return asciiWords.slice(0, 2).map((word) => word[0]).join("").toUpperCase();
+      }
+      if (asciiWords && asciiWords.length === 1) {
+        return asciiWords[0].slice(0, 2).toUpperCase();
+      }
+      return Array.from(text.replace(/\s+/g, "")).slice(0, 2).join("");
+    }
+
+    function taskStageLabel(taskId) {
+      const taskNumber = Number(String(taskId).replace(/\D/g, ""));
+      if (taskNumber <= 3) return "机会验证";
+      if (taskNumber <= 6) return "生产底座";
+      if (taskNumber <= 8) return "发布回归";
+      return "体验收口";
+    }
+
+    function taskStatusCopy(status) {
+      const copy = {
+        "DONE": "已完成验收，可作为后续依据。",
+        "IN PROGRESS": "正在推进，优先看证据和阻塞。",
+        "BLOCKED": "需要先解除阻塞再继续。",
+        "TODO": "待排期，暂未进入验收。"
+      };
+      return copy[status] || "等待确认状态。";
+    }
+
+    function taskMetaCopy(status) {
+      const copy = {
+        "DONE": "已进入验收证据池",
+        "IN PROGRESS": "当前推进中的交付项",
+        "BLOCKED": "等待阻塞解除",
+        "TODO": "待排期处理"
+      };
+      return copy[status] || "状态待确认";
+    }
+
+    function evidenceTags(task) {
+      const evidence = task.evidence;
+      const tags = [];
+      if (task.status === "TODO") tags.push("待补证据");
+      if (evidence.includes("测试")) tags.push("测试");
+      if (evidence.includes("类型检查")) tags.push("类型");
+      if (evidence.includes("构建")) tags.push("构建");
+      if (evidence.includes("浏览器")) tags.push("浏览器");
+      if (evidence.includes("阻塞")) tags.push("阻塞");
+      if (evidence.includes("通过")) tags.push("已验证");
+      return [...new Set(tags)].slice(0, 4);
+    }
+
+    function renderPhases() {
+      const currentIndex = Math.max(
+        0,
+        phaseOrder.findIndex(([key]) => key === projectProgress.phase)
+      );
+
+      document.querySelector("#phase-track").innerHTML = phaseOrder.map(([key, label], index) => {
+        const phaseClass = index < currentIndex
+          ? "is-complete"
+          : index === currentIndex
+            ? "is-current"
+            : "";
+        const marker = index < currentIndex ? "OK" : String(index + 1).padStart(2, "0");
+
+        return `
+          <div class="phase ${phaseClass}">
+            <span class="phase-marker">${marker}</span>
+            <span class="phase-name">${label}</span>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderTasks() {
+      const tasks = activeFilter === "ALL"
+        ? projectProgress.tasks
+        : projectProgress.tasks.filter((task) => task.status === activeFilter);
+      const list = document.querySelector("#task-list");
+
+      if (tasks.length === 0) {
+        list.innerHTML = `<div class="empty-task-list">当前筛选条件下没有任务。</div>`;
+        return;
+      }
+
+      list.innerHTML = tasks.map((task) => {
+        const stateClass = statusClass(task.status);
+        const evidence = escapeHtml(task.evidence);
+        const tags = evidenceTags(task);
+        return `
+        <article class="task-card ${stateClass}" aria-label="${escapeHtml(task.id)} ${escapeHtml(task.title)}">
+          <div class="task-id-cell">
+            <span class="task-id-badge" title="${escapeHtml(task.id)}">${escapeHtml(task.id)}</span>
+          </div>
+          <div class="task-main">
+            <span class="task-stage">${escapeHtml(taskStageLabel(task.id))}</span>
+            <h3 class="task-title">${escapeHtml(task.title)}</h3>
+            <p class="task-meta">${escapeHtml(taskMetaCopy(task.status))}</p>
+          </div>
+          <div class="task-status-cell">
+            <span class="status ${stateClass}">${escapeHtml(statusLabels[task.status] || task.status)}</span>
+            <span class="task-status-copy">${escapeHtml(taskStatusCopy(task.status))}</span>
+          </div>
+          <div class="task-evidence">
+            <div class="evidence-head">
+              <strong>证据摘要</strong>
+              <div class="evidence-tags">${tags.map((tag) => `<span class="evidence-tag">${escapeHtml(tag)}</span>`).join("")}</div>
+            </div>
+            <p title="${evidence}">${evidence}</p>
+          </div>
+        </article>
+        `;
+      }).join("");
+    }
+
+    function renderFilters() {
+      const filters = [
+        ["ALL", "全部"],
+        ["TODO", "待开始"],
+        ["IN PROGRESS", "进行中"],
+        ["BLOCKED", "已阻塞"],
+        ["DONE", "已完成"]
+      ];
+
+      const counts = {
+        "ALL": projectProgress.tasks.length,
+        "TODO": projectProgress.tasks.filter((task) => task.status === "TODO").length,
+        "IN PROGRESS": projectProgress.tasks.filter((task) => task.status === "IN PROGRESS").length,
+        "BLOCKED": projectProgress.tasks.filter((task) => task.status === "BLOCKED").length,
+        "DONE": projectProgress.tasks.filter((task) => task.status === "DONE").length
+      };
+
+      document.querySelector("#filters").innerHTML = filters.map(([value, label]) => `
+        <button class="filter ${value === activeFilter ? "is-selected" : ""}" type="button" data-filter="${value}" aria-pressed="${value === activeFilter ? "true" : "false"}">
+          <span>${label}</span>
+          <span class="filter-count">${counts[value]}</span>
+        </button>
+      `).join("");
+
+      document.querySelectorAll("[data-filter]").forEach((button) => {
+        button.addEventListener("click", () => {
+          activeFilter = button.dataset.filter;
+          renderFilters();
+          renderTasks();
+        });
+      });
+    }
+
+    function renderInfoList(selector, items, emptyText) {
+      const element = document.querySelector(selector);
+      element.innerHTML = items.length
+        ? items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+        : `<li>${escapeHtml(emptyText)}</li>`;
+    }
+
+    function renderDashboard() {
+      const total = projectProgress.tasks.length;
+      const done = projectProgress.tasks.filter((task) => task.status === "DONE").length;
+      const inProgress = projectProgress.tasks.filter((task) => task.status === "IN PROGRESS").length;
+      const blocked = projectProgress.tasks.filter((task) => task.status === "BLOCKED").length;
+      const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+
+      document.title = `${projectProgress.projectName} - 项目进度`;
+      document.querySelector("#project-name").textContent = projectProgress.projectName;
+      document.querySelector("#project-goal").textContent = projectProgress.goal;
+      document.querySelector("#updated-at").textContent = `更新于 ${projectProgress.updatedAt}`;
+      const configuredFocusTask = projectProgress.tasks.find((task) => task.id === projectProgress.focusTaskId);
+      const focusTask = (configuredFocusTask && configuredFocusTask.status !== "DONE" ? configuredFocusTask : null)
+        || projectProgress.tasks.find((task) => task.status === "IN PROGRESS")
+        || projectProgress.tasks.find((task) => task.status === "TODO")
+        || projectProgress.tasks.at(-1);
+      const nextTask = projectProgress.tasks.find((task) => task.status === "TODO");
+
+      document.querySelector("#focus-title").textContent = focusTask
+        ? focusTask.title
+        : "所有任务均已验收";
+      const focusEvidence = focusTask
+        ? focusTask.evidence
+        : "项目已满足全部确认的验收标准。";
+      document.querySelector("#focus-evidence").textContent = focusEvidence;
+      document.querySelector("#focus-evidence").setAttribute("title", focusEvidence);
+      document.querySelector("#focus-status").className = `status ${statusClass(focusTask?.status || "DONE")}`;
+      document.querySelector("#focus-status").textContent = statusLabels[focusTask?.status || "DONE"];
+      document.querySelector("#next-action").textContent = focusTask?.nextAction
+        ? `下一步：${focusTask.nextAction}`
+        : nextTask
+        ? `下一步：${nextTask.title}`
+        : "下一步：完成交付复盘";
+      document.querySelector("#progress-fill").style.setProperty("--progress-ratio", String(percent / 100));
+      document.querySelector("#progress-track").setAttribute("aria-valuenow", String(percent));
+      document.querySelector("#progress-count").textContent = `${done} / ${total} (${percent}%)`;
+      document.querySelector("#progress-description").textContent = total === 0
+        ? "等待确认任务范围"
+        : "仅计入已通过验收的任务";
+      document.querySelector("#done-count").textContent = done;
+      document.querySelector("#active-count").textContent = inProgress;
+      document.querySelector("#blocked-count").textContent = blocked;
+      document.querySelector("#task-summary").textContent =
+        `共 ${total} 项，已验收 ${done} 项，进行中 ${inProgress} 项，阻塞 ${blocked} 项。`;
+
+      const phaseLabels = {
+        planning: "规划阶段",
+        implementation: "开发阶段",
+        verification: "验证阶段",
+        complete: "已完成"
+      };
+      document.querySelector("#sidebar-brand-name").textContent = projectProgress.brandName || "Progress Board";
+      document.querySelector("#sidebar-brand-mark").textContent = projectInitials(projectProgress.brandName || projectProgress.projectName);
+      document.querySelector("#sidebar-project-name").textContent = projectProgress.projectName;
+      document.querySelector("#sidebar-phase").textContent = phaseLabels[projectProgress.phase] || projectProgress.phase;
+      document.querySelector("#sidebar-task-total").textContent = `${total} 项任务`;
+      document.querySelector("#sidebar-progress-fill").style.setProperty("--sidebar-ratio", String(percent / 100));
+      document.querySelector("#sidebar-progress-label").textContent = `${done} / ${total} 已验收`;
+      document.querySelector("#sidebar-progress-percent").textContent = `${percent}%`;
+      document.querySelector("#sidebar-sync").textContent = `同步于 ${projectProgress.updatedAt}`;
+
+      renderPhases();
+      renderFilters();
+      renderTasks();
+      renderInfoList("#blocker-list", projectProgress.blockers, "当前没有阻塞项。");
+      renderInfoList("#scope-list", projectProgress.scopeChanges, "范围没有变化。");
+    }
+
+    renderDashboard();
+  </script>
+</body>
+</html>

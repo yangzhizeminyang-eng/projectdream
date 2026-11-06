@@ -35,6 +35,8 @@ function isSameSpeaker(left, right) {
 }
 
 export function extractSpokenDialogue(dialogueText, characterName = '') {
+  // 从分镜对白中提取真正要交给 TTS 的台词。
+  // 会去掉“角色名：”前缀和表演说明，避免把导演提示也读出来。
   const source = normalizedText(dialogueText)
   if (!source) return ''
 

@@ -18,7 +18,8 @@ export function useCurrentProjectMeta() {
   const project = ref<ProjectDTO | null>(null)
   const projectLoading = ref(false)
 
-  const currentProjectId = computed(() => {
+const currentProjectId = computed(() => {
+    // 优先使用 URL query，只有菜单跳转没有带 query 时才使用 sessionStorage 兜底。
     const fromQuery = Number(route.query.projectId) || 0
     if (fromQuery > 0) return fromQuery
     return getWorkspaceContext()?.projectId || 0
@@ -38,6 +39,8 @@ export function useCurrentProjectMeta() {
   })
 
   async function loadCurrentProject(): Promise<void> {
+    // 路由变化时重新读取项目摘要，供顶部导航和侧栏展示名称/状态。
+    // 请求返回前如果用户已经切换项目，则丢弃旧请求结果。
     const projectId = currentProjectId.value
     if (!projectId) {
       project.value = null

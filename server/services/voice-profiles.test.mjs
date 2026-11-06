@@ -1,7 +1,32 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { inferCharacterVoiceTraits, recommendVoiceProfiles } from './voice-profiles.mjs'
+import { getDialogueSpeakerNames, inferCharacterVoiceTraits, isCharacterVoiceReady, recommendVoiceProfiles, resolveCharacterVoiceProfile } from './voice-profiles.mjs'
+
+test('resolves current-episode dialogue speakers and ignores silent dialogue', () => {
+  assert.deepEqual(getDialogueSpeakerNames([
+    { characterName: '唐宁', dialogueText: '赵衡：签了。唐宁（冷静）：我拒绝。' },
+    { characterName: '赵启明', dialogueText: '（无对白）' },
+  ], ['唐宁', '赵衡', '赵启明']), ['唐宁', '赵衡'])
+})
+
+test('a locked reference recording counts as a complete voice binding without a catalog profile', () => {
+  assert.equal(isCharacterVoiceReady({ voice_locked: 1, reference_audio_url: 'https://cdn.test/tangning.wav' }), true)
+  assert.equal(isCharacterVoiceReady({ voice_locked: 1 }), false)
+  assert.equal(isCharacterVoiceReady({ voice_locked: 0, voice_profile_key: 'female-adult-gentle' }), false)
+})
+
+test('a locked provider-created voice id counts as a complete character voice binding', () => {
+  assert.equal(isCharacterVoiceReady({
+    voice_locked: 1,
+    voice_setting: 'cosyvoice-v3.5-flash-vd-zhaoheng-123',
+    voice_design_json: JSON.stringify({
+      provider: 'qwen',
+      voiceId: 'cosyvoice-v3.5-flash-vd-zhaoheng-123',
+      targetModel: 'cosyvoice-v3.5-flash',
+    }),
+  }), true)
+})
 
 test('infers a 45 year old man and recommends the mature male profile', () => {
   const result = recommendVoiceProfiles({
@@ -76,4 +101,34 @@ test('senior male roles include rough elder alternatives', () => {
   assert.equal(result.traits.gender, 'male')
   assert.ok(result.items.some((item) => item.voiceId === 'Arthur'))
   assert.ok(result.items.some((item) => item.voiceId === 'Vincent'))
+})
+
+test('male character voice preview never falls back to the global female voice', () => {
+  const result = resolveCharacterVoiceProfile({
+    character: { name: '赵衡', gender: 'male', age_group: 'middle_aged' },
+  })
+
+  assert.equal(result.profile.gender, 'male')
+  assert.notEqual(result.profile.profileKey, 'female-young-warm')
+  assert.equal(result.error, null)
+})
+
+test('rejects binding a female system voice to a male character', () => {
+  const result = resolveCharacterVoiceProfile({
+    character: { name: '赵衡', gender: 'male' },
+    requestedProfileKey: 'female-adult-gentle',
+  })
+
+  assert.equal(result.profile, null)
+  assert.match(result.error, /男性角色.*女性声线/)
+})
+
+test('accepts a selected voice when its gender matches the character', () => {
+  const result = resolveCharacterVoiceProfile({
+    character: { name: '赵衡', gender: 'male' },
+    requestedProfileKey: 'male-adult-calm',
+  })
+
+  assert.equal(result.profile.profileKey, 'male-adult-calm')
+  assert.equal(result.error, null)
 })

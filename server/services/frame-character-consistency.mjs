@@ -35,6 +35,11 @@ function normalizedName(value) {
   return normalizedText(value).toLocaleLowerCase('zh-CN')
 }
 
+function normalizedVersionNo(value) {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
 function escapeRegExp(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -96,6 +101,97 @@ function visualSourceFor(storyboard) {
     storyboard.action_text ?? storyboard.actionText,
     storyboard.visual_prompt ?? storyboard.visualPrompt,
   ].filter(Boolean).join('\n')
+}
+
+function sanitizeHandOnlyText(value) {
+  return String(value || '').replace(/《?离职及保密协议》?/g, '空白法律文件')
+}
+
+function sanitizeHandOnlyEnvironmentText(value) {
+  return String(value || '')
+    .replace(/办公室(?:夜景|环境|背景)?/g, '冷色桌面光影')
+    .replace(/电脑蓝光/g, '冷色轮廓光')
+    .replace(/办公桌背景/g, '浅景深背景')
+}
+
+export function isHandOnlyShot(storyboard = {}) {
+  return /(?:只|仅)[^。\n；;]*(?:拍|保留|呈现|展示)?[^。\n；;]*(?:手|手部)/.test(
+    visualSourceFor(storyboard),
+  )
+}
+
+function isVisualMention(characterName, source) {
+  const name = normalizedName(characterName)
+  if (!name || !source.includes(name)) return false
+  const segments = source.split(/[。！？；\n]/).filter((segment) => segment.includes(name))
+  return segments.some((segment) => {
+    if (/(?:屏幕|手机|邮件|短信|通知|发件人|文字|字幕|显示|标注)[^。！？；\n]{0,30}/.test(segment)) {
+      return false
+    }
+    if (/(?:语音|声音|画外音|广播|视频内容|录音)[^。！？；\n]{0,30}/.test(segment)) {
+      return false
+    }
+    return true
+  })
+}
+
+function parseContinuityContract(storyboard = {}) {
+  const raw = storyboard.continuity_contract_json ?? storyboard.continuityContract
+  if (raw && typeof raw === 'object') return raw
+  try {
+    const parsed = JSON.parse(String(raw || ''))
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function buildShotEntityBoundaryPrompt(storyboard = {}) {
+  const contract = parseContinuityContract(storyboard)
+  if (!contract) return { prompt: '', negativePrompt: '' }
+
+  const source = visualSourceFor(storyboard)
+  const handOnly = /只拍[^。\n；;]*(?:手|手部)|仅[^。\n；;]*(?:手|手部)/.test(source)
+  const visibleEntities = Array.isArray(contract.visibleEntities)
+    ? contract.visibleEntities
+        .map(normalizedText)
+        .map((value) => (handOnly ? sanitizeHandOnlyText(value) : value))
+        .filter(Boolean)
+    : []
+  const forbiddenEntities = Array.isArray(contract.forbiddenEntities)
+    ? contract.forbiddenEntities.map(normalizedText).filter(Boolean)
+    : []
+  const parts = [
+    '【画面实体边界】',
+    visibleEntities.length
+      ? `本镜头只允许出现：${[...new Set(visibleEntities)].join('、')}。`
+      : '',
+    forbiddenEntities.length
+      ? `本镜头禁止出现：${[...new Set(forbiddenEntities)].join('、')}。`
+      : '',
+    contract.primarySubject
+      ? `本镜头唯一视觉主体：${handOnly
+          ? sanitizeHandOnlyText(normalizedText(contract.primarySubject))
+          : normalizedText(contract.primarySubject)}。`
+      : '',
+    contract.primaryAction
+      ? `只完成一个主动作：${handOnly
+          ? sanitizeHandOnlyText(normalizedText(contract.primaryAction))
+          : normalizedText(contract.primaryAction)}。`
+      : '',
+    handOnly
+      ? '这是手部与道具特写；角色只允许以明确的手部局部出现，不得出现角色的脸、头部、完整上半身或其他人物的手。'
+      : '',
+    '不得因为角色绑定或参考图而自动补出未声明的人物、肢体、道具、屏幕文字或场景元素。',
+  ]
+
+  return {
+    prompt: parts.filter(Boolean).join('\n'),
+    negativePrompt: [
+      ...forbiddenEntities,
+      handOnly ? '角色脸部、头部、完整上半身、其他人物的手、人物半身' : '',
+    ].filter(Boolean).join(', '),
+  }
 }
 
 function explicitlyKeepsAudioOffscreen(segment, name) {
@@ -210,7 +306,7 @@ function mentionedCharacters(storyboard, characters) {
     const name = normalizedName(character.name)
     return (
       name &&
-      visualSource.includes(name) &&
+      isVisualMention(name, visualSource) &&
       !isViewpointOnlyMention(character, storyboard) &&
       isVisuallyPresent(character, storyboard)
     )
@@ -219,8 +315,17 @@ function mentionedCharacters(storyboard, characters) {
 
 function characterConstraint(character, primaryCharacterId) {
   const traits = inferVisualTraits(character)
+  const referenceImageStorageKey = normalizedText(
+    character.reference_image_storage_key ?? character.referenceImageStorageKey,
+  ) || null
+  const referenceImageUrl = normalizedText(
+    character.reference_image_url ?? character.referenceImageUrl,
+  ) || null
   return {
     characterId: Number(character.id),
+    characterVersionNo: normalizedVersionNo(
+      character.character_version_no ?? character.characterVersionNo,
+    ),
     name: normalizedText(character.name),
     roleTag: normalizedText(character.role_tag ?? character.roleTag) || null,
     gender: traits.gender,
@@ -228,16 +333,31 @@ function characterConstraint(character, primaryCharacterId) {
     ageGroup: traits.ageGroup,
     ageGroupLabel: AGE_GROUP_LABELS[traits.ageGroup] || '未明确',
     appearance: normalizedText(character.appearance) || null,
+    costume: normalizedText(character.costume) || null,
     personality: normalizedText(character.personality) || null,
-    referenceImageUrl: normalizedText(character.reference_image_url ?? character.referenceImageUrl) || null,
-    hasReferenceImage: Boolean(character.reference_image_url ?? character.referenceImageUrl),
+    referenceImageStorageKey,
+    referenceImageUrl,
+    hasReferenceImage: Boolean(referenceImageStorageKey || referenceImageUrl),
     isPrimary: Number(character.id) === Number(primaryCharacterId),
     inferredGender: traits.inferredGender,
     inferredAge: traits.inferredAge,
   }
 }
 
+function handOnlyCostume(character) {
+  const costume = normalizedText(character?.costume)
+  const normalized = costume.replace(/和(?=[^、，；;。]*(?:裤|鞋|靴|袜))/g, '、')
+  const allowed = normalized
+    .split(/[、,，；;。]/)
+    .map((item) => item.trim())
+    .filter((item) => /衬衫|外套|袖口|腕表|手表|手链|戒指|手套/.test(item))
+  return [...new Set(allowed)].join('、') || '中性色袖口与腕表'
+}
+
 export function resolveFrameCharacterContext(storyboard = {}, characters = []) {
+  // 把分镜中的 characterName/characterId 解析成角色库里的真实角色。
+  // 同时收集性别、年龄、外貌、参考图等约束，供提示词和图片供应商使用。
+  // ready=false 表示当前分镜存在阻塞问题，前端应该先让用户修正角色绑定。
   const availableCharacters = Array.isArray(characters) ? characters.filter((item) => item?.id && item?.name) : []
   const resolvedPrimary = resolvePrimaryCharacter(storyboard, availableCharacters)
   let primaryCharacter = resolvedPrimary.character
@@ -330,31 +450,52 @@ export function buildFrameConsistencyPrompt({
   projectVisualStyle,
 }) {
   const safeContext = context || resolveFrameCharacterContext(storyboard, [])
-  const basePrompt = normalizedText(prompt || storyboard.visual_prompt || storyboard.visualPrompt)
+  const handOnly = isHandOnlyShot(storyboard)
+  const rawBasePrompt = normalizedText(prompt || storyboard.visual_prompt || storyboard.visualPrompt)
+  const basePrompt = handOnly
+    ? sanitizeHandOnlyEnvironmentText(sanitizeHandOnlyText(rawBasePrompt))
+        .replace(/手机屏幕(?:清楚)?显示[“"][^”"]+[”"][，,]?\s*/g, '')
+        .replace(/屏幕文字必须为简体中文且只出现这一句[。.]?/g, '')
+        .trim()
+    : rawBasePrompt
   const referenceCharacters = safeContext.characters
-    .filter((character) => character.referenceImageUrl)
+    .filter((character) => character.referenceImageUrl || character.referenceImageStorageKey)
+    .filter(() => !isHandOnlyShot(storyboard))
     .slice(0, 3)
   const referenceOrder = new Map(
     referenceCharacters.map((character, index) => [character.characterId, index + 1]),
   )
-  const characterLines = safeContext.characters.map((character, index) =>
-    [
+  const characterLines = safeContext.characters.map((character, index) => {
+    if (handOnly) {
+      return [
+        `${index + 1}. ${character.name}（仅局部手部身份）`,
+        `只保留袖口与腕表：${handOnlyCostume(character)}`,
+        '不描绘脸、头部、发型、年龄、完整身体或人物半身，不使用人物参考图。',
+      ]
+        .filter(Boolean)
+        .join('；')
+    }
+    return [
       `${index + 1}. ${character.name}${character.isPrimary ? '（主要主体）' : '（同框角色）'}`,
+      character.characterVersionNo ? `角色版本=v${character.characterVersionNo}` : '',
       `性别=${character.genderLabel}，${characterGenderRule(character)}`,
       `年龄=${character.ageGroupLabel}`,
       character.roleTag ? `身份=${character.roleTag}` : '',
-      character.appearance ? `固定外貌与服装=${character.appearance}` : '',
+      character.appearance ? `固定外貌=${character.appearance}` : '',
+      character.costume ? `固定服装与随身物件=${character.costume}` : '',
       referenceOrder.has(character.characterId)
         ? `定妆参考图序号=${referenceOrder.get(character.characterId)}，这是该角色唯一身份参考；脸型、五官比例、发型、体态、服装和随身物件必须严格以参考图为准`
         : '',
     ]
       .filter(Boolean)
-      .join('；'),
-  )
+      .join('；')
+  })
   const promptParts = [
     basePrompt,
     normalizedText(storyboard.action_text ?? storyboard.actionText)
-      ? `镜头动作：${normalizedText(storyboard.action_text ?? storyboard.actionText)}`
+      ? `镜头动作：${handOnly
+          ? sanitizeHandOnlyText(normalizedText(storyboard.action_text ?? storyboard.actionText))
+          : normalizedText(storyboard.action_text ?? storyboard.actionText)}`
       : '',
     [
       normalizedText(storyboard.shot_type ?? storyboard.shotType),
@@ -367,10 +508,20 @@ export function buildFrameConsistencyPrompt({
           normalizedText(storyboard.composition),
         ].filter(Boolean).join('，')}`
       : '',
-    projectVisualStyle ? `项目固定视觉风格：${normalizedText(projectVisualStyle)}` : '',
+    projectVisualStyle
+      ? `项目固定视觉风格：${handOnly
+          ? sanitizeHandOnlyEnvironmentText(normalizedText(projectVisualStyle))
+          : normalizedText(projectVisualStyle)}`
+      : '',
     characterLines.length ? `【角色一致性硬约束】\n${characterLines.join('\n')}` : '',
-    characterLines.length
+    characterLines.length && !handOnly
       ? '必须保持以上角色同一张脸、同一脸型、同一五官比例、同一发型、同一体态、同一固定服装和同一随身物件；不得改变姓名对应关系、性别、年龄层、脸部、发型、体态或固定服装；不得换脸，不得年轻化或老化，不得用其他人物替代主要主体；每张定妆参考图只用于对应序号的角色。'
+      : '',
+    handOnly
+      ? '这是局部手部与道具镜头，手机屏幕保持留白，模型不要生成任何屏幕文字；手机和协议上的准确中文由后期叠加。'
+      : '',
+    handOnly
+      ? '【手部静物构图锁定】局部手部静物特写，前臂只能从画面边缘进入并在手腕处裁切；不出现躯干、胸口、肩膀、头部或人物半身。背景只保留不可辨认的浅景深色块，不出现可识别的办公室、显示器、键盘、台灯、灯具、指示灯或支架。所有文件和屏幕保持无文字留白，禁止生成任何汉字、英文、数字或乱码。'
       : '',
   ].filter(Boolean)
   const negativeTerms = [
@@ -390,14 +541,44 @@ export function buildFrameConsistencyPrompt({
           '服装变化',
           '年龄变化',
           '体态不一致',
+          ...(handOnly
+            ? [
+                '躯干',
+                '胸口',
+                '肩膀',
+                '人物半身',
+                '办公室背景',
+                '显示器',
+                '电脑',
+                '键盘',
+                '台灯',
+                '灯具',
+                '指示灯',
+                '支架',
+                '文字',
+                '汉字',
+                '英文',
+                '数字',
+                '乱码',
+              ]
+            : []),
         ]
       : []),
   ].filter(Boolean)
+  const entityBoundary = buildShotEntityBoundaryPrompt(storyboard)
 
   return {
-    prompt: promptParts.join('\n'),
-    negativePrompt: [...new Set(negativeTerms)].join(', '),
-    referenceImageUrls: referenceCharacters.map((character) => character.referenceImageUrl),
+    prompt: [...promptParts, entityBoundary.prompt].filter(Boolean).join('\n'),
+    negativePrompt: [...new Set([...negativeTerms, entityBoundary.negativePrompt])]
+      .filter(Boolean)
+      .join(', '),
+    referenceImageStorageKeys: referenceCharacters
+      .map((character) => character.referenceImageStorageKey)
+      .filter(Boolean),
+    referenceImageUrls: referenceCharacters
+      .filter((character) => !character.referenceImageStorageKey)
+      .map((character) => character.referenceImageUrl)
+      .filter(Boolean),
   }
 }
 
@@ -408,6 +589,7 @@ export function createFrameCharacterSnapshot(context) {
     characterFree: Boolean(context?.characterFree),
     characters: (context?.characters || []).map((character) => ({
       characterId: character.characterId,
+      characterVersionNo: character.characterVersionNo,
       name: character.name,
       roleTag: character.roleTag,
       gender: character.gender,
@@ -415,7 +597,10 @@ export function createFrameCharacterSnapshot(context) {
       ageGroup: character.ageGroup,
       ageGroupLabel: character.ageGroupLabel,
       appearance: character.appearance,
-      referenceImageUrl: character.referenceImageUrl,
+      costume: character.costume,
+      ...(character.referenceImageStorageKey
+        ? { referenceImageStorageKey: character.referenceImageStorageKey }
+        : { referenceImageUrl: character.referenceImageUrl }),
       isPrimary: character.isPrimary,
       inferredGender: character.inferredGender,
       inferredAge: character.inferredAge,

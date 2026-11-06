@@ -2,12 +2,15 @@
  * @file 总纲提示词
  */
 
+import { buildGenrePromptContext } from '../genre-skill-profile.mjs'
+
 export function buildOutlinePrompts(project) {
   const projectName = project?.name || '未命名项目'
   const category = project?.category || '剧情 / 科幻'
   const targetDuration = project?.targetDuration || 90
   const narrativeVision = project?.narrativeVision || '请自行补足完整世界观和故事矛盾'
   const visualStyle = project?.visualStyle || '电影感、写实、可视化明确'
+  const genreContext = buildGenrePromptContext(category)
 
   return {
     systemPrompt: [
@@ -19,6 +22,7 @@ export function buildOutlinePrompts(project) {
       'scenes 必须是数组，每项包含：scene_no, title, summary, location, time_of_day, estimated_duration。',
       'estimated_duration 必须是正整数，单位是秒。',
       '内容要尽量具体，可拍摄，可继续流转到场景拆解和单场景剧本阶段。',
+      genreContext,
     ].join(' '),
     userPrompt: [
       `项目名：${projectName}`,
@@ -26,6 +30,7 @@ export function buildOutlinePrompts(project) {
       `目标时长（分钟）：${targetDuration}`,
       `世界观 / 叙事愿景：${narrativeVision}`,
       `视觉风格：${visualStyle}`,
+      genreContext,
       '',
       '请生成：',
       '1. 一句话 logline',

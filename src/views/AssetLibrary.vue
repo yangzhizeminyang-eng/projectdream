@@ -3,773 +3,998 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import WorkspaceLayout from '@/components/WorkspaceLayout.vue'
 import {
+  getAssetCanvas,
   getProject,
-  getProjectAssets,
-  type ProjectAssetItemDTO,
-  type ProjectAssetsDTO,
+  type AssetCanvasDTO,
+  type AssetNodeType,
   type ProjectDTO,
 } from '@/api/project'
 import { getWorkspaceContext, setWorkspaceContext } from '@/lib/context'
+import { groupAssetNodeImages, selectAssetPreviewImage } from '@/lib/asset-image-groups'
 
 type PageState = 'missing-project' | 'loading' | 'empty' | 'error' | 'ready'
-type ViewMode = 'grid' | 'list'
 type SortKey = 'newest' | 'oldest' | 'name'
-type TypeFilter = 'all' | 'character' | 'image' | 'video' | 'audio'
+type ParsedTypeFilter = 'all' | AssetNodeType
 
 const route = useRoute()
 const router = useRouter()
 
 const projectId = computed(() => {
   const fromQuery = Number(route.query.projectId) || 0
-  if (fromQuery > 0) return fromQuery
-  return getWorkspaceContext()?.projectId || 0
+  return fromQuery > 0 ? fromQuery : getWorkspaceContext()?.projectId || 0
 })
 
 const pageState = ref<PageState>('loading')
 const project = ref<ProjectDTO | null>(null)
-const payload = ref<ProjectAssetsDTO | null>(null)
+const parsedCanvas = ref<AssetCanvasDTO | null>(null)
 const errorMsg = ref('')
 const searchKeyword = ref('')
-const viewMode = ref<ViewMode>('grid')
 const sortKey = ref<SortKey>('newest')
-const activeType = ref<TypeFilter>('all')
-const activeStatus = ref('all')
+const parsedType = ref<ParsedTypeFilter>('all')
 
-const summary = computed(() => payload.value?.summary || null)
-const allItems = computed<ProjectAssetItemDTO[]>(() => payload.value?.items || [])
+const parsedNodes = computed(() => {
+  const nodes = parsedCanvas.value?.nodes || []
+  const keyword = searchKeyword.value.trim().toLowerCase()
+  const byType = parsedType.value === 'all'
+    ? nodes
+    : nodes.filter((node) => node.nodeType === parsedType.value)
+  const searched = keyword
+    ? byType.filter((node) =>
+        [node.label, node.appearanceLabel, parsedTypeLabel(node.nodeType)]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+          .includes(keyword),
+      )
+    : byType
 
-const statusOptions = computed(() => {
-  const counts = new Map<string, number>()
-  for (const item of allItems.value) {
-    counts.set(item.status, (counts.get(item.status) || 0) + 1)
-  }
+  return [...searched].sort((a, b) => {
+    if (sortKey.value === 'name') return a.label.localeCompare(b.label, 'zh-CN')
+    return 0
+  })
+})
 
+const parsedGroups = computed(() => {
+  const nodeMap = new Map(parsedNodes.value.map((node) => [node.id, node]))
+  return (parsedCanvas.value?.groups || [])
+    .map((group) => ({
+      ...group,
+      nodes: group.nodeIds
+        .map((nodeId) => nodeMap.get(nodeId))
+        .filter((node): node is AssetCanvasDTO['nodes'][number] => Boolean(node)),
+    }))
+    .filter((group) => group.nodes.length)
+})
+
+const parsedTabs = computed(() => {
+  const byType = parsedCanvas.value?.summary.byType
   return [
-    { key: 'all', label: '全部状态', count: allItems.value.length },
-    ...Array.from(counts.entries()).map(([key, count]) => ({
-      key,
-      label: statusLabel(key),
-      count,
-    })),
+    { key: 'all' as const, label: '全部', icon: 'dashboard', count: parsedCanvas.value?.summary.total || 0 },
+    { key: 'character' as const, label: '角色', icon: 'person', count: byType?.character || 0 },
+    { key: 'scene' as const, label: '场景', icon: 'landscape', count: byType?.scene || 0 },
+    { key: 'prop' as const, label: '道具', icon: 'category', count: byType?.prop || 0 },
+    { key: 'material' as const, label: '素材', icon: 'texture', count: byType?.material || 0 },
   ]
 })
 
-const typeOptions = computed(() => [
-  { key: 'all' as const, label: '全部资产', count: allItems.value.length },
-  { key: 'character' as const, label: '角色', count: summary.value?.characterCount || 0 },
-  { key: 'image' as const, label: '静帧', count: summary.value?.imageCount || 0 },
-  { key: 'video' as const, label: '视频', count: summary.value?.videoCount || 0 },
-  { key: 'audio' as const, label: '音频', count: summary.value?.audioCount || 0 },
-])
+const activeTab = computed(() => parsedTabs.value.find((tab) => tab.key === parsedType.value) || parsedTabs.value[0]!)
+const totalNodes = computed(() => parsedCanvas.value?.summary.total || 0)
+const pendingCount = computed(() => parsedCanvas.value?.summary.pendingCount || 0)
+const readyCount = computed(() => parsedCanvas.value?.summary.readyCount || 0)
 
-const filteredItems = computed<ProjectAssetItemDTO[]>(() => {
-  const keyword = searchKeyword.value.trim().toLowerCase()
-
-  const items = allItems.value.filter((item) => {
-    if (activeType.value !== 'all' && item.assetType !== activeType.value) return false
-    if (activeStatus.value !== 'all' && item.status !== activeStatus.value) return false
-    if (!keyword) return true
-
-    const haystack = [
-      item.name,
-      item.subtitle,
-      item.sceneTitle,
-      item.shotNo,
-      item.assetType,
-      item.status,
-      item.trackType,
-      item.characterName,
-      item.voiceName,
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase()
-
-    return haystack.includes(keyword)
-  })
-
-  return [...items].sort((a, b) => {
-    if (sortKey.value === 'name') {
-      return a.name.localeCompare(b.name, 'zh-CN')
-    }
-
-    const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime()
-    const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime()
-    return sortKey.value === 'oldest' ? aTime - bTime : bTime - aTime
-  })
-})
-
-const sortLabel = computed(() => {
-  if (sortKey.value === 'newest') return '最新'
-  if (sortKey.value === 'oldest') return '最早'
-  return '名称'
-})
-
-const viewModeLabel = computed(() => (viewMode.value === 'grid' ? '切到列表' : '切到网格'))
-
-function assetTypeLabel(type: ProjectAssetItemDTO['assetType']): string {
-  if (type === 'character') return '角色'
-  if (type === 'image') return '静帧'
-  if (type === 'video') return '视频'
-  return '音频'
+function parsedTypeLabel(type: AssetNodeType): string {
+  return ({ character: '角色', scene: '场景', prop: '道具', material: '素材' })[type]
 }
 
-function typeBadgeClass(type: ProjectAssetItemDTO['assetType']): string {
-  if (type === 'character') {
-    return 'border-sky-400/30 bg-sky-400/10 text-sky-200'
-  }
-  if (type === 'image') {
-    return 'border-amber-400/30 bg-amber-400/10 text-amber-200'
-  }
-  if (type === 'video') {
-    return 'border-rose-400/30 bg-rose-400/10 text-rose-200'
-  }
-  return 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+function parsedTypeIcon(type: AssetNodeType): string {
+  return ({ character: 'person', scene: 'landscape', prop: 'category', material: 'texture' })[type]
 }
 
-function statusLabel(status: string): string {
-  if (status === 'confirmed') return '已确认'
-  if (status === 'candidate') return '候选'
-  if (status === 'archived') return '已归档'
-  if (status === 'draft') return '草稿'
-  if (status === 'finalized') return '已定稿'
-  if (status === 'done') return '已完成'
-  return status || '未知'
+function parsedNodeStateLabel(state: string): string {
+  return state === 'confirmed' ? '已锁定' : state === 'ready' ? '有候选图' : '待补充'
 }
 
-function statusClass(status: string): string {
-  if (status === 'confirmed' || status === 'finalized' || status === 'done') {
-    return 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
-  }
-  if (status === 'candidate' || status === 'draft') {
-    return 'border-amber-400/30 bg-amber-400/10 text-amber-200'
-  }
-  if (status === 'archived') {
-    return 'border-slate-400/30 bg-slate-400/10 text-slate-200'
-  }
-  return 'border-outline-variant bg-white/5 text-on-surface-variant'
+function nodePreviewImage(node: AssetCanvasDTO['nodes'][number]) {
+  return selectAssetPreviewImage(
+    groupAssetNodeImages(node.images, node.nodeType),
+    node.nodeType,
+  ) || node.confirmedImage || node.images[0] || null
 }
 
-function filterButtonClass(active: boolean): string {
-  return active
-    ? 'border-primary/60 bg-primary/12 text-primary shadow-[0_0_0_1px_rgba(240,181,111,0.12)]'
-    : 'border-outline-variant bg-black/15 text-on-surface hover:border-primary/40 hover:bg-white/5'
+function cycleSort(): void {
+  sortKey.value = sortKey.value === 'newest' ? 'oldest' : sortKey.value === 'oldest' ? 'name' : 'newest'
 }
 
-function formatUpdated(item: ProjectAssetItemDTO): string {
-  const value = item.updatedAt || item.createdAt
-  if (!value) return '时间未知'
-
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '时间未知'
-
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-function trackLabel(trackType?: string | null): string {
-  if (trackType === 'dialogue') return '对白'
-  if (trackType === 'narration') return '旁白'
-  if (trackType === 'music') return '音乐'
-  if (trackType === 'sfx') return '音效'
-  return '音频'
-}
-
-function durationLabel(seconds?: number | null): string {
-  if (!Number.isFinite(Number(seconds)) || Number(seconds) <= 0) return '时长未设置'
-  return `${Number(seconds)}s`
-}
-
-function sourceLabel(item: ProjectAssetItemDTO): string {
-  if (item.assetType === 'character') return '项目级角色资产'
-
-  if (item.assetType === 'audio') {
-    const parts: string[] = [trackLabel(item.trackType)]
-    if (item.sceneNo) parts.push(`Scene ${String(item.sceneNo).padStart(2, '0')}`)
-    else parts.push('项目级')
-    if (item.characterName) parts.push(item.characterName)
-    if (item.versionNo) parts.push(`V${item.versionNo}`)
-    return parts.join(' / ')
-  }
-
-  const parts: string[] = []
-  if (item.sceneNo) parts.push(`Scene ${String(item.sceneNo).padStart(2, '0')}`)
-  if (item.shotNo) parts.push(item.shotNo)
-  if (item.versionNo) parts.push(`V${item.versionNo}`)
-  return parts.join(' / ') || '来源信息待补全'
-}
-
-function detailChips(item: ProjectAssetItemDTO): string[] {
-  const chips: string[] = [sourceLabel(item)]
-  if (item.sceneTitle) chips.push(item.sceneTitle)
-  if (item.assetType === 'audio' && item.voiceName) chips.push(`音色：${item.voiceName}`)
-  if (item.assetType === 'audio' && item.durationSeconds) chips.push(`时长：${durationLabel(item.durationSeconds)}`)
-  return chips
-}
-
-function mediaIconName(item: ProjectAssetItemDTO): string {
-  if (item.assetType === 'character') return 'person'
-  if (item.assetType === 'image') return 'image'
-  if (item.assetType === 'video') return 'videocam'
-  return 'graphic_eq'
-}
-
-function toggleSort(): void {
-  sortKey.value =
-    sortKey.value === 'newest' ? 'oldest' : sortKey.value === 'oldest' ? 'name' : 'newest'
-}
-
-function toggleViewMode(): void {
-  viewMode.value = viewMode.value === 'grid' ? 'list' : 'grid'
+function sortLabel(): string {
+  return sortKey.value === 'newest' ? '最新' : sortKey.value === 'oldest' ? '最早' : '名称'
 }
 
 function goDashboard(): void {
   router.push('/dashboard')
 }
 
-function goScenes(): void {
-  if (!projectId.value) {
-    router.push('/dashboard')
-    return
-  }
+function pipelineQuery(): Record<string, string> {
+  const value = route.query.pipelineRunId
+  return value ? { pipelineRunId: String(value) } : {}
+}
 
+function goStudio(): void {
+  if (!projectId.value) return goDashboard()
   router.push({
-    path: '/workspace/scenes',
-    query: { projectId: String(projectId.value) },
+    path: '/workspace/studio',
+    query: {
+      projectId: String(projectId.value),
+      view: 'overview',
+      ...pipelineQuery(),
+    },
   })
 }
 
-function openAsset(item: ProjectAssetItemDTO): void {
+function openParsedNode(node: AssetCanvasDTO['nodes'][number]): void {
   if (!projectId.value) return
+  router.push({
+    path: '/workspace/assets/canvas',
+    query: {
+      projectId: String(projectId.value),
+      nodeId: String(node.id),
+      type: node.nodeType,
+      ...pipelineQuery(),
+    },
+  })
+}
 
-  if (item.assetType === 'character' && item.characterId) {
-    router.push({
-      path: '/workspace/character/detail',
-      query: {
-        projectId: String(projectId.value),
-        characterId: String(item.characterId),
-      },
-    })
-    return
-  }
-
-  if (item.assetType === 'image' && item.sceneId && item.storyboardId) {
-    router.push({
-      path: '/workspace/frame/result',
-      query: {
-        projectId: String(projectId.value),
-        sceneId: String(item.sceneId),
-        storyboardId: String(item.storyboardId),
-      },
-    })
-    return
-  }
-
-  if (item.assetType === 'video' && item.sceneId && item.storyboardId) {
-    router.push({
-      path: '/workspace/video',
-      query: {
-        projectId: String(projectId.value),
-        sceneId: String(item.sceneId),
-        storyboardId: String(item.storyboardId),
-      },
-    })
-    return
-  }
-
-  if (item.assetType === 'audio') {
-    router.push({
-      path: '/workspace/audio',
-      query: {
-        projectId: String(projectId.value),
-        ...(item.sceneId ? { sceneId: String(item.sceneId) } : {}),
-      },
-    })
-    return
-  }
-
-  goScenes()
+function openScript(): void {
+  if (!projectId.value) return goDashboard()
+  router.push({
+    path: '/workspace/studio/script',
+    query: {
+      projectId: String(projectId.value),
+      ...pipelineQuery(),
+    },
+  })
 }
 
 async function loadAssets(): Promise<void> {
   if (!projectId.value) {
     pageState.value = 'missing-project'
-    project.value = null
-    payload.value = null
     return
   }
 
   pageState.value = 'loading'
   errorMsg.value = ''
-
   try {
     setWorkspaceContext({ projectId: projectId.value })
-    const [projectData, result] = await Promise.all([
+    const [projectData, canvasData] = await Promise.all([
       getProject(projectId.value),
-      getProjectAssets(projectId.value),
+      getAssetCanvas(projectId.value),
     ])
-
     project.value = projectData
-    payload.value = result
-    pageState.value = result.items.length ? 'ready' : 'empty'
+    parsedCanvas.value = canvasData
+    pageState.value = canvasData.nodes.length ? 'ready' : 'empty'
   } catch (error) {
-    project.value = null
-    payload.value = null
-    errorMsg.value = error instanceof Error ? error.message : '资产页加载失败'
+    errorMsg.value = error instanceof Error ? error.message : '资产分类加载失败'
     pageState.value = 'error'
   }
 }
 
-watch(
-  () => route.query.projectId,
-  () => {
-    void loadAssets()
-  },
-)
-
-onMounted(() => {
-  void loadAssets()
-})
+watch(() => route.query.projectId, () => void loadAssets())
+onMounted(() => void loadAssets())
 </script>
 
 <template>
-  <WorkspaceLayout :show-side="true" :show-inspector="false" :no-padding="true">
-    <section
-      v-if="pageState === 'missing-project'"
-      class="flex h-full items-center justify-center bg-[#111210] p-8"
-    >
-      <div
-        class="max-w-2xl rounded-[24px] border border-outline-variant bg-surface-container-low p-8 text-center"
-      >
-        <h2 class="text-2xl font-semibold text-on-surface">缺少项目上下文</h2>
-        <p class="mt-3 text-sm leading-6 text-on-surface-variant">
-          资产中心是项目级页面，请先从某个项目工作区进入。
-        </p>
-        <button
-          class="burning-orange-btn mt-6 px-5 py-2 text-sm font-semibold"
-          type="button"
-          @click="goDashboard"
-        >
-          返回项目页
-        </button>
+  <WorkspaceLayout :show-side="true" :show-inspector="false" :no-padding="true" :self-managed-scroll="true">
+    <section v-if="pageState === 'missing-project'" class="asset-state-screen">
+      <div class="asset-state-card">
+        <span class="material-symbols-outlined">folder_open</span>
+        <h1>先选择一个项目</h1>
+        <p>资产分类会跟随项目剧本生成。请从项目总览进入资产中心。</p>
+        <button type="button" class="asset-primary-button" @click="goDashboard">返回项目总览</button>
       </div>
     </section>
 
-    <div
-      v-else-if="pageState === 'loading'"
-      class="flex h-full items-center justify-center bg-[#111210] text-sm text-[#c7b39a]"
-    >
-      正在加载资产中心...
-    </div>
+    <section v-else-if="pageState === 'loading'" class="asset-state-screen">
+      <div class="asset-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <p>正在整理剧本资产…</p>
+    </section>
 
-    <section
-      v-else-if="pageState === 'error'"
-      class="flex h-full items-center justify-center bg-[#111210] p-8"
-    >
-      <div
-        class="max-w-2xl rounded-[24px] border border-red-500/30 bg-red-500/5 p-8 text-center"
-      >
-        <h2 class="text-2xl font-semibold text-red-300">资产页加载失败</h2>
-        <p class="mt-3 text-sm leading-6 text-on-surface-variant">
-          {{ errorMsg || '请稍后重试。' }}
-        </p>
-        <div class="mt-6 flex flex-wrap justify-center gap-3">
-          <button
-            class="rounded-[14px] border border-outline-variant px-4 py-2 text-sm text-on-surface-variant"
-            type="button"
-            @click="loadAssets"
-          >
-            重新加载
-          </button>
-          <button
-            class="burning-orange-btn px-5 py-2 text-sm font-semibold"
-            type="button"
-            @click="goScenes"
-          >
-            返回工作区
-          </button>
+    <section v-else-if="pageState === 'error'" class="asset-state-screen">
+      <div class="asset-state-card">
+        <span class="material-symbols-outlined">error_outline</span>
+        <h1>资产分类没有加载完成</h1>
+        <p>{{ errorMsg }}</p>
+        <button type="button" class="asset-primary-button" @click="loadAssets">重新加载</button>
+      </div>
+    </section>
+
+    <section v-else-if="pageState === 'empty'" class="asset-state-screen">
+      <div class="asset-state-card asset-empty-card">
+        <span class="material-symbols-outlined">account_tree</span>
+        <h1>还没有剧本资产</h1>
+        <p>完成剧本解析后，角色、场景、道具和素材会自动归入这里。</p>
+        <button type="button" class="asset-primary-button" @click="openScript">进入剧本解析</button>
+      </div>
+    </section>
+
+    <div v-else class="asset-library-shell">
+      <aside class="asset-sidebar">
+        <div class="asset-sidebar-inner">
+          <header class="asset-brand">
+            <span class="asset-project-label">{{ project?.name || `项目 ${projectId}` }}</span>
+            <h1>资产中心</h1>
+            <p>剧本解析出的角色、场景、道具与素材，都从这里进入无限画布。</p>
+          </header>
+
+          <section class="asset-category-section">
+            <div class="asset-section-heading">
+              <span>剧本资产</span>
+              <strong>{{ totalNodes }}</strong>
+            </div>
+            <div class="asset-category-list">
+              <button
+                v-for="tab in parsedTabs"
+                :key="tab.key"
+                type="button"
+                class="asset-category-button"
+                :class="{ 'is-active': parsedType === tab.key }"
+                @click="parsedType = tab.key"
+              >
+                <span class="asset-category-name">
+                  <span class="material-symbols-outlined">{{ tab.icon }}</span>
+                  {{ tab.label }}
+                </span>
+                <strong>{{ tab.count }}</strong>
+              </button>
+            </div>
+          </section>
+
+          <section class="asset-sidebar-summary">
+            <div><span>待补充</span><strong>{{ pendingCount }}</strong></div>
+            <div><span>有候选图</span><strong>{{ readyCount }}</strong></div>
+          </section>
         </div>
-      </div>
-    </section>
+      </aside>
 
-    <section
-      v-else-if="pageState === 'empty'"
-      class="flex h-full items-center justify-center bg-[#111210] p-8"
-    >
-      <div
-        class="max-w-2xl rounded-[24px] border border-outline-variant bg-surface-container-low p-8 text-center"
-      >
-        <h2 class="text-2xl font-semibold text-on-surface">当前项目还没有资产</h2>
-        <p class="mt-3 text-sm leading-6 text-on-surface-variant">
-          先去角色、静帧、视频或音频模块生成一些真实数据，再回到资产中心统一查看。
-        </p>
-        <button
-          class="burning-orange-btn mt-6 px-5 py-2 text-sm font-semibold"
-          type="button"
-          @click="goScenes"
-        >
-          回到工作区继续处理
-        </button>
-      </div>
-    </section>
-
-    <div
-      v-else
-      class="min-h-full bg-[radial-gradient(circle_at_top_left,rgba(217,119,6,0.14),transparent_22%),linear-gradient(180deg,#111210_0%,#090909_100%)] text-on-surface"
-    >
-      <div class="grid min-h-full xl:grid-cols-[300px_minmax(0,1fr)]">
-        <aside
-          class="border-b border-outline-variant bg-black/35 px-4 py-5 backdrop-blur xl:border-b-0 xl:border-r xl:px-5"
-        >
-          <div class="space-y-4 xl:sticky xl:top-5">
-            <section
-              class="rounded-[22px] border border-outline-variant bg-surface-container-low/85 p-5"
-            >
-              <p class="text-[11px] uppercase tracking-[0.22em] text-primary">
-                {{ project?.name || `Project ${projectId}` }}
-              </p>
-              <h1 class="mt-3 text-[28px] font-semibold text-on-surface">资产中心</h1>
-              <p class="mt-3 text-sm leading-6 text-on-surface-variant">
-                把角色、静帧、视频和音频资产收拢到同一个项目级页面里统一查看和回跳。
-              </p>
-            </section>
-
-            <section
-              class="rounded-[22px] border border-outline-variant bg-surface-container-low/85 p-4"
-            >
-              <div class="flex items-center justify-between">
-                <span class="text-[11px] uppercase tracking-[0.22em] text-primary">资产类型</span>
-                <span class="text-sm text-on-surface-variant">{{ allItems.length }}</span>
-              </div>
-
-              <div class="mt-3 space-y-2">
-                <button
-                  v-for="option in typeOptions"
-                  :key="option.key"
-                  class="flex w-full items-center justify-between rounded-[14px] border px-4 py-3 text-left text-sm transition-all"
-                  :class="filterButtonClass(activeType === option.key)"
-                  type="button"
-                  @click="activeType = option.key"
-                >
-                  <span>{{ option.label }}</span>
-                  <strong class="text-sm font-semibold">{{ option.count }}</strong>
-                </button>
-              </div>
-            </section>
-
-            <section
-              class="rounded-[22px] border border-outline-variant bg-surface-container-low/85 p-4"
-            >
-              <div class="flex items-center justify-between">
-                <span class="text-[11px] uppercase tracking-[0.22em] text-primary">状态筛选</span>
-                <span class="text-sm text-on-surface-variant">{{ statusOptions.length - 1 }}</span>
-              </div>
-
-              <div class="mt-3 space-y-2">
-                <button
-                  v-for="option in statusOptions"
-                  :key="option.key"
-                  class="flex w-full items-center justify-between rounded-[14px] border px-4 py-3 text-left text-sm transition-all"
-                  :class="filterButtonClass(activeStatus === option.key)"
-                  type="button"
-                  @click="activeStatus = option.key"
-                >
-                  <span>{{ option.label }}</span>
-                  <strong class="text-sm font-semibold">{{ option.count }}</strong>
-                </button>
-              </div>
-            </section>
-
-            <section class="grid grid-cols-2 gap-3">
-              <article
-                class="rounded-[18px] border border-outline-variant bg-surface-container-low/85 px-4 py-4"
-              >
-                <p class="text-xs text-on-surface-variant">角色</p>
-                <p class="mt-2 text-2xl font-semibold text-on-surface">
-                  {{ summary?.characterCount || 0 }}
-                </p>
-              </article>
-              <article
-                class="rounded-[18px] border border-outline-variant bg-surface-container-low/85 px-4 py-4"
-              >
-                <p class="text-xs text-on-surface-variant">静帧</p>
-                <p class="mt-2 text-2xl font-semibold text-on-surface">
-                  {{ summary?.imageCount || 0 }}
-                </p>
-              </article>
-              <article
-                class="rounded-[18px] border border-outline-variant bg-surface-container-low/85 px-4 py-4"
-              >
-                <p class="text-xs text-on-surface-variant">视频</p>
-                <p class="mt-2 text-2xl font-semibold text-on-surface">
-                  {{ summary?.videoCount || 0 }}
-                </p>
-              </article>
-              <article
-                class="rounded-[18px] border border-outline-variant bg-surface-container-low/85 px-4 py-4"
-              >
-                <p class="text-xs text-on-surface-variant">音频</p>
-                <p class="mt-2 text-2xl font-semibold text-on-surface">
-                  {{ summary?.audioCount || 0 }}
-                </p>
-              </article>
-              <article
-                class="rounded-[18px] border border-primary/30 bg-primary/10 px-4 py-4"
-              >
-                <p class="text-xs text-primary">已确认视频</p>
-                <p class="mt-2 text-2xl font-semibold text-on-surface">
-                  {{ summary?.confirmedVideoCount || 0 }}
-                </p>
-              </article>
-              <article
-                class="rounded-[18px] border border-emerald-400/30 bg-emerald-400/10 px-4 py-4"
-              >
-                <p class="text-xs text-emerald-200">已确认音频</p>
-                <p class="mt-2 text-2xl font-semibold text-on-surface">
-                  {{ summary?.confirmedAudioCount || 0 }}
-                </p>
-              </article>
-            </section>
-          </div>
-        </aside>
-
-        <main class="min-w-0 px-4 py-5 xl:px-6">
-          <section
-            class="rounded-[24px] border border-outline-variant bg-surface-container-low/85 p-4 backdrop-blur"
-          >
-            <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-              <div class="flex flex-1 flex-col gap-3 sm:flex-row sm:items-center">
-                <input
-                  v-model="searchKeyword"
-                  type="text"
-                  class="h-11 w-full rounded-[14px] border border-outline-variant bg-black/25 px-4 text-sm text-on-surface outline-none transition focus:border-primary/60 focus:ring-2 focus:ring-primary/10 sm:max-w-[420px]"
-                  placeholder="搜索资产、场景、分镜、角色或音色"
-                />
-                <span class="text-sm text-on-surface-variant">筛出 {{ filteredItems.length }} 条</span>
-              </div>
-
-              <div class="flex flex-wrap gap-3">
-                <button
-                  class="rounded-[14px] border border-outline-variant px-4 py-2 text-sm text-on-surface transition hover:border-primary/40 hover:bg-white/5"
-                  type="button"
-                  @click="toggleViewMode"
-                >
-                  {{ viewModeLabel }}
-                </button>
-                <button
-                  class="rounded-[14px] border border-outline-variant px-4 py-2 text-sm text-on-surface transition hover:border-primary/40 hover:bg-white/5"
-                  type="button"
-                  @click="toggleSort"
-                >
-                  排序：{{ sortLabel }}
-                </button>
-                <button
-                  class="burning-orange-btn px-5 py-2 text-sm font-semibold"
-                  type="button"
-                  @click="goScenes"
-                >
-                  回到工作区
-                </button>
+      <main class="asset-main">
+        <div class="asset-main-inner">
+          <header class="asset-toolbar">
+            <div class="asset-toolbar-title">
+              <span class="material-symbols-outlined">account_tree</span>
+              <div>
+                <span>剧本资产库</span>
+                <strong>{{ activeTab.label }}</strong>
               </div>
             </div>
+            <div class="asset-toolbar-actions">
+              <label class="asset-search">
+                <span class="material-symbols-outlined">search</span>
+                <input v-model="searchKeyword" type="search" placeholder="搜索当前分类" />
+              </label>
+              <button type="button" class="asset-sort-button" @click="cycleSort">
+                排序：{{ sortLabel() }}
+              </button>
+              <button type="button" class="asset-return-button" @click="goStudio">
+                <span class="material-symbols-outlined">arrow_back</span>
+                工作台
+              </button>
+            </div>
+          </header>
+
+          <section class="asset-intro">
+            <div>
+              <p class="asset-intro-kicker">SCRIPT EXTRACTION</p>
+              <h2>{{ activeTab.label }}</h2>
+              <p>选择一个资产，直接进入无限画布。后续 Agent 会在画布内按剧情时空继续整理。</p>
+            </div>
+            <div class="asset-count-badge"><strong>{{ parsedNodes.length }}</strong><span>当前显示</span></div>
           </section>
 
-          <section class="mt-5 grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
-            <article
-              class="rounded-[22px] border border-outline-variant bg-surface-container-low/85 p-5 backdrop-blur"
-            >
-              <p class="text-[11px] uppercase tracking-[0.22em] text-primary">项目总资产</p>
-              <p class="mt-3 text-3xl font-semibold text-on-surface">
-                {{ summary?.totalCount || 0 }}
-              </p>
-              <p class="mt-3 text-sm leading-6 text-on-surface-variant">
-                当前项目下已经落库的角色、静帧、视频和音频资产总数。
-              </p>
-            </article>
+          <section v-if="parsedGroups.length" class="asset-group-list">
+            <article v-for="group in parsedGroups" :key="group.key" class="asset-group-section">
+              <header class="asset-group-heading">
+                <div>
+                  <p class="asset-group-kicker">
+                    <span class="material-symbols-outlined">{{ parsedTypeIcon(group.nodeType) }}</span>
+                    {{ group.typeLabel }}组
+                  </p>
+                  <h3>{{ group.label }}</h3>
+                </div>
+                <div class="asset-group-summary">
+                  <strong>{{ group.nodes.length }}</strong>
+                  <span>{{ group.nodeType === 'character' ? '个状态' : group.nodeType === 'scene' ? '个视角' : '个节点' }}</span>
+                </div>
+              </header>
 
-            <article
-              class="rounded-[22px] border border-outline-variant bg-surface-container-low/85 p-5 backdrop-blur"
-            >
-              <p class="text-[11px] uppercase tracking-[0.22em] text-primary">已确认静帧</p>
-              <p class="mt-3 text-3xl font-semibold text-on-surface">
-                {{ summary?.confirmedImageCount || 0 }}
-              </p>
-              <p class="mt-3 text-sm leading-6 text-on-surface-variant">
-                这些静帧通常是视频生成模块的上游输入。
-              </p>
-            </article>
-
-            <article
-              class="rounded-[22px] border border-outline-variant bg-surface-container-low/85 p-5 backdrop-blur"
-            >
-              <p class="text-[11px] uppercase tracking-[0.22em] text-primary">已确认视频</p>
-              <p class="mt-3 text-3xl font-semibold text-on-surface">
-                {{ summary?.confirmedVideoCount || 0 }}
-              </p>
-              <p class="mt-3 text-sm leading-6 text-on-surface-variant">
-                这些分镜已经具备进入导出和成片编辑模块的前置条件。
-              </p>
-            </article>
-
-            <article
-              class="rounded-[22px] border border-outline-variant bg-surface-container-low/85 p-5 backdrop-blur"
-            >
-              <p class="text-[11px] uppercase tracking-[0.22em] text-primary">已确认音频</p>
-              <p class="mt-3 text-3xl font-semibold text-on-surface">
-                {{ summary?.confirmedAudioCount || 0 }}
-              </p>
-              <p class="mt-3 text-sm leading-6 text-on-surface-variant">
-                这些音频现在也能在资产中心统一检索，并回跳到对应场景的音频页。
-              </p>
-            </article>
-          </section>
-
-          <section v-if="filteredItems.length" class="mt-5">
-            <div
-              class="gap-4"
-              :class="
-                viewMode === 'grid'
-                  ? 'grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3'
-                  : 'flex flex-col'
-              "
-            >
-              <article
-                v-for="item in filteredItems"
-                :key="`${item.assetType}-${item.id}`"
-                class="overflow-hidden rounded-[24px] border border-outline-variant bg-surface-container-low/85 backdrop-blur"
-                :class="viewMode === 'list' ? 'grid gap-0 md:grid-cols-[260px_minmax(0,1fr)]' : ''"
-              >
-                <div class="relative min-h-[210px] bg-black/50">
-                  <img
-                    v-if="item.previewUrl"
-                    :src="item.previewUrl"
-                    :alt="item.name"
-                    class="h-full w-full object-cover"
-                  />
-                  <div
-                    v-else-if="item.assetType === 'audio' && item.audioUrl"
-                    class="flex min-h-[210px] flex-col items-center justify-center gap-5 px-6 text-[#8e775c]"
-                  >
-                    <span class="material-symbols-outlined text-6xl">graphic_eq</span>
-                    <audio
-                      class="w-full max-w-[220px]"
-                      controls
-                      preload="none"
-                      :src="item.audioUrl"
+              <TransitionGroup name="asset-grid" tag="div" class="asset-card-grid">
+                <button
+                  v-for="node in group.nodes"
+                  :key="node.id"
+                  type="button"
+                  class="asset-node-card"
+                  @click="openParsedNode(node)"
+                >
+                  <div class="asset-node-preview">
+                    <img
+                      v-if="nodePreviewImage(node)?.imageUrl"
+                      :src="nodePreviewImage(node)?.imageUrl"
+                      :alt="node.label"
                     />
+                    <span v-else class="material-symbols-outlined asset-node-placeholder">{{ parsedTypeIcon(node.nodeType) }}</span>
                   </div>
-                  <div
-                    v-else
-                    class="flex min-h-[210px] items-center justify-center text-[#8e775c]"
-                  >
-                    <span class="material-symbols-outlined text-5xl">
-                      {{ mediaIconName(item) }}
-                    </span>
-                  </div>
-
-                  <div class="absolute left-3 top-3 flex flex-wrap gap-2">
-                    <span
-                      class="inline-flex min-h-7 items-center rounded-full border px-3 text-[11px] uppercase tracking-[0.08em]"
-                      :class="typeBadgeClass(item.assetType)"
-                    >
-                      {{ assetTypeLabel(item.assetType) }}
-                    </span>
-                    <span
-                      class="inline-flex min-h-7 items-center rounded-full border px-3 text-[11px] uppercase tracking-[0.08em]"
-                      :class="statusClass(item.status)"
-                    >
-                      {{ statusLabel(item.status) }}
-                    </span>
-                  </div>
-                </div>
-
-                <div class="flex min-w-0 flex-col gap-4 p-5">
-                  <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div class="min-w-0">
-                      <h3 class="truncate text-xl font-semibold text-on-surface">{{ item.name }}</h3>
-                      <p class="mt-2 text-sm leading-6 text-on-surface-variant">
-                        {{ item.subtitle || sourceLabel(item) }}
-                      </p>
+                  <div class="asset-node-copy">
+                    <div class="asset-node-labels">
+                      <span class="asset-node-type">
+                        <span class="material-symbols-outlined">{{ parsedTypeIcon(node.nodeType) }}</span>
+                        {{ parsedTypeLabel(node.nodeType) }}
+                      </span>
+                      <span class="asset-node-state">{{ parsedNodeStateLabel(node.state) }}</span>
                     </div>
-                    <span class="text-xs text-[#9d886c]">{{ formatUpdated(item) }}</span>
+                    <div class="asset-node-heading">
+                      <div>
+                        <h3>{{ node.label || `未命名${parsedTypeLabel(node.nodeType)}` }}</h3>
+                        <p>{{ node.appearanceLabel || '等待 Agent 继续补充资产设定' }}</p>
+                      </div>
+                      <span class="material-symbols-outlined">arrow_forward</span>
+                    </div>
+                    <div class="asset-node-meta">
+                      <span>{{ node.images.length ? `${node.images.length} 张候选图` : '尚未生成图像' }}</span>
+                      <span>打开画布</span>
+                    </div>
                   </div>
-
-                  <div class="flex flex-wrap gap-2 text-xs text-on-surface-variant">
-                    <span
-                      v-for="chip in detailChips(item)"
-                      :key="`${item.assetType}-${item.id}-${chip}`"
-                      class="rounded-full border border-outline-variant px-3 py-1"
-                    >
-                      {{ chip }}
-                    </span>
-                  </div>
-
-                  <div class="flex flex-wrap gap-3">
-                    <button
-                      class="rounded-[14px] border border-outline-variant px-4 py-2 text-sm text-on-surface transition hover:border-primary/40 hover:bg-white/5"
-                      type="button"
-                      @click="openAsset(item)"
-                    >
-                      {{ item.assetType === 'character' ? '查看详情' : item.assetType === 'audio' ? '回到音频模块' : '回到来源' }}
-                    </button>
-                    <a
-                      v-if="item.videoUrl"
-                      class="rounded-[14px] border border-primary/30 px-4 py-2 text-sm text-primary transition hover:bg-primary/10"
-                      :href="item.videoUrl"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      打开视频
-                    </a>
-                    <a
-                      v-if="item.audioUrl"
-                      class="rounded-[14px] border border-emerald-400/30 px-4 py-2 text-sm text-emerald-200 transition hover:bg-emerald-400/10"
-                      :href="item.audioUrl"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      打开音频
-                    </a>
-                  </div>
-                </div>
-              </article>
-            </div>
+                </button>
+              </TransitionGroup>
+            </article>
           </section>
 
-          <section
-            v-else
-            class="mt-5 rounded-[24px] border border-dashed border-outline-variant bg-surface-container-low/70 p-8 text-center"
-          >
-            <h3 class="text-xl font-semibold text-on-surface">当前筛选条件下没有结果</h3>
-            <p class="mt-3 text-sm leading-6 text-on-surface-variant">
-              可以尝试清空关键词，或切换资产类型、状态筛选后再看。
-            </p>
-            <div class="mt-5 flex flex-wrap justify-center gap-3">
-              <button
-                class="rounded-[14px] border border-outline-variant px-4 py-2 text-sm text-on-surface transition hover:border-primary/40 hover:bg-white/5"
-                type="button"
-                @click="searchKeyword = ''"
-              >
-                清空搜索
-              </button>
-              <button
-                class="burning-orange-btn px-5 py-2 text-sm font-semibold"
-                type="button"
-                @click="
-                  activeType = 'all';
-                  activeStatus = 'all';
-                "
-              >
-                重置筛选
-              </button>
-            </div>
+          <section v-else class="asset-filter-empty">
+            <span class="material-symbols-outlined">search_off</span>
+            <h3>当前分类没有匹配资产</h3>
+            <p>换一个分类，或清空搜索关键词继续查看。</p>
+            <button type="button" class="asset-secondary-button" @click="searchKeyword = ''; parsedType = 'all'">
+              查看全部资产
+            </button>
           </section>
-        </main>
-      </div>
+        </div>
+      </main>
     </div>
   </WorkspaceLayout>
 </template>
+
+<style scoped>
+.asset-library-shell {
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr);
+  min-height: 100%;
+  overflow: hidden;
+  background: #0b0d0c;
+  color: #f1ede6;
+}
+
+.asset-sidebar {
+  border-right: 1px solid rgba(171, 138, 94, 0.28);
+  background: linear-gradient(180deg, rgba(255, 183, 125, 0.045), transparent 28%), #101210;
+}
+
+.asset-sidebar-inner {
+  position: sticky;
+  top: 0;
+  padding: 28px 24px;
+}
+
+.asset-brand {
+  border-bottom: 1px solid rgba(171, 138, 94, 0.28);
+  padding-bottom: 26px;
+}
+
+.asset-project-label,
+.asset-section-heading,
+.asset-intro-kicker {
+  color: #f1a96f;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.asset-brand h1 {
+  margin: 14px 0 0;
+  font-size: 30px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.asset-brand p {
+  margin: 16px 0 0;
+  color: #a6aaa3;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.asset-category-section {
+  padding-top: 28px;
+}
+
+.asset-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.asset-section-heading strong {
+  color: #e7e0d7;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.asset-category-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.asset-category-button {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid rgba(171, 138, 94, 0.3);
+  padding: 0 12px;
+  color: #a6aaa3;
+  font-size: 12px;
+  text-align: left;
+  transition: border-color 180ms ease, background-color 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.asset-category-button:hover,
+.asset-category-button.is-active {
+  border-color: rgba(241, 169, 111, 0.75);
+  background: rgba(241, 169, 111, 0.09);
+  color: #ffd0a8;
+  transform: translateY(-1px);
+}
+
+.asset-category-name {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.asset-category-name .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.asset-category-button strong {
+  color: inherit;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.asset-sidebar-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 28px;
+  border-top: 1px solid rgba(171, 138, 94, 0.22);
+  padding-top: 22px;
+}
+
+.asset-sidebar-summary span,
+.asset-sidebar-summary strong {
+  display: block;
+}
+
+.asset-sidebar-summary span {
+  color: #89908a;
+  font-size: 11px;
+}
+
+.asset-sidebar-summary strong {
+  margin-top: 7px;
+  color: #eee8df;
+  font-family: ui-monospace, monospace;
+  font-size: 22px;
+}
+
+.asset-main {
+  min-width: 0;
+  overflow: auto;
+}
+
+.asset-main-inner {
+  width: min(1480px, 100%);
+  margin: 0 auto;
+  padding: 20px 28px 56px;
+}
+
+.asset-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid rgba(171, 138, 94, 0.28);
+  background: rgba(20, 23, 20, 0.96);
+  padding: 12px;
+}
+
+.asset-toolbar-title,
+.asset-toolbar-actions,
+.asset-search {
+  display: flex;
+  align-items: center;
+}
+
+.asset-toolbar-title {
+  gap: 10px;
+  color: #f4c29c;
+}
+
+.asset-toolbar-title > .material-symbols-outlined {
+  font-size: 22px;
+}
+
+.asset-toolbar-title div {
+  display: grid;
+  gap: 3px;
+}
+
+.asset-toolbar-title span {
+  color: #9ba39c;
+  font-size: 11px;
+}
+
+.asset-toolbar-title strong {
+  color: #f2eee6;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.asset-toolbar-actions {
+  min-width: 0;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.asset-search {
+  min-width: min(360px, 34vw);
+  height: 42px;
+  gap: 8px;
+  border: 1px solid rgba(171, 138, 94, 0.3);
+  padding: 0 12px;
+  background: rgba(7, 9, 8, 0.54);
+}
+
+.asset-search span {
+  color: #9ba39c;
+  font-size: 19px;
+}
+
+.asset-search input {
+  width: 100%;
+  min-width: 0;
+  outline: none;
+  background: transparent;
+  color: #f2eee6;
+  font-size: 13px;
+}
+
+.asset-search input::placeholder {
+  color: #7e857f;
+}
+
+.asset-sort-button,
+.asset-return-button,
+.asset-primary-button,
+.asset-secondary-button {
+  min-height: 42px;
+  border: 1px solid rgba(171, 138, 94, 0.36);
+  padding: 0 14px;
+  font-size: 12px;
+  transition: border-color 180ms ease, background-color 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.asset-sort-button,
+.asset-secondary-button {
+  color: #d7d0c7;
+}
+
+.asset-sort-button:hover,
+.asset-secondary-button:hover {
+  border-color: rgba(241, 169, 111, 0.72);
+  background: rgba(241, 169, 111, 0.08);
+  color: #ffd0a8;
+}
+
+.asset-return-button,
+.asset-primary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-color: transparent;
+  background: #e98208;
+  color: #160d04;
+  font-weight: 750;
+}
+
+.asset-return-button:hover,
+.asset-primary-button:hover {
+  background: #f39a26;
+  transform: translateY(-1px);
+}
+
+.asset-return-button .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.asset-intro {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 42px 0 20px;
+}
+
+.asset-intro h2 {
+  margin: 8px 0 0;
+  color: #f2eee6;
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+.asset-intro p:last-child {
+  max-width: 62ch;
+  margin: 10px 0 0;
+  color: #9fa59f;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.asset-count-badge {
+  display: grid;
+  min-width: 92px;
+  justify-items: end;
+  gap: 3px;
+}
+
+.asset-count-badge strong {
+  color: #f4c29c;
+  font-family: ui-monospace, monospace;
+  font-size: 28px;
+}
+
+.asset-count-badge span {
+  color: #8d968e;
+  font-size: 11px;
+}
+
+.asset-group-list {
+  display: grid;
+  gap: 36px;
+}
+
+.asset-group-section {
+  border-top: 1px solid rgba(171, 138, 94, 0.3);
+  padding-top: 18px;
+}
+
+.asset-group-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.asset-group-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #f1a96f;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.asset-group-kicker .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.asset-group-heading h3 {
+  margin-top: 7px;
+  color: #f2eee6;
+  font-size: 20px;
+}
+
+.asset-group-summary {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+  color: #8d968e;
+  font-size: 11px;
+}
+
+.asset-group-summary strong {
+  color: #f4c29c;
+  font-family: ui-monospace, monospace;
+  font-size: 24px;
+}
+
+.asset-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.asset-node-card {
+  overflow: hidden;
+  border: 1px solid rgba(171, 138, 94, 0.3);
+  background: #161916;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 220ms ease, box-shadow 220ms ease, transform 220ms ease;
+}
+
+.asset-node-card:hover,
+.asset-node-card:focus-visible {
+  border-color: rgba(241, 169, 111, 0.78);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
+  outline: none;
+  transform: translateY(-3px);
+}
+
+.asset-node-preview {
+  position: relative;
+  display: grid;
+  aspect-ratio: 16 / 9;
+  min-height: 0;
+  place-items: center;
+  overflow: hidden;
+  background: #f4f3f0;
+}
+
+.asset-node-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.asset-node-placeholder {
+  color: #aa8d6b;
+  font-size: 58px;
+}
+
+.asset-node-type,
+.asset-node-state {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  padding: 0 8px;
+  background: rgba(8, 10, 9, 0.76);
+  color: #f5c7a2;
+  font-size: 10px;
+}
+
+.asset-node-type {
+  border-color: rgba(241, 169, 111, 0.34);
+}
+
+.asset-node-state {
+  margin-left: auto;
+  color: #d8dfd8;
+}
+
+.asset-node-type .material-symbols-outlined {
+  font-size: 14px;
+}
+
+.asset-node-copy {
+  padding: 16px;
+}
+
+.asset-node-labels {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.asset-node-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.asset-node-heading h3 {
+  overflow: hidden;
+  color: #f2eee6;
+  font-size: 18px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-node-heading p {
+  overflow: hidden;
+  margin-top: 6px;
+  color: #9fa59f;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-node-heading > .material-symbols-outlined {
+  flex: 0 0 auto;
+  color: #9d8c78;
+  transition: color 180ms ease, transform 180ms ease;
+}
+
+.asset-node-card:hover .asset-node-heading > .material-symbols-outlined {
+  color: #f1a96f;
+  transform: translateX(3px);
+}
+
+.asset-node-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 18px;
+  border-top: 1px solid rgba(171, 138, 94, 0.23);
+  padding-top: 12px;
+  color: #8f9890;
+  font-size: 11px;
+}
+
+.asset-node-meta span:last-child {
+  color: #f1a96f;
+}
+
+.asset-filter-empty,
+.asset-state-screen {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  min-height: 420px;
+  color: #9fa59f;
+  text-align: center;
+}
+
+.asset-filter-empty {
+  border: 1px dashed rgba(171, 138, 94, 0.42);
+  padding: 56px 20px;
+}
+
+.asset-filter-empty .material-symbols-outlined,
+.asset-state-card > .material-symbols-outlined,
+.asset-loading-mark {
+  color: #d49a6b;
+  font-size: 42px;
+}
+
+.asset-filter-empty h3,
+.asset-state-card h1 {
+  margin-top: 14px;
+  color: #f2eee6;
+  font-size: 20px;
+}
+
+.asset-filter-empty p,
+.asset-state-card p {
+  max-width: 42ch;
+  margin-top: 8px;
+  color: #9fa59f;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.asset-filter-empty button,
+.asset-state-card button {
+  margin-top: 22px;
+}
+
+.asset-state-screen {
+  min-height: 100%;
+  background: #0b0d0c;
+}
+
+.asset-state-card {
+  display: grid;
+  justify-items: center;
+  max-width: 460px;
+  padding: 36px;
+  border: 1px solid rgba(171, 138, 94, 0.3);
+  background: #121512;
+}
+
+.asset-loading-mark {
+  display: flex;
+  gap: 7px;
+}
+
+.asset-loading-mark span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: asset-pulse 900ms ease-in-out infinite alternate;
+}
+
+.asset-loading-mark span:nth-child(2) { animation-delay: 120ms; }
+.asset-loading-mark span:nth-child(3) { animation-delay: 240ms; }
+
+.asset-state-screen > p {
+  margin-top: 14px;
+  color: #9fa59f;
+  font-size: 13px;
+}
+
+.asset-grid-enter-active,
+.asset-grid-leave-active {
+  transition: opacity 240ms ease, transform 240ms ease;
+}
+
+.asset-grid-enter-from,
+.asset-grid-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+@keyframes asset-pulse {
+  from { opacity: 0.35; transform: translateY(0); }
+  to { opacity: 1; transform: translateY(-4px); }
+}
+
+@media (max-width: 1100px) {
+  .asset-library-shell { grid-template-columns: 220px minmax(0, 1fr); }
+  .asset-main-inner { padding-inline: 20px; }
+  .asset-toolbar { align-items: flex-start; flex-direction: column; }
+  .asset-toolbar-actions { width: 100%; justify-content: stretch; }
+  .asset-search { min-width: 0; flex: 1; }
+}
+
+@media (max-width: 760px) {
+  .asset-library-shell {
+    display: block;
+    overflow: visible;
+  }
+  .asset-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid rgba(171, 138, 94, 0.28);
+  }
+  .asset-sidebar-inner { position: static; padding: 20px 16px; }
+  .asset-brand { padding-bottom: 20px; }
+  .asset-brand h1 { font-size: 26px; }
+  .asset-category-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .asset-category-button { min-height: 42px; justify-content: center; padding: 0 7px; }
+  .asset-category-name { gap: 0; }
+  .asset-category-name .material-symbols-outlined { display: none; }
+  .asset-category-button strong { display: none; }
+  .asset-sidebar-summary { display: none; }
+  .asset-main-inner { padding: 14px 14px 36px; }
+  .asset-toolbar-actions { flex-wrap: wrap; }
+  .asset-search { flex-basis: 100%; order: -1; }
+  .asset-intro { align-items: flex-start; margin-top: 28px; }
+  .asset-intro h2 { font-size: 24px; }
+  .asset-group-heading { align-items: flex-start; }
+  .asset-card-grid { grid-template-columns: 1fr; }
+  .asset-node-preview { min-height: 200px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .asset-category-button,
+  .asset-node-card,
+  .asset-node-preview img,
+  .asset-node-heading > .material-symbols-outlined,
+  .asset-grid-enter-active,
+  .asset-grid-leave-active,
+  .asset-loading-mark span {
+    transition: none;
+    animation: none;
+  }
+}
+</style>

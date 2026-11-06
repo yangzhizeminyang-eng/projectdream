@@ -1,6 +1,10 @@
-# 梦绘片场（ProjectDream）
+# 帧心帧意（ProjectDream）
 
-梦绘片场是面向智能漫剧和短视频生产的项目级工作台，当前已经跑通：
+> 帧心帧意，每一帧都出自你的班底
+
+**在线演示**：<https://projectdream.dpdns.org>（默认演示账号见下方「快速启动」）
+
+帧心帧意是面向智能漫剧和短视频生产的项目级工作台，当前已经跑通：
 
 `项目 -> 总纲 -> 场景 -> 剧本 -> 角色 -> 分镜 -> 静帧 -> 视频 -> 音频 -> 成片草稿 -> 导出记录`
 
@@ -11,17 +15,19 @@
 正式生产前建议补齐三件事：
 
 - 将当前项目迁移为独立 Git 仓库，避免 `D:/` 级仓库把其他目录混进版本管理。
-- 将生成媒体转存对象存储，替代本地 `.codex-runtime` 文件目录。
-- 将任务中心升级为独立队列和后台执行器，减少长耗时生成任务对单进程服务的依赖。
+- 为生产环境配置腾讯云 COS 私有桶，替代单机 `.codex-runtime` 媒体目录。
+- 将队列进一步升级为可观测、多实例协调的后台执行器；当前已拆分独立 Worker 进程。
 
 ## 当前能力
 
 - 兼容 OpenAI 接口的文本模型：总纲、单场剧本、角色档案、角色感知分镜
-- 智谱 `cogview-3-flash`：免费生成分镜静帧与角色定妆图，输出持久化到本地并校验横屏比例
+- Agnes `agnes-image-2.1-flash`：生成分镜静帧与角色定妆图，支持角色参考图、2K 输出、本地持久化和横屏比例校验
 - 图片生成采用持久化后台任务；页面提交后可离开，任务中心持续显示排队、执行、成功或供应商错误。可通过 `FRAME_FALLBACK_MODELS` 配置模型降级链。
-- 智谱大模型 `cogvideox-flash`：已确认静帧转候选视频；本地图先上传为公网 HTTPS 地址，再异步轮询任务结果
-- DashScope `qwen3-tts-flash` / `qwen3-tts-instruct-flash`：按角色年龄、性别和气质生成对白、旁白与音色试听
-- 混合成片：关键镜头使用真实视频，其余镜头转为动态静帧，FFmpeg 合并音轨、烧录字幕并输出 MP4
+- Agnes Video 2.5 Flash `agnes-video-2.5-flash`：官方当前限时免费视频型号，固定 720P，支持关键帧与最多 5 张图像参考；创建任务按每分钟 2 次限流，供应商任务 ID 可恢复，结果完成后自动下载到本地
+- Wan 3.0 `wan3.0-video` / `wan3.0-video-prime`：原生异步 `/api/v1/services/aigc/video-generation/video-synthesis` 协议，单镜 2–30 秒，支持首帧/尾帧、720P/1080P/480P 与 9:16/16:9 等比例；源图在 Worker 内转 Base64，避免把本地或私有 URL 交给公网供应商
+- 严格镜头连续性：每镜生成前把前一镜确认尾帧作为 Wan `first_frame` 输入；成片合成时先在统一分辨率/色彩范围内标准化全部镜头，再把每个切点的前镜尾帧写入后镜首帧，并用帧哈希验收
+- DashScope `qwen3-tts-flash` / `qwen3-tts-instruct-flash`：合成常规对白与旁白；CosyVoice v3.5 根据中文声线设计提示创建角色专属 `voice_id`，试听确认后锁定，正式对白与再次试听复用同一 ID 和目标模型。AI 文本服务余额不足时会明确标记为规则兜底设计，不会伪装成 Agent 生成。
+- 混合成片：关键镜头使用真实视频，其余镜头转为动态静帧，FFmpeg 合并音轨、烧录字幕并输出 MP4；分集成片默认保留视频模型生成的环境音，避免无旁白时导出静音
 - 资产与版本：候选记录、主版本确认、来源回跳、任务聚合
 - 角色一致性：角色 ID 绑定、改名事务同步、生成前角色校验、性别/年龄/外貌硬约束、多人参考图和生成快照
 - 导演关键帧：起始帧 / 结束帧模式、承接上一镜头、AI 优化两帧提示词、AI 拆分子分镜、AI 拆分多人对白
@@ -35,6 +41,7 @@
 - MySQL 8、`mysql2`
 - 兼容 OpenAI 的接口、ToAPI、智谱大模型、DashScope 接口
 - 腾讯云 / 阿里云短信 SDK（可选）
+- 腾讯云 COS：私有桶媒体存储与短时签名 URL（生产环境）
 
 ## 快速启动
 
@@ -49,8 +56,9 @@ npm run dev:full
 ```
 
 - 前端：`http://localhost:5173`
-- 后端：`http://127.0.0.1:3001`
-- 健康检查：`http://127.0.0.1:3001/api/health`
+- API 网关（FastAPI，`api-service/`）：`http://127.0.0.1:8000`（`uvicorn app.main:app --port 8000` 启动，脚本与生产 `api` 服务同源）
+- 健康检查：`http://127.0.0.1:8000/health`（就绪检查 `/ready` 探测 MySQL 连通性）
+- 后台：`npm run dev:full` 会同时启动独立 Worker，负责生成任务与 FFmpeg 导出。
 
 如果 `5173` 已被占用，Vite 会自动切到下一个可用端口，例如 `5174`。
 
@@ -67,12 +75,20 @@ npm run dev:full
 | 能力 | 服务商 | 默认模型 | 关键变量 |
 |---|---|---|---|
 | 总纲 / 剧本 / 角色 / 分镜 | 兼容 OpenAI 接口 | `AI_MODEL` | `AI_BASE_URL`、`AI_API_KEY` |
-| 图片与角色定妆 | 智谱大模型 | `cogview-3-flash` | `BIGMODEL_API_KEY`、`FRAME_*` |
-| 图生视频 | 智谱大模型 | `cogvideox-flash` | `BIGMODEL_API_KEY`、`VIDEO_*` |
-| 对白 / 旁白 / 音色试听 | DashScope | `qwen3-tts-flash`、`qwen3-tts-instruct-flash` | `DASHSCOPE_API_KEY`、`AUDIO_*` |
+| 图片与角色定妆 | Agnes | `agnes-image-2.1-flash` | `AGNES_API_KEY`、`FRAME_*` |
+| 图生视频 | Agnes Video 2.5 Flash | `agnes-video-2.5-flash` | `AGNES_API_KEY`、`VIDEO_*` |
+| 图生视频（首尾帧） | 阿里云 Wan 3.0 Workspace | `wan3.0-video` | `WAN_API_BASE_URL`、`WAN_API_KEY` 或 `VIDEO_API_KEY`、`VIDEO_PROVIDER=wan` |
+| 对白 / 旁白 | DashScope | `qwen3-tts-flash`、`qwen3-tts-instruct-flash` | `DASHSCOPE_API_KEY`、`AUDIO_*` |
+| 角色自定义音色 | DashScope CosyVoice | `cosyvoice-v3.5-flash` | `DASHSCOPE_API_KEY`、`AUDIO_VOICE_DESIGN_MODEL` |
 
-`cogvideox-flash` 当前按固定约 5 秒时长记录，默认关闭供应商水印；可通过
-`VIDEO_WATERMARK_ENABLED=true` 显式开启。
+Agnes 视频创建默认限制为每 60 秒最多 2 个任务，可通过
+`VIDEO_CREATE_RATE_LIMIT_MAX_REQUESTS` 和 `VIDEO_CREATE_RATE_LIMIT_WINDOW_MS` 调整。
+
+Wan 3.0 使用 Workspace 原生异步接口，`VIDEO_BASE_URL` 可以填写
+`https://<workspace>.<region>.maas.aliyuncs.com`，也可以填写带
+`/compatible-mode/v1` 的兼容地址（适配层会自动剥离）。不要把真实密钥写入仓库；
+如果模型设置中心也保存了视频配置，可用 `MODEL_SETTINGS_ENV_OVERRIDES` 让
+`VIDEO_PROVIDER,VIDEO_BASE_URL,VIDEO_API_KEY,VIDEO_MODEL,VIDEO_SIZE` 优先采用环境变量。
 
 文本任务可以通过 `AI_MODEL_OUTLINE`、`AI_MODEL_SCRIPT`、`AI_MODEL_STORYBOARD`、`AI_MODEL_CHARACTER` 分别覆盖默认模型。
 
@@ -164,7 +180,7 @@ npm run dev:full
 
 ### 9. 由确认静帧生成视频
 
-进入 `视频生成`，普通视频会优先使用已确认起始帧作为底图；如果已有结束帧，系统会把结束帧提示词合入动作终点约束。默认每次只生成 1 条候选视频，确认主版本后，该镜头会进入成片时间线。
+进入 `视频生成`，普通视频会优先使用已确认起始帧作为底图；如果已有结束帧，系统会把结束帧提示词合入动作终点约束。默认每次只生成 1 条候选视频。提交后任务进入后台，页面可离开；供应商任务 ID 会写入数据库，服务重启或失败重试时继续查询原任务。完成的视频会立即下载到 `.codex-runtime/generated-videos`，确认主版本后进入成片时间线。
 
 ![两帧视频生成页](项目开发文档/截图/视频生成模块/04-两帧视频生成页.png)
 
@@ -180,7 +196,7 @@ npm run dev:full
 
 ### 11. 在任务中心观察长耗时生成
 
-图片、视频、口型同步等长耗时任务会进入任务中心。可以查看排队、执行、成功、失败、重试和取消状态。
+图片、视频、口型同步等长耗时任务会进入任务中心。可以查看排队、执行、成功、失败和重试状态。普通视频和静帧任务会保存供应商任务信息，服务重启后可继续处理。
 
 ![任务中心](项目开发文档/截图/任务中心模块/01-入口页.png)
 
@@ -219,7 +235,40 @@ npm test
 npm run type-check
 npm run build
 node --check server/index.mjs
+python -m pytest api-service/tests -q
 ```
+
+### 本地媒体回填到 COS
+
+当 COS 只读预检已通过后，可把本机对象存储中的已生成媒体分批复制到 COS。此命令只复制 `.codex-runtime/object-storage/projects/{projectId}/` 下的对象，不修改数据库、不删除本地对象、不触发任何 AI 生成任务。
+
+先生成只读计划：
+
+```sh
+npm run replicate:local-media-to-cos -- --projects=12 --limit=5
+```
+
+确认报告后，明确执行一批上传：
+
+```sh
+npm run replicate:local-media-to-cos -- --projects=12 --limit=5 --apply
+```
+
+每个上传对象都会从 COS 读回并以 SHA-256 校验。报告会写到 `.codex-runtime/replication-reports/`；`--apply` 必须带 `--limit`，避免意外全量上传。
+
+需要优先回填某些恢复任务的起始帧时，传入完整对象 Key 清单，而不是依赖对象排序：
+
+```sh
+npm run replicate:local-media-to-cos -- --projects=12 --keys=projects/12/frames/storyboards/168/v1/c159.png --limit=1
+```
+
+`--keys` 仍受 `--projects` 范围限制；请求的 Key 不属于目标项目或本地不存在时不会被选中。2026-09-16 已用该方式把项目 12 的 16 个恢复起始帧上传到 COS，均通过回读 SHA-256 校验；对应恢复任务 254-269 已入队但尚未由真实 Worker 消费。
+
+### 独立 Worker
+
+本地的 `npm run dev:full` 现在会启动三个进程：前端、API、Worker。API 只处理登录、项目读写和任务入队；Worker 才轮询 `generation_jobs` 与 `export_records`，执行图片、视频、口型同步和 FFmpeg 导出。
+
+生产环境 Compose 同样包含 `worker-node` 服务（Node Worker 镜像 `Dockerfile.worker`），它不暴露端口，只共享 MySQL 和 `.codex-runtime` 媒体卷；Node HTTP API 角色已退役，`/api` 与四路媒体全部由 FastAPI `api` 服务承接。不要把 `APP_RUNTIME_ROLE=worker` 配到 `api`，也不要同时启动多个 Worker；当前阶段采用单 Worker，避免重复占用 2 核 2G 服务器资源。
 
 ## 当前边界
 
@@ -227,17 +276,17 @@ node --check server/index.mjs
 - 已生成音频保留生成时的音色与控制指令快照；角色重新绑定音色只影响后续生成，不会自动改写历史音频。
 - 静帧生成会阻止无法匹配角色库或缺少明确性别的人物镜头；旧项目需先补全角色并在分镜编辑器中绑定准确角色。
 - 导出模块已接入 FFmpeg 混合成片：真实视频与静帧统一转码、配音 / 旁白混音、字幕烧录和本地导出文件均在后台任务中完成；导出页可直接预览最新成片并查看历史记录。
-- 任务中心具备运行态与重试/取消表达，但还不是独立消息队列和后台执行器架构。
-- 模型返回的远程媒体会在导出前下载到本地工作目录；正式部署仍建议转存对象存储。
+- 任务中心已拆分 API 与单独 Worker 进程；当前仍未接入 Redis/BullMQ、多 Worker 协调、Worker 健康探针和死信队列。
+- 开发环境默认使用本地对象存储；生产环境可切换腾讯云 COS 私有桶。COS 签名 URL 可被视频供应商直接读取，避免把私有源图再次上传到 ToAPI。
 - 当前真实视频样本可能带供应商 AI 标识，公开发布前需要按平台规则和商业使用条款复核。
 
 ## 目录
 
 - `src/`：Vue 前端、路由和接口客户端
-- `server/index.mjs`：数据库初始化、迁移和 HTTP 接口
+- `server/index.mjs`：Worker 执行体入口（任务执行、FFmpeg 导出与数据库初始化；HTTP API 已由 `api-service/` FastAPI 承接）
 - `server/services/ai/`：文本模型适配、提示词和结构化解析
 - `server/services/frame.mjs`：图片与参考图生图
-- `server/services/video.mjs`：智谱大模型图生视频、公网源图中转及 Agnes 可选兼容
+- `server/services/video.mjs`：Agnes 图生视频、公网源图中转、创建限流、断点轮询与网络重试
 - `server/services/audio.mjs`：DashScope TTS
 - `项目开发文档/`：推进清单、问题记录和模块接入说明
 

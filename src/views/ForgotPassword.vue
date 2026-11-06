@@ -12,6 +12,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { sendSmsCode } from '@/api/auth'
+import CaptchaSlider from '@/components/auth/CaptchaSlider.vue'
 import BrandPanel from '@/components/BrandPanel.vue'
 
 const router = useRouter()
@@ -25,6 +26,7 @@ const submitting = ref(false)
 const showDevCode = ref(false)
 const devCode = ref('')
 const errorMessage = ref('')
+const captchaToken = ref('')
 
 /** 字段级错误 */
 const phoneError = ref('')
@@ -67,6 +69,7 @@ if (initialPhone) {
  */
 function onPhoneInput(value: string): void {
   phone.value = formatPhone(value)
+  captchaToken.value = ''
   phoneError.value = ''
   errorMessage.value = ''
 }
@@ -122,7 +125,12 @@ async function handleSendCode(): Promise<void> {
   try {
     errorMessage.value = ''
     const phoneNumber = normalizePhone(phone.value)
-    const result = await sendSmsCode(phoneNumber, 'reset')
+    if (!captchaToken.value) {
+      errorMessage.value = '请先完成滑块验证'
+      return
+    }
+    const result = await sendSmsCode(phoneNumber, 'reset', captchaToken.value)
+    captchaToken.value = ''
     startCountdown(result.countdown || 60)
     if (result.devCode) {
       devCode.value = result.devCode
@@ -271,6 +279,8 @@ onBeforeUnmount(() => {
               <span>开发环境验证码：{{ devCode }}</span>
             </p>
           </label>
+
+          <CaptchaSlider :phone="normalizePhone(phone)" @verified="captchaToken = $event" />
 
           <!-- 顶层错误提示 -->
           <p v-if="errorMessage" class="error-text error-text--top">

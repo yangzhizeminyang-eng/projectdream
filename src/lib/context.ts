@@ -18,6 +18,10 @@ export interface WorkspaceContext {
   projectId: number
   sceneId?: number
   storyboardId?: number
+  /** 当前单集编号（漫剧一体化工作台使用，向后兼容可缺省） */
+  episodeNo?: number
+  /** 当前 ProductionRun ID（漫剧一体化工作台使用，向后兼容可缺省） */
+  productionRunId?: number
 }
 
 interface StoredShape extends WorkspaceContext {
@@ -29,6 +33,8 @@ interface StoredShape extends WorkspaceContext {
  * @returns {WorkspaceContext | null} 不存在或数据异常时返回 null
  */
 export function getWorkspaceContext(): WorkspaceContext | null {
+  // workspace 页面经常需要知道“当前项目/场景/分镜”。
+  // 如果 URL query 丢了，就从 sessionStorage 里取最近一次上下文兜底。
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY)
     if (!raw) return null
@@ -43,6 +49,11 @@ export function getWorkspaceContext(): WorkspaceContext | null {
         typeof parsed.storyboardId === 'number' && Number.isFinite(parsed.storyboardId)
           ? parsed.storyboardId
           : undefined,
+      episodeNo: typeof parsed.episodeNo === 'number' && Number.isFinite(parsed.episodeNo) ? parsed.episodeNo : undefined,
+      productionRunId:
+        typeof parsed.productionRunId === 'number' && Number.isFinite(parsed.productionRunId)
+          ? parsed.productionRunId
+          : undefined,
     }
   } catch {
     return null
@@ -55,11 +66,15 @@ export function getWorkspaceContext(): WorkspaceContext | null {
  * @returns {void}
  */
 export function setWorkspaceContext(ctx: WorkspaceContext): void {
+  // 只存到 sessionStorage，刷新当前标签页还在，换浏览器会话就清空。
+  // 这样不会把上一次项目选择长期污染到用户下一次使用。
   try {
     const payload: StoredShape = {
       projectId: ctx.projectId,
       sceneId: ctx.sceneId,
       storyboardId: ctx.storyboardId,
+      episodeNo: ctx.episodeNo,
+      productionRunId: ctx.productionRunId,
       updatedAt: Date.now(),
     }
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(payload))

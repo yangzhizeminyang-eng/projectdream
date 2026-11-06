@@ -32,6 +32,8 @@ const changedCount = computed(() =>
   }).length,
 )
 
+// 设置页把后端返回的字段分组展示，但 draft 是页面本地编辑副本。
+// 用户点击保存前不会立即改动后端环境变量或数据库。
 function groupSummary(groupKey: string): string {
   if (!effective.value) return '-'
   if (groupKey === 'text') return `${providerLabel(effective.value.text.provider)} / ${effective.value.text.defaultModel}`
@@ -50,6 +52,7 @@ function groupKeyLabel(groupKey?: string): string {
 }
 
 function resetDraft(payload: ModelSettingsDTO): void {
+  // 用后端最新配置重建页面状态，同时清空旧草稿差异。
   groups.value = payload.groups
   fields.value = payload.fields
   effective.value = payload.effective
@@ -58,6 +61,7 @@ function resetDraft(payload: ModelSettingsDTO): void {
 }
 
 async function loadSettings(): Promise<void> {
+  // 读取模型设置和当前生效配置。
   pageState.value = 'loading'
   errorMsg.value = ''
   try {
@@ -70,6 +74,8 @@ async function loadSettings(): Promise<void> {
 }
 
 async function saveSettings(): Promise<void> {
+  // 把每个表单字段转换成后端需要的 key/value 数组。
+  // secret 类型允许留空，后端会保留原有密钥，避免误覆盖。
   if (saving.value) return
   saving.value = true
   errorMsg.value = ''
@@ -108,8 +114,10 @@ function providerLabel(value?: string): string {
   const labels: Record<string, string> = {
     'openai-compatible': '兼容 OpenAI 接口',
     mock: '模拟服务',
+    volcengine: '豆包 Seedream（火山方舟）',
     bigmodel: '智谱大模型',
     zhipu: '智谱大模型',
+    minimax: 'MiniMax 服务',
     toapi: 'ToAPI 服务',
     agnes: 'Agnes 服务',
     'trae-url': 'Trae 图片服务',
@@ -125,7 +133,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <WorkspaceLayout :show-side="true" :show-inspector="false" :no-padding="true">
+  <WorkspaceLayout :show-side="false" :show-inspector="false" :no-padding="true">
     <main class="settings-page">
       <section v-if="pageState === 'loading'" class="state-block">正在读取模型设置...</section>
 

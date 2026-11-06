@@ -1,0 +1,485 @@
+{
+  "generator": "node server/services/frame-character-consistency.mjs",
+  "cases": [
+    {
+      "name": "empty_storyboard_no_characters",
+      "description": "边界空值：分镜全空 + 角色库为空 → characterFree",
+      "storyboard": {
+        "id": 101,
+        "scene_id": 11,
+        "shot_no": "01",
+        "character_id": null,
+        "character_name": null,
+        "action_text": null,
+        "visual_prompt": null,
+        "duration_seconds": 4
+      },
+      "characters": [],
+      "expected": {
+        "ready": true,
+        "characterFree": true,
+        "primaryCharacterId": null,
+        "characters": [],
+        "blockers": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "single_character_confirmed",
+      "description": "单角色已确认：character_name 精确命中，档案齐全 + 定妆图 URL",
+      "storyboard": {
+        "id": 102,
+        "scene_id": 11,
+        "shot_no": "02",
+        "character_id": null,
+        "character_name": "林知夏",
+        "action_text": "林知夏站在值班台前，盯住异常信号灯。",
+        "visual_prompt": "固定中景，林知夏在监控室里转身看向屏幕。",
+        "duration_seconds": 5
+      },
+      "characters": [
+        {
+          "id": 9,
+          "name": "林知夏",
+          "role_tag": "主角",
+          "personality": "克制冷静",
+          "appearance": "黑色短发，灰色风衣",
+          "age_group": "young_adult",
+          "gender": "female",
+          "reference_image_url": "https://media.example.com/character-9.png",
+          "status": "confirmed"
+        },
+        {
+          "id": 12,
+          "name": "陈默",
+          "role_tag": "配角",
+          "personality": "沉默寡言",
+          "appearance": "寸头，深色夹克",
+          "age_group": "middle_aged",
+          "gender": "male",
+          "reference_image_url": "https://media.example.com/character-12.png",
+          "status": "confirmed"
+        }
+      ],
+      "expected": {
+        "ready": true,
+        "characterFree": false,
+        "primaryCharacterId": 9,
+        "characters": [
+          {
+            "characterId": 9,
+            "characterVersionNo": null,
+            "name": "林知夏",
+            "roleTag": "主角",
+            "gender": "female",
+            "genderLabel": "女性",
+            "ageGroup": "young_adult",
+            "ageGroupLabel": "青年（19-35岁）",
+            "appearance": "黑色短发，灰色风衣",
+            "costume": null,
+            "personality": "克制冷静",
+            "referenceImageStorageKey": null,
+            "referenceImageUrl": "https://media.example.com/character-9.png",
+            "hasReferenceImage": true,
+            "isPrimary": true,
+            "inferredGender": false,
+            "inferredAge": false
+          }
+        ],
+        "blockers": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "audio_only_identity_screen_mention",
+      "description": "声音角色绑定：AI 终端仅以屏幕文字出现 → 降级为无角色（characterFree）",
+      "storyboard": {
+        "id": 103,
+        "scene_id": 11,
+        "shot_no": "03",
+        "character_id": null,
+        "character_name": "AI终端",
+        "action_text": "电脑屏幕显示AI终端的警告文字。",
+        "visual_prompt": "特写键盘与屏幕，冷色轮廓光。",
+        "duration_seconds": 4
+      },
+      "characters": [
+        {
+          "id": 20,
+          "name": "AI终端",
+          "role_tag": "系统终端",
+          "personality": "无情绪",
+          "appearance": "无实体",
+          "age_group": null,
+          "gender": "neutral",
+          "reference_image_url": null,
+          "status": "confirmed"
+        }
+      ],
+      "expected": {
+        "ready": false,
+        "characterFree": false,
+        "primaryCharacterId": null,
+        "characters": [],
+        "blockers": [
+          "声音角色“AI终端”的镜头出现了可见人物，但画面描述没有明确点名；请确认其是否实体出镜并写入准确姓名"
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "name": "audio_identity_visual_presence_unnamed",
+      "description": "声音角色绑定：画面出现可见人物但未点名 → blocker",
+      "storyboard": {
+        "id": 104,
+        "scene_id": 11,
+        "shot_no": "04",
+        "character_id": null,
+        "character_name": "AI终端",
+        "action_text": "人物站在终端前盯着屏幕。",
+        "visual_prompt": "中景，冷色光影。",
+        "duration_seconds": 4
+      },
+      "characters": [
+        {
+          "id": 20,
+          "name": "AI终端",
+          "role_tag": "系统终端",
+          "personality": "无情绪",
+          "appearance": "无实体",
+          "age_group": null,
+          "gender": "neutral",
+          "reference_image_url": null,
+          "status": "confirmed"
+        }
+      ],
+      "expected": {
+        "ready": false,
+        "characterFree": false,
+        "primaryCharacterId": null,
+        "characters": [],
+        "blockers": [
+          "声音角色“AI终端”的镜头出现了可见人物，但画面描述没有明确点名；请确认其是否实体出镜并写入准确姓名"
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "name": "explicit_offscreen_voiceover",
+      "description": "画外音：镜头明确不出现人物且仅有画外音 → characterFree",
+      "storyboard": {
+        "id": 105,
+        "scene_id": 11,
+        "shot_no": "05",
+        "character_id": null,
+        "character_name": "温叙",
+        "action_text": "温叙的画外音响起。",
+        "visual_prompt": "温叙的画外音响起，镜头中没有任何人物出现，空荡走廊。",
+        "duration_seconds": 6
+      },
+      "characters": [
+        {
+          "id": 31,
+          "name": "温叙",
+          "role_tag": "旁白",
+          "personality": "低沉",
+          "appearance": "不出现正脸",
+          "age_group": "young_adult",
+          "gender": "male",
+          "reference_image_url": null,
+          "status": "confirmed"
+        }
+      ],
+      "expected": {
+        "ready": true,
+        "characterFree": true,
+        "primaryCharacterId": null,
+        "characters": [],
+        "blockers": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_reference_image",
+      "description": "缺定妆图：档案齐全但无 reference_image_url → blocker",
+      "storyboard": {
+        "id": 106,
+        "scene_id": 11,
+        "shot_no": "06",
+        "character_id": null,
+        "character_name": "陈默",
+        "action_text": "陈默走进机房，扫视主节点日志。",
+        "visual_prompt": "中景，机房冷光。",
+        "duration_seconds": 5
+      },
+      "characters": [
+        {
+          "id": 12,
+          "name": "陈默",
+          "role_tag": "配角",
+          "personality": "沉默寡言",
+          "appearance": "寸头，深色夹克",
+          "age_group": "middle_aged",
+          "gender": "male",
+          "reference_image_url": null,
+          "status": "confirmed"
+        }
+      ],
+      "expected": {
+        "ready": false,
+        "characterFree": false,
+        "primaryCharacterId": 12,
+        "characters": [
+          {
+            "characterId": 12,
+            "characterVersionNo": null,
+            "name": "陈默",
+            "roleTag": "配角",
+            "gender": "male",
+            "genderLabel": "男性",
+            "ageGroup": "middle_aged",
+            "ageGroupLabel": "中年（36-55岁）",
+            "appearance": "寸头，深色夹克",
+            "costume": null,
+            "personality": "沉默寡言",
+            "referenceImageStorageKey": null,
+            "referenceImageUrl": null,
+            "hasReferenceImage": false,
+            "isPrimary": true,
+            "inferredGender": false,
+            "inferredAge": false
+          }
+        ],
+        "blockers": [
+          "角色“陈默”尚未确认定妆图，请先生成并确认角色定妆图"
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "name": "multiple_characters_same_frame",
+      "description": "多角色：主角色绑定 + 另一角色在动作文本被同屏提及",
+      "storyboard": {
+        "id": 107,
+        "scene_id": 11,
+        "shot_no": "07",
+        "character_id": null,
+        "character_name": "林知夏",
+        "action_text": "林知夏把档案递给陈默，两人对视。",
+        "visual_prompt": "过肩镜头，两人隔桌对坐。",
+        "duration_seconds": 6
+      },
+      "characters": [
+        {
+          "id": 9,
+          "name": "林知夏",
+          "role_tag": "主角",
+          "personality": "克制冷静",
+          "appearance": "黑色短发，灰色风衣",
+          "age_group": "young_adult",
+          "gender": "female",
+          "reference_image_url": "https://media.example.com/character-9.png",
+          "status": "confirmed"
+        },
+        {
+          "id": 12,
+          "name": "陈默",
+          "role_tag": "配角",
+          "personality": "沉默寡言",
+          "appearance": "寸头，深色夹克",
+          "age_group": "middle_aged",
+          "gender": "male",
+          "reference_image_url": "https://media.example.com/character-12.png",
+          "status": "confirmed"
+        }
+      ],
+      "expected": {
+        "ready": true,
+        "characterFree": false,
+        "primaryCharacterId": 9,
+        "characters": [
+          {
+            "characterId": 9,
+            "characterVersionNo": null,
+            "name": "林知夏",
+            "roleTag": "主角",
+            "gender": "female",
+            "genderLabel": "女性",
+            "ageGroup": "young_adult",
+            "ageGroupLabel": "青年（19-35岁）",
+            "appearance": "黑色短发，灰色风衣",
+            "costume": null,
+            "personality": "克制冷静",
+            "referenceImageStorageKey": null,
+            "referenceImageUrl": "https://media.example.com/character-9.png",
+            "hasReferenceImage": true,
+            "isPrimary": true,
+            "inferredGender": false,
+            "inferredAge": false
+          },
+          {
+            "characterId": 12,
+            "characterVersionNo": null,
+            "name": "陈默",
+            "roleTag": "配角",
+            "gender": "male",
+            "genderLabel": "男性",
+            "ageGroup": "middle_aged",
+            "ageGroupLabel": "中年（36-55岁）",
+            "appearance": "寸头，深色夹克",
+            "costume": null,
+            "personality": "沉默寡言",
+            "referenceImageStorageKey": null,
+            "referenceImageUrl": "https://media.example.com/character-12.png",
+            "hasReferenceImage": true,
+            "isPrimary": false,
+            "inferredGender": false,
+            "inferredAge": false
+          }
+        ],
+        "blockers": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "bound_by_character_id",
+      "description": "绑定 id 直连：character_id 命中角色库 → primaryCharacterId",
+      "storyboard": {
+        "id": 108,
+        "scene_id": 11,
+        "shot_no": "08",
+        "character_id": 12,
+        "character_name": "陈默（旧名）",
+        "action_text": "陈默坐进值班椅。",
+        "visual_prompt": "近景，侧光。",
+        "duration_seconds": 4
+      },
+      "characters": [
+        {
+          "id": 12,
+          "name": "陈默",
+          "role_tag": "配角",
+          "personality": "沉默寡言",
+          "appearance": "寸头，深色夹克",
+          "age_group": "middle_aged",
+          "gender": "male",
+          "reference_image_url": "https://media.example.com/character-12.png",
+          "status": "confirmed"
+        }
+      ],
+      "expected": {
+        "ready": true,
+        "characterFree": false,
+        "primaryCharacterId": 12,
+        "characters": [
+          {
+            "characterId": 12,
+            "characterVersionNo": null,
+            "name": "陈默",
+            "roleTag": "配角",
+            "gender": "male",
+            "genderLabel": "男性",
+            "ageGroup": "middle_aged",
+            "ageGroupLabel": "中年（36-55岁）",
+            "appearance": "寸头，深色夹克",
+            "costume": null,
+            "personality": "沉默寡言",
+            "referenceImageStorageKey": null,
+            "referenceImageUrl": "https://media.example.com/character-12.png",
+            "hasReferenceImage": true,
+            "isPrimary": true,
+            "inferredGender": false,
+            "inferredAge": false
+          }
+        ],
+        "blockers": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "unmatched_character_name",
+      "description": "角色未确认绑定：character_name 无法匹配角色库 → blocker",
+      "storyboard": {
+        "id": 109,
+        "scene_id": 11,
+        "shot_no": "09",
+        "character_id": null,
+        "character_name": "无名路人",
+        "action_text": "无名路人走过大厅。",
+        "visual_prompt": "全景。",
+        "duration_seconds": 4
+      },
+      "characters": [
+        {
+          "id": 9,
+          "name": "林知夏",
+          "role_tag": "主角",
+          "personality": "克制冷静",
+          "appearance": "黑色短发",
+          "age_group": "young_adult",
+          "gender": "female",
+          "reference_image_url": "https://media.example.com/character-9.png",
+          "status": "confirmed"
+        }
+      ],
+      "expected": {
+        "ready": false,
+        "characterFree": false,
+        "primaryCharacterId": null,
+        "characters": [],
+        "blockers": [
+          "分镜角色“无名路人”无法匹配角色库，请先在分镜编辑器中绑定真实角色"
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "name": "ambiguous_role_label",
+      "description": "角色标签多义：character_name=配角 命中多个配角 → blocker",
+      "storyboard": {
+        "id": 110,
+        "scene_id": 11,
+        "shot_no": "10",
+        "character_id": null,
+        "character_name": "配角",
+        "action_text": "配角接起电话。",
+        "visual_prompt": "近景。",
+        "duration_seconds": 4
+      },
+      "characters": [
+        {
+          "id": 12,
+          "name": "陈默",
+          "role_tag": "配角",
+          "personality": "沉默寡言",
+          "appearance": "寸头",
+          "age_group": "middle_aged",
+          "gender": "male",
+          "reference_image_url": "https://media.example.com/character-12.png",
+          "status": "confirmed"
+        },
+        {
+          "id": 15,
+          "name": "苏禾",
+          "role_tag": "配角",
+          "personality": "机敏",
+          "appearance": "马尾辫",
+          "age_group": "young_adult",
+          "gender": "female",
+          "reference_image_url": "https://media.example.com/character-15.png",
+          "status": "confirmed"
+        }
+      ],
+      "expected": {
+        "ready": false,
+        "characterFree": false,
+        "primaryCharacterId": null,
+        "characters": [],
+        "blockers": [
+          "分镜角色“配角”对应多个角色，请在分镜编辑器中选择准确姓名"
+        ],
+        "warnings": []
+      }
+    }
+  ]
+}

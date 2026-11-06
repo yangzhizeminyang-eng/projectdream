@@ -4,14 +4,20 @@ import { useRoute, useRouter } from 'vue-router'
 import WorkspaceLayout from '@/components/WorkspaceLayout.vue'
 import {
   cancelProjectTask,
+  executeRecoveryVideoFinalEdit,
   getProject,
   getProjectTasks,
+  getRecoveryVideoReviewQueue,
+  getRecoveryVideoFinalEditPlan,
+  rollbackRecoveryVideoFinalEdit,
   retryProjectTask,
   type ProjectDTO,
   type ProjectTaskItemDTO,
   type ProjectTasksDTO,
+  type RecoveryVideoReviewQueueDTO,
 } from '@/api/project'
 import { getWorkspaceContext, setWorkspaceContext } from '@/lib/context'
+import { formatShotDuration } from '@/lib/episode-clips.mjs'
 
 type PageState = 'missing-project' | 'loading' | 'empty' | 'error' | 'ready'
 type TaskTypeFilter = 'all' | 'image' | 'video' | 'audio' | 'export'
@@ -29,6 +35,7 @@ const projectId = computed(() => {
 const pageState = ref<PageState>('loading')
 const project = ref<ProjectDTO | null>(null)
 const taskPayload = ref<ProjectTasksDTO | null>(null)
+const recoveryReviewQueue = ref<RecoveryVideoReviewQueueDTO | null>(null)
 const selectedTaskKey = ref<string | null>(null)
 const taskTypeFilter = ref<TaskTypeFilter>('all')
 const runtimeStatusFilter = ref<RuntimeStatusFilter>('all')
@@ -41,6 +48,15 @@ let refreshTimer: ReturnType<typeof setTimeout> | null = null
 
 const items = computed(() => taskPayload.value?.items || [])
 const summary = computed(() => taskPayload.value?.summary || null)
+const recoveryReviewItems = computed(() => recoveryReviewQueue.value?.items || [])
+const recoveryReviewSummary = computed(() => recoveryReviewQueue.value?.summary || null)
+const recoveryInspectionSummary = computed(() => ({
+  readyCount: recoveryReviewItems.value.filter((item) => item.inspectionReadiness === 'ready').length,
+  pendingInspectionCount: recoveryReviewItems.value.filter(
+    (item) => item.inspectionReadiness === 'pending-inspection',
+  ).length,
+  blockedCount: recoveryReviewItems.value.filter((item) => item.inspectionReadiness === 'blocked').length,
+}))
 
 const taskTypeOptions = computed(() => [
   { key: 'all' as const, label: '全部', count: items.value.length },
@@ -96,6 +112,7 @@ function clearRefreshTimer(): void {
 }
 
 function scheduleAutoRefresh(): void {
+  // 只有存在 queued/running 任务时才自动刷新，避免页面空闲时不断请求后端。
   clearRefreshTimer()
   if (pageState.value !== 'ready' || !hasActiveRuntime.value) return
   refreshTimer = setTimeout(() => {
@@ -104,6 +121,7 @@ function scheduleAutoRefresh(): void {
 }
 
 function syncSelectedTask(preferredKey?: string | null): void {
+  // 刷新任务列表后保持当前选中任务；如果选中项消失，优先选正在执行的任务。
   if (preferredKey && filteredItems.value.some((item) => item.taskKey === preferredKey)) {
     selectedTaskKey.value = preferredKey
     return
@@ -234,25 +252,13 @@ function goSource(task: ProjectTaskItemDTO): void {
     return
   }
 
-  if (task.taskType === 'image' && task.sceneId && task.storyboardId) {
+  if ((task.taskType === 'image' || task.taskType === 'video') && task.projectId) {
     router.push({
-      path: '/workspace/frame/result',
+      path: '/workspace/episodes/studio',
       query: {
         projectId: String(task.projectId),
-        sceneId: String(task.sceneId),
-        storyboardId: String(task.storyboardId),
-      },
-    })
-    return
-  }
-
-  if (task.taskType === 'video' && task.sceneId && task.storyboardId) {
-    router.push({
-      path: '/workspace/video',
-      query: {
-        projectId: String(task.projectId),
-        sceneId: String(task.sceneId),
-        storyboardId: String(task.storyboardId),
+        ...(task.sceneId ? { sceneId: String(task.sceneId) } : {}),
+        ...(task.storyboardId ? { storyboardId: String(task.storyboardId) } : {}),
       },
     })
     return
@@ -270,9 +276,208 @@ function goSource(task: ProjectTaskItemDTO): void {
   }
 
   router.push({
-    path: '/workspace/export',
+    path: '/workspace/episodes',
     query: { projectId: String(task.projectId) },
   })
+}
+
+function goRecoveryReview(item: RecoveryVideoReviewQueueDTO['items'][number]): void {
+  router.push({
+    path: '/workspace/episodes/studio',
+    query: {
+      projectId: String(projectId.value),
+      sceneId: String(item.sceneId),
+      storyboardId: String(item.storyboardId),
+    },
+  })
+}
+
+async function startRecoveryFinalEdit(
+  item: RecoveryVideoReviewQueueDTO['items'][number],
+): Promise<void> {
+  if (item.finalEditReadiness.status !== 'ready-for-final-edit') return
+  const actionKey = `recovery-final-edit-${item.id}`
+  if (actionTaskKey.value === actionKey) return
+
+  const token = window.prompt(
+    '请输入 START_RECOVERY_FINAL_EDIT，确认只对这一条恢复候选执行竖屏终剪：',
+  )
+  if (token !== 'START_RECOVERY_FINAL_EDIT') {
+    infoMsg.value = '已取消终剪，未创建任务。'
+    return
+  }
+
+  actionTaskKey.value = actionKey
+  errorMsg.value = ''
+  infoMsg.value = ''
+  try {
+    const plan = await getRecoveryVideoFinalEditPlan(item.id)
+    if (!plan.canStart || plan.finalEditPlan.status !== 'ready') {
+      throw new Error('服务端复核发现该视频已不满足终剪前置条件，请刷新后重试。')
+    }
+    const result = await executeRecoveryVideoFinalEdit(item.id, {
+      planId: plan.finalEditPlan.planId,
+      confirm: true,
+      confirmationToken: 'START_RECOVERY_FINAL_EDIT',
+    })
+    infoMsg.value = result.execution.reused
+      ? `已复用单条终剪任务 #${result.export.id}。`
+      : `单条竖屏终剪任务 #${result.export.id} 已入队，原恢复候选保持不变。`
+    await loadPage({ preferredTaskKey: selectedTaskKey.value, silent: true })
+  } catch (error) {
+    errorMsg.value = error instanceof Error ? error.message : '终剪任务创建失败'
+  } finally {
+    actionTaskKey.value = null
+  }
+}
+
+function recoveryReviewStatusLabel(status: RecoveryVideoReviewQueueDTO['items'][number]['reviewStatus']): string {
+  if (status === 'approved') return '已批准'
+  if (status === 'rework') return '需返工'
+  return '待复核'
+}
+
+function recoveryReviewStatusClass(status: RecoveryVideoReviewQueueDTO['items'][number]['reviewStatus']): string {
+  if (status === 'approved') return 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+  if (status === 'rework') return 'border-red-400/35 bg-red-400/10 text-red-200'
+  return 'border-amber-400/35 bg-amber-400/10 text-amber-100'
+}
+
+function inspectionReadinessLabel(
+  readiness: RecoveryVideoReviewQueueDTO['items'][number]['inspectionReadiness'],
+): string {
+  if (readiness === 'ready') return '可人工复核'
+  if (readiness === 'blocked') return '技术阻塞'
+  return '待技术检查'
+}
+
+function inspectionReadinessClass(
+  readiness: RecoveryVideoReviewQueueDTO['items'][number]['inspectionReadiness'],
+): string {
+  if (readiness === 'ready') return 'border-sky-400/35 bg-sky-400/10 text-sky-100'
+  if (readiness === 'blocked') return 'border-red-400/35 bg-red-400/10 text-red-200'
+  return 'border-outline-variant bg-surface-container text-on-surface-variant'
+}
+
+function releaseReadinessLabel(item: RecoveryVideoReviewQueueDTO['items'][number]): string {
+  if (item.releaseReadiness.status === 'release-format-ready') return '发布规格就绪'
+  if (item.releaseReadiness.status === 'needs-vertical-final-edit') return '需竖屏终剪'
+  return '待技术检查'
+}
+
+function releaseReadinessClass(item: RecoveryVideoReviewQueueDTO['items'][number]): string {
+  if (item.releaseReadiness.status === 'release-format-ready') {
+    return 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+  }
+  if (item.releaseReadiness.status === 'needs-vertical-final-edit') {
+    return 'border-purple-300/35 bg-purple-300/10 text-purple-100'
+  }
+  return 'border-outline-variant bg-surface-container text-on-surface-variant'
+}
+
+function finalEditReadinessLabel(item: RecoveryVideoReviewQueueDTO['items'][number]): string {
+  if (item.finalEditReadiness.status === 'ready-for-final-edit') return '可进终剪'
+  if (item.finalEditReadiness.status === 'waiting-manual-review') return '复核后终剪'
+  if (item.finalEditReadiness.status === 'blocked-by-rework') return '返工阻塞'
+  if (item.finalEditReadiness.status === 'not-required') return '无需终剪'
+  return '技术检查后终剪'
+}
+
+function finalEditReadinessClass(item: RecoveryVideoReviewQueueDTO['items'][number]): string {
+  if (item.finalEditReadiness.status === 'ready-for-final-edit') {
+    return 'border-sky-400/35 bg-sky-400/10 text-sky-100'
+  }
+  if (item.finalEditReadiness.status === 'waiting-manual-review') {
+    return 'border-amber-400/35 bg-amber-400/10 text-amber-100'
+  }
+  if (item.finalEditReadiness.status === 'blocked-by-rework') {
+    return 'border-red-400/35 bg-red-400/10 text-red-200'
+  }
+  if (item.finalEditReadiness.status === 'not-required') {
+    return 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+  }
+  return 'border-outline-variant bg-surface-container text-on-surface-variant'
+}
+
+function finalEditTargetLabel(item: RecoveryVideoReviewQueueDTO['items'][number]): string {
+  const target = item.finalEditPlan.target
+  return `${target.width}x${target.height} · ${target.frameRate}fps · ${target.videoCodec.toUpperCase()} + ${target.audioCodec.toUpperCase()} · ${target.container.toUpperCase()}`
+}
+
+function recoveryReviewActionLabel(item: RecoveryVideoReviewQueueDTO['items'][number]): string {
+  if (item.nextAction.code === 'regenerate-recovery-candidate') return '重新生成候选'
+  return item.nextAction.label
+}
+
+function recoveryReworkReasonLabel(
+  reason: RecoveryVideoReviewQueueDTO['items'][number]['reworkReasons'][number],
+): string {
+  if (reason.scope === 'character' && reason.characterId) {
+    return `角色 #${reason.characterId}：${reason.message}`
+  }
+  return reason.message
+}
+
+function characterReviewProgressLabel(item: RecoveryVideoReviewQueueDTO['items'][number]): string | null {
+  const summary = item.characterReviewSummary
+  if (!summary.expectedCount) return null
+  return `角色复核 ${summary.matchedCount}/${summary.expectedCount}`
+}
+
+function characterReviewStateLabel(item: RecoveryVideoReviewQueueDTO['items'][number]): string | null {
+  const summary = item.characterReviewSummary
+  if (!summary.expectedCount) return null
+  if (!item.canStartManualReview) return '先完成技术检查'
+  if (summary.reworkCount) return `返工 ${summary.reworkCount}`
+  if (summary.pendingCount) return `待补 ${summary.pendingCount}`
+  return '已完成'
+}
+
+function characterReviewStateClass(item: RecoveryVideoReviewQueueDTO['items'][number]): string {
+  const summary = item.characterReviewSummary
+  if (!item.canStartManualReview) {
+    return 'border-outline-variant bg-surface-container text-on-surface-variant'
+  }
+  if (summary.reworkCount) return 'border-red-400/35 bg-red-400/10 text-red-200'
+  if (summary.pendingCount) return 'border-amber-400/35 bg-amber-400/10 text-amber-100'
+  return 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+}
+
+async function handleRecoveryFinalEditRollback(task: ProjectTaskItemDTO): Promise<void> {
+  if (
+    task.taskType !== 'export' ||
+    !task.isRecoveryFinalEdit ||
+    !task.canRollback ||
+    isBusy(task.taskKey)
+  ) {
+    return
+  }
+
+  const confirmed = window.confirm(
+    `确认回滚单条恢复终剪任务 #${task.sourceId}？\n\n任务会变为“已取消”，原恢复候选和已生成媒体都会保留。`,
+  )
+  if (!confirmed) {
+    infoMsg.value = '已取消回滚，任务和媒体均未修改。'
+    return
+  }
+
+  actionTaskKey.value = task.taskKey
+  errorMsg.value = ''
+  infoMsg.value = ''
+  try {
+    const result = await rollbackRecoveryVideoFinalEdit(task.sourceId, {
+      confirm: true,
+      confirmationToken: 'ROLLBACK_RECOVERY_FINAL_EDIT',
+    })
+    infoMsg.value = result.rollback.idempotent
+      ? `终剪任务 #${task.sourceId} 已经是回滚状态。`
+      : `终剪任务 #${task.sourceId} 已回滚，原候选和媒体已保留。`
+    await loadPage({ preferredTaskKey: task.taskKey, silent: true })
+  } catch (error) {
+    errorMsg.value = error instanceof Error ? error.message : '终剪回滚失败'
+  } finally {
+    actionTaskKey.value = null
+  }
 }
 
 function openFile(task: ProjectTaskItemDTO): void {
@@ -281,11 +486,14 @@ function openFile(task: ProjectTaskItemDTO): void {
 }
 
 async function loadPage(options?: { preferredTaskKey?: string | null; silent?: boolean }): Promise<void> {
+  // 任务中心同时读取项目基本信息和任务汇总。
+  // silent=true 用于后台刷新，不覆盖用户当前的错误/提示文案。
   if (!projectId.value) {
     clearRefreshTimer()
     pageState.value = 'missing-project'
     project.value = null
     taskPayload.value = null
+    recoveryReviewQueue.value = null
     selectedTaskKey.value = null
     return
   }
@@ -299,19 +507,22 @@ async function loadPage(options?: { preferredTaskKey?: string | null; silent?: b
   errorMsg.value = ''
 
   try {
-    const [projectData, taskData] = await Promise.all([
+    const [projectData, taskData, recoveryQueueData] = await Promise.all([
       getProject(projectId.value),
       getProjectTasks(projectId.value),
+      getRecoveryVideoReviewQueue(projectId.value),
     ])
 
     project.value = projectData
     taskPayload.value = taskData
+    recoveryReviewQueue.value = recoveryQueueData
     setWorkspaceContext({ projectId: projectId.value })
     pageState.value = taskData.items.length ? 'ready' : 'empty'
     syncSelectedTask(options?.preferredTaskKey ?? selectedTaskKey.value)
   } catch (error) {
     project.value = null
     taskPayload.value = null
+    recoveryReviewQueue.value = null
     selectedTaskKey.value = null
     errorMsg.value = error instanceof Error ? error.message : '任务中心加载失败'
     pageState.value = 'error'
@@ -502,6 +713,170 @@ onUnmounted(() => {
             </article>
           </section>
 
+          <section
+            v-if="recoveryReviewSummary?.total"
+            class="border border-amber-400/25 bg-amber-400/5 px-5 py-5"
+          >
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 class="text-lg font-semibold text-on-surface">恢复视频复核清单</h2>
+                <p class="mt-1 text-sm leading-6 text-on-surface-variant">
+                  仅列出过期链接恢复的视频；可人工复核的候选优先显示，技术阻塞项需先处理。
+                </p>
+              </div>
+              <div class="flex flex-wrap gap-2 text-xs">
+                <span class="border border-sky-400/35 bg-sky-400/10 px-3 py-1.5 text-sky-100">
+                  可人工复核 {{ recoveryInspectionSummary.readyCount }}
+                </span>
+                <span class="border border-outline-variant bg-surface-container px-3 py-1.5 text-on-surface-variant">
+                  待技术检查 {{ recoveryInspectionSummary.pendingInspectionCount }}
+                </span>
+                <span class="border border-red-400/35 bg-red-400/10 px-3 py-1.5 text-red-200">
+                  技术阻塞 {{ recoveryInspectionSummary.blockedCount }}
+                </span>
+                <span class="border border-amber-400/35 bg-amber-400/10 px-3 py-1.5 text-amber-100">
+                  待复核 {{ recoveryReviewSummary.pendingCount }}
+                </span>
+                <span class="border border-red-400/35 bg-red-400/10 px-3 py-1.5 text-red-200">
+                  返工 {{ recoveryReviewSummary.reworkCount }}
+                </span>
+                <span class="border border-emerald-400/30 bg-emerald-400/10 px-3 py-1.5 text-emerald-200">
+                  已批准 {{ recoveryReviewSummary.approvedCount }}
+                </span>
+                <span class="border border-purple-300/35 bg-purple-300/10 px-3 py-1.5 text-purple-100">
+                  需终剪 {{ recoveryReviewSummary.finalEditRequiredCount }}
+                </span>
+                <span class="border border-sky-400/35 bg-sky-400/10 px-3 py-1.5 text-sky-100">
+                  可进终剪 {{ recoveryReviewSummary.readyForFinalEditCount }}
+                </span>
+                <span class="border border-amber-400/35 bg-amber-400/10 px-3 py-1.5 text-amber-100">
+                  复核后终剪 {{ recoveryReviewSummary.waitingManualReviewBeforeFinalEditCount }}
+                </span>
+                <span class="border border-red-400/35 bg-red-400/10 px-3 py-1.5 text-red-200">
+                  终剪阻塞 {{ recoveryReviewSummary.finalEditBlockedCount }}
+                </span>
+                <span class="border border-emerald-400/30 bg-emerald-400/10 px-3 py-1.5 text-emerald-200">
+                  发布规格 {{ recoveryReviewSummary.publishFormatReadyCount }}
+                </span>
+              </div>
+            </div>
+
+            <div class="mt-4 divide-y divide-amber-100/10 border-y border-amber-100/10">
+              <div
+                v-for="item in recoveryReviewItems"
+                :key="item.id"
+                class="flex w-full cursor-pointer flex-col gap-3 py-4 text-left transition hover:bg-white/[0.025] sm:flex-row sm:items-center sm:justify-between"
+                role="button"
+                tabindex="0"
+                @click="goRecoveryReview(item)"
+                @keydown.enter="goRecoveryReview(item)"
+              >
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span
+                      class="inline-flex border px-2.5 py-1 text-xs"
+                      :class="recoveryReviewStatusClass(item.reviewStatus)"
+                    >
+                      {{ recoveryReviewStatusLabel(item.reviewStatus) }}
+                    </span>
+                    <span
+                      class="inline-flex border px-2.5 py-1 text-xs"
+                      :class="inspectionReadinessClass(item.inspectionReadiness)"
+                    >
+                      {{ inspectionReadinessLabel(item.inspectionReadiness) }}
+                    </span>
+                    <span
+                      class="inline-flex border px-2.5 py-1 text-xs"
+                      :class="releaseReadinessClass(item)"
+                    >
+                      {{ releaseReadinessLabel(item) }}
+                    </span>
+                    <span
+                      class="inline-flex border px-2.5 py-1 text-xs"
+                      :class="finalEditReadinessClass(item)"
+                    >
+                      {{ finalEditReadinessLabel(item) }}
+                    </span>
+                    <span class="text-sm font-semibold text-on-surface">
+                      场景 {{ item.sceneNo || '-' }} / 镜头 {{ item.shotNo || '-' }} / V{{ item.versionNo || '-' }}
+                    </span>
+                  </div>
+                  <p class="mt-2 truncate text-sm text-on-surface-variant">
+                    {{ item.modelName || '模型未知' }} · {{ formatShotDuration(item.durationSeconds) }}
+                    <template v-if="item.reviewNote"> · {{ item.reviewNote }}</template>
+                  </p>
+                  <p
+                    v-if="item.inspectionReadiness === 'blocked' && item.inspectionBlockingReason"
+                    class="mt-2 text-sm leading-6 text-red-200"
+                  >
+                    技术阻塞：{{ item.inspectionBlockingReason }}
+                  </p>
+                  <p
+                    v-if="item.inspectionGuidance"
+                    class="mt-2 text-sm leading-6 text-on-surface-variant"
+                  >
+                    下一步：{{ item.inspectionGuidance }}
+                  </p>
+                  <p
+                    v-if="item.releaseReadiness.message && item.inspectionReadiness === 'ready'"
+                    class="mt-2 text-sm leading-6 text-purple-100"
+                  >
+                    发布规格：{{ item.releaseReadiness.message }}
+                  </p>
+                  <p class="mt-2 text-sm leading-6 text-sky-100">
+                    下一步：{{ item.nextAction.message }}
+                  </p>
+                  <div v-if="item.reworkReasons.length" class="mt-3 space-y-1.5 text-sm text-red-100">
+                    <p class="font-medium text-red-200">返工原因</p>
+                    <p
+                      v-for="reason in item.reworkReasons"
+                      :key="`${reason.scope}-${reason.characterId || 'video'}-${reason.message}`"
+                      class="leading-6"
+                    >
+                      · {{ recoveryReworkReasonLabel(reason) }}
+                    </p>
+                  </div>
+                  <p class="mt-2 text-xs leading-5 text-on-surface-variant">
+                    终剪计划：{{ item.finalEditReadiness.message }}
+                  </p>
+                  <p class="mt-2 text-xs leading-5 text-on-surface-variant">
+                    终剪目标：{{ finalEditTargetLabel(item) }} · 字幕{{ item.finalEditPlan.target.burnSubtitle ? '烧录' : '不烧录' }}
+                  </p>
+                  <div
+                    v-if="characterReviewProgressLabel(item)"
+                    class="mt-3 flex flex-wrap items-center gap-2 text-xs"
+                  >
+                    <span class="border border-outline-variant px-2.5 py-1 text-on-surface-variant">
+                      {{ characterReviewProgressLabel(item) }}
+                    </span>
+                    <span
+                      class="border px-2.5 py-1"
+                      :class="characterReviewStateClass(item)"
+                    >
+                      {{ characterReviewStateLabel(item) }}
+                    </span>
+                  </div>
+                </div>
+                <div class="flex shrink-0 flex-wrap items-center gap-3">
+                  <button
+                    v-if="item.finalEditReadiness.status === 'ready-for-final-edit'"
+                    class="inline-flex items-center gap-1 border border-sky-400/35 bg-sky-400/10 px-3 py-2 text-sm font-medium text-sky-100 transition hover:bg-sky-400/20 disabled:cursor-wait disabled:opacity-60"
+                    type="button"
+                    :disabled="actionTaskKey === `recovery-final-edit-${item.id}`"
+                    @click.stop="startRecoveryFinalEdit(item)"
+                  >
+                    <span class="material-symbols-outlined text-base">movie_edit</span>
+                    {{ actionTaskKey === `recovery-final-edit-${item.id}` ? '创建中...' : '执行终剪' }}
+                  </button>
+                  <span class="inline-flex items-center gap-1 text-sm font-medium text-primary">
+                    {{ recoveryReviewActionLabel(item) }}
+                    <span class="material-symbols-outlined text-base">arrow_forward</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <section class="rounded-[24px] border border-outline-variant bg-surface-container-low px-5 py-5">
             <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div class="flex flex-wrap gap-2">
@@ -613,6 +988,18 @@ onUnmounted(() => {
                     <span class="rounded-full border border-outline-variant px-3 py-1">
                       {{ versionLabel(item) }}
                     </span>
+                    <span
+                      v-if="item.maxAttempts"
+                      class="rounded-full border border-outline-variant px-3 py-1"
+                    >
+                      第 {{ item.attemptCount || 0 }}/{{ item.maxAttempts }} 次
+                    </span>
+                    <span
+                      v-if="item.nextRunAt"
+                      class="rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-amber-200"
+                    >
+                      下次重试：{{ formatDateTime(item.nextRunAt) }}
+                    </span>
                     <span class="rounded-full border border-outline-variant px-3 py-1">
                       更新时间：{{ formatDateTime(item.updatedAt || item.createdAt) }}
                     </span>
@@ -707,6 +1094,24 @@ onUnmounted(() => {
                 <dt class="text-xs uppercase tracking-[0.16em] text-on-surface-variant">业务状态</dt>
                 <dd class="mt-2 text-on-surface">{{ businessStatusLabel(selectedTask.status) }}</dd>
               </div>
+              <div
+                v-if="selectedTask.maxAttempts"
+                class="rounded-[18px] border border-outline-variant bg-black/10 px-4 py-4"
+              >
+                <dt class="text-xs uppercase tracking-[0.16em] text-on-surface-variant">执行策略</dt>
+                <dd class="mt-2 space-y-1 leading-6 text-on-surface-variant">
+                  <p class="text-on-surface">
+                    当前第 {{ selectedTask.attemptCount || 0 }}/{{ selectedTask.maxAttempts }} 次执行
+                  </p>
+                  <p v-if="selectedTask.nextRunAt">
+                    下次重试：{{ formatDateTime(selectedTask.nextRunAt) }}
+                  </p>
+                  <p v-else-if="selectedTask.runtimeStatus === 'queued'">等待 Worker 可用槽位</p>
+                  <p v-else-if="selectedTask.lastStartedAt">
+                    最近启动：{{ formatDateTime(selectedTask.lastStartedAt) }}
+                  </p>
+                </dd>
+              </div>
               <div class="rounded-[18px] border border-outline-variant bg-black/10 px-4 py-4">
                 <dt class="text-xs uppercase tracking-[0.16em] text-on-surface-variant">详情说明</dt>
                 <dd class="mt-2 whitespace-pre-wrap leading-6 text-on-surface-variant">
@@ -763,6 +1168,15 @@ onUnmounted(() => {
                 @click="openFile(selectedTask)"
               >
                 打开结果文件
+              </button>
+              <button
+                v-if="selectedTask.isRecoveryFinalEdit && selectedTask.canRollback"
+                class="rounded-[14px] border border-red-400/35 bg-red-400/10 px-4 py-2 text-sm text-red-100 transition hover:bg-red-400/20 disabled:cursor-wait disabled:opacity-50"
+                type="button"
+                :disabled="isBusy(selectedTask.taskKey)"
+                @click="handleRecoveryFinalEditRollback(selectedTask)"
+              >
+                {{ isBusy(selectedTask.taskKey) ? '回滚中...' : '回滚终剪' }}
               </button>
             </div>
           </template>

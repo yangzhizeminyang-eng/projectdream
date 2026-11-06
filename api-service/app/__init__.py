@@ -1,0 +1,1 @@
+"""ProjectDream FastAPI compatibility gateway."""

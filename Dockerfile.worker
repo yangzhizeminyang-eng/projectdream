@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1.7
+# Node Worker 生产镜像：只运行队列 Worker 与媒体导出工具（第五阶段起 Node HTTP API
+# 角色退役，由 api-service/Dockerfile 的纯 Python 镜像承接），不包含前端构建产物。
+FROM node:22-alpine AS runtime
+
+# 使用国内 npm 源可以减少腾讯云服务器上安装依赖的等待时间。
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG APK_MIRROR=https://mirrors.aliyun.com/alpine
+ENV NODE_ENV=production \
+    TZ=Asia/Shanghai \
+    FFMPEG_BIN=ffmpeg \
+    FFPROBE_BIN=ffprobe
+
+WORKDIR /app
+
+# 先创建运行用户和目录；FFmpeg 安装放在 npm 依赖层之后。
+RUN addgroup -S app \
+    && adduser -S -G app app \
+    && mkdir -p /app/.codex-runtime \
+    && chown app:app /app/.codex-runtime
+
+# 先安装依赖，方便 Docker 利用缓存；Worker 运行只需要 dependencies。
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,id=projectdream-npm-cache,target=/root/.npm,sharing=locked \
+    npm config set registry "${NPM_REGISTRY}" \
+    && npm ci --omit=dev --ignore-scripts --legacy-peer-deps
+
+# ffmpeg / ffprobe 用于最终 MP4 导出；dumb-init 用于正确转发容器停止信号。
+# 将系统工具层置于应用源码之前，避免普通代码变更重新下载/解包 FFmpeg。
+RUN --mount=type=cache,id=projectdream-apk-cache,target=/var/cache/apk,sharing=locked \
+    sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${APK_MIRROR}#g" /etc/apk/repositories \
+    && apk --cache-dir /var/cache/apk add --update-cache ffmpeg dumb-init
+
+# Worker 源码和服务模块。媒体文件通过 Compose 数据卷挂载到 .codex-runtime。
+COPY --chown=app:app server ./server
+COPY --chown=app:app scripts/worker-healthcheck.mjs ./scripts/worker-healthcheck.mjs
+COPY --chown=app:app scripts/verify-object-storage.mjs ./scripts/verify-object-storage.mjs
+COPY --chown=app:app public/images/login-hero-clean.png ./public/images/login-hero-clean.png
+
+USER app
+
+# Worker 无 HTTP 端口（不 EXPOSE）；队列轮询由 APP_RUNTIME_ROLE=worker 控制。
+
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "server/index.mjs"]

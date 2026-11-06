@@ -25,11 +25,15 @@ function sleep(ms) {
 
 export function getLipSyncConfig() {
   const provider = String(process.env.LIP_SYNC_PROVIDER || 'toapi').trim().toLowerCase()
+  const defaultBaseUrl = provider === 'dashscope'
+    ? 'https://dashscope.aliyuncs.com/api/v1'
+    : provider === 'latentsync'
+      ? 'http://127.0.0.1:8080'
+      : 'https://toapis.com/v1'
   return {
     provider,
     baseUrl: normalizeBaseUrl(
-      process.env.LIP_SYNC_BASE_URL ||
-        (provider === 'dashscope' ? 'https://dashscope.aliyuncs.com/api/v1' : 'https://toapis.com/v1'),
+      process.env.LIP_SYNC_BASE_URL || defaultBaseUrl,
     ),
     apiKey: String(
       process.env.LIP_SYNC_API_KEY ||
@@ -37,7 +41,13 @@ export function getLipSyncConfig() {
         '',
     ).trim(),
     model: String(
-      process.env.LIP_SYNC_MODEL || (provider === 'dashscope' ? 'videoretalk' : 'seedance-2'),
+      process.env.LIP_SYNC_MODEL || (
+        provider === 'dashscope'
+          ? 'videoretalk'
+          : provider === 'latentsync'
+            ? 'LatentSync'
+            : 'seedance-2'
+      ),
     ).trim(),
     resolution: String(process.env.LIP_SYNC_RESOLUTION || '720p').trim(),
     aspectRatio: String(process.env.LIP_SYNC_ASPECT_RATIO || '16:9').trim(),
@@ -45,10 +55,16 @@ export function getLipSyncConfig() {
     requestTimeoutMs: parsePositiveInt(process.env.LIP_SYNC_REQUEST_TIMEOUT_MS, 120000),
     pollIntervalMs: parsePositiveInt(process.env.LIP_SYNC_POLL_INTERVAL_MS, 5000),
     pollTimeoutMs: parsePositiveInt(process.env.LIP_SYNC_POLL_TIMEOUT_MS, 1800000),
+    inferenceSteps: Math.max(20, Math.min(50, parsePositiveInt(process.env.LIP_SYNC_INFERENCE_STEPS, 20))),
+    guidanceScale: Number.isFinite(Number(process.env.LIP_SYNC_GUIDANCE_SCALE))
+      ? Number(process.env.LIP_SYNC_GUIDANCE_SCALE)
+      : 1.5,
+    seed: Number.isInteger(Number(process.env.LIP_SYNC_SEED)) ? Number(process.env.LIP_SYNC_SEED) : null,
   }
 }
 
 export function resolveLipSyncDuration(audioDurationSeconds, storyboardDurationSeconds) {
+  // 普通口型服务的目标时长要覆盖对白时长，同时不能超出供应商限制。
   const requested = Math.max(
     Number(audioDurationSeconds) || 0,
     Number(storyboardDurationSeconds) || 0,
@@ -58,6 +74,7 @@ export function resolveLipSyncDuration(audioDurationSeconds, storyboardDurationS
 }
 
 export function resolveDashScopeLipSyncDuration(audioDurationSeconds, storyboardDurationSeconds) {
+  // DashScope 口型接口单独有时长约束，因此使用自己的裁剪/补齐规则。
   const requested = Math.max(
     Number(audioDurationSeconds) || 0,
     Number(storyboardDurationSeconds) || 0,
@@ -67,6 +84,7 @@ export function resolveDashScopeLipSyncDuration(audioDurationSeconds, storyboard
 }
 
 export function buildLipSyncPrompt({ characterName, dialogueText, actionText }) {
+  // 口型提示词强调“音频是嘴型时间源”，动作只作为画面表现参考。
   const speaker = String(characterName || '人物').trim()
   const dialogue = String(dialogueText || '').trim()
   const action = String(actionText || '').trim()
@@ -83,6 +101,7 @@ export function buildLipSyncPrompt({ characterName, dialogueText, actionText }) 
 }
 
 export function buildDashScopeLipSyncPayload({
+  // DashScope VideoReTalk 使用临时上传的图片、音频和可选动作视频作为输入。
   config = getLipSyncConfig(),
   videoUrl,
   audioUrl,
@@ -111,7 +130,25 @@ export function buildDashScopeLipSyncPayload({
   }
 }
 
+export function buildDashScopeLipSyncDownloadOptions(request = {}) {
+  return {
+    image: {
+      sourceUrl: String(request.imageUrl || '').trim(),
+      storageKey: String(request.imageStorageKey || '').trim() || null,
+    },
+    sourceVideo: {
+      sourceUrl: String(request.sourceVideoUrl || '').trim(),
+      storageKey: String(request.sourceVideoStorageKey || '').trim() || null,
+    },
+    audio: {
+      sourceUrl: String(request.audioUrl || '').trim(),
+      storageKey: String(request.audioStorageKey || '').trim() || null,
+    },
+  }
+}
+
 export function buildSeedanceLipSyncPayload({
+  // Seedance 口型接口使用一张私有角色图和一条参考音频，不直接复用普通动作视频。
   config = getLipSyncConfig(),
   assetUrl,
   audioInput,
@@ -139,18 +176,49 @@ export function buildSeedanceLipSyncPayload({
   }
 }
 
-async function requestJson(url, options, config, label) {
-  if (!config.apiKey) throw new Error('Missing LIP_SYNC_API_KEY or TOAPI_API_KEY configuration')
+export function buildLatentSyncPayload({
+  videoUrl,
+  audioUrl,
+  prompt = '',
+  durationSeconds,
+  inferenceSteps = 20,
+  guidanceScale = 1.5,
+  seed = null,
+}) {
+  const normalizedVideoUrl = String(videoUrl || '').trim()
+  const normalizedAudioUrl = String(audioUrl || '').trim()
+  if (!/^https?:\/\//i.test(normalizedVideoUrl)) {
+    throw new Error('LatentSync video input must be an HTTP(S) URL')
+  }
+  if (!/^https?:\/\//i.test(normalizedAudioUrl)) {
+    throw new Error('LatentSync audio input must be an HTTP(S) URL')
+  }
+  const steps = Math.max(20, Math.min(50, Math.round(Number(inferenceSteps) || 20)))
+  const guidance = Math.max(0.1, Math.min(10, Number(guidanceScale) || 1.5))
+  const payload = {
+    video_url: normalizedVideoUrl,
+    audio_url: normalizedAudioUrl,
+    prompt: String(prompt || '').trim(),
+    duration_seconds: resolveLipSyncDuration(durationSeconds, 0),
+    inference_steps: steps,
+    guidance_scale: guidance,
+  }
+  if (Number.isInteger(seed)) payload.seed = seed
+  return payload
+}
+
+async function requestJson(url, options, config, label, { allowAnonymous = false } = {}) {
+  if (!allowAnonymous && !config.apiKey) throw new Error('Missing LIP_SYNC_API_KEY or TOAPI_API_KEY configuration')
 
   let response
   try {
     response = await fetch(url, {
       ...options,
       headers: {
-        Authorization: `Bearer ${config.apiKey}`,
+        ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
         ...(options.headers || {}),
       },
-      signal: AbortSignal.timeout(config.requestTimeoutMs),
+      signal: AbortSignal.timeout(Number(config.requestTimeoutMs) || 120000),
     })
   } catch (error) {
     throw new Error(`${label} failed: ${error instanceof Error ? error.message : 'unknown error'}`)
@@ -197,6 +265,91 @@ function assertDashScopeProvider(config) {
   if (config.provider !== 'dashscope') {
     throw new Error(`Unsupported DashScope lip-sync provider: ${config.provider}`)
   }
+}
+
+function assertLatentSyncProvider(config) {
+  if (config.provider !== 'latentsync') {
+    throw new Error(`Unsupported LatentSync provider: ${config.provider}`)
+  }
+}
+
+function resolveLatentSyncTasksUrl(config, taskId = '') {
+  const root = normalizeBaseUrl(config.baseUrl)
+  const base = /\/v1$/i.test(root) ? `${root}/lip-sync/tasks` : `${root}/v1/lip-sync/tasks`
+  return taskId ? `${base}/${encodeURIComponent(taskId)}` : base
+}
+
+export async function createLatentSyncTask({
+  videoUrl,
+  audioUrl,
+  prompt,
+  durationSeconds,
+  config = getLipSyncConfig(),
+}) {
+  assertLatentSyncProvider(config)
+  const payload = await requestJson(
+    resolveLatentSyncTasksUrl(config),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildLatentSyncPayload({
+        videoUrl,
+        audioUrl,
+        prompt,
+        durationSeconds,
+        inferenceSteps: config.inferenceSteps,
+        guidanceScale: config.guidanceScale,
+        seed: config.seed,
+      })),
+    },
+    config,
+    'LatentSync task creation',
+    { allowAnonymous: true },
+  )
+  const taskId = String(payload?.task_id || payload?.id || payload?.data?.task_id || payload?.data?.id || '').trim()
+  if (!taskId) throw new Error('LatentSync task creation returned no task ID')
+  return { taskId, payload }
+}
+
+export async function getLatentSyncTask(taskId, config = getLipSyncConfig()) {
+  assertLatentSyncProvider(config)
+  return requestJson(
+    resolveLatentSyncTasksUrl(config, taskId),
+    { method: 'GET' },
+    config,
+    'LatentSync status request',
+    { allowAnonymous: true },
+  )
+}
+
+export async function waitForLatentSyncTask(
+  taskId,
+  { config = getLipSyncConfig(), onProgress } = {},
+) {
+  const deadline = Date.now() + config.pollTimeoutMs
+  while (Date.now() < deadline) {
+    const payload = await getLatentSyncTask(taskId, config)
+    const status = String(
+      payload?.status || payload?.task_status || payload?.data?.status || '',
+    ).trim().toLowerCase()
+    const progress = Math.max(0, Math.min(100, Number(payload?.progress ?? payload?.data?.progress) || 0))
+    onProgress?.({ status, progress, payload })
+    if (['completed', 'succeeded', 'success'].includes(status)) {
+      const videoUrl = String(
+        payload?.video_url || payload?.output?.video_url || payload?.data?.video_url || '',
+      ).trim()
+      if (!/^https?:\/\//i.test(videoUrl)) {
+        throw new Error('LatentSync task completed without a public video URL')
+      }
+      return { payload, videoUrl }
+    }
+    if (['failed', 'error', 'cancelled', 'canceled'].includes(status)) {
+      const detail = payload?.error?.message || payload?.error || payload?.message || payload?.data?.message || status
+      throw new Error(`LatentSync generation failed: ${detail}`)
+    }
+    await sleep(config.pollIntervalMs)
+  }
+  throw new Error(`LatentSync generation timed out after ${config.pollTimeoutMs}ms`)
 }
 
 export async function uploadDashScopeLipSyncFile({

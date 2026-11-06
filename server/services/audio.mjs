@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { normalizeObjectKey } from './object-storage.mjs'
 
 function parseBoolean(value, defaultValue = false) {
   if (value == null || value === '') return defaultValue
@@ -22,6 +23,53 @@ function parseNonNegativeInt(value, defaultValue) {
 
 function normalizeBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '')
+}
+
+export function buildGeneratedAudioStorageKey({
+  projectId,
+  trackType,
+  versionNo,
+  candidateNo,
+  extension,
+}) {
+  const normalizedProjectId = Number(projectId)
+  const normalizedTrackType = String(trackType || '').trim().toLowerCase()
+  const normalizedVersionNo = Number(versionNo)
+  const normalizedCandidateNo = Number(candidateNo)
+  const normalizedExtension = String(extension || '').trim().toLowerCase()
+  if (
+    !Number.isSafeInteger(normalizedProjectId) ||
+    normalizedProjectId <= 0 ||
+    !/^[a-z0-9][a-z0-9_-]{0,31}$/.test(normalizedTrackType) ||
+    !Number.isSafeInteger(normalizedVersionNo) ||
+    normalizedVersionNo <= 0 ||
+    !Number.isSafeInteger(normalizedCandidateNo) ||
+    normalizedCandidateNo <= 0 ||
+    !['.wav', '.mp3', '.ogg', '.m4a', '.webm'].includes(normalizedExtension)
+  ) {
+    throw new Error('invalid generated audio storage key')
+  }
+  return normalizeObjectKey(
+    `projects/${normalizedProjectId}/generated-audio/${normalizedTrackType}/v${normalizedVersionNo}/c${normalizedCandidateNo}${normalizedExtension}`,
+  )
+}
+
+export function buildAudioAssetStorageKey({ projectId, audioAssetId, extension = '.wav' }) {
+  const normalizedProjectId = Number(projectId)
+  const normalizedAudioAssetId = Number(audioAssetId)
+  const normalizedExtension = String(extension || '').trim().toLowerCase()
+  if (
+    !Number.isSafeInteger(normalizedProjectId) ||
+    normalizedProjectId <= 0 ||
+    !Number.isSafeInteger(normalizedAudioAssetId) ||
+    normalizedAudioAssetId <= 0 ||
+    !['.wav', '.mp3', '.ogg', '.m4a', '.webm'].includes(normalizedExtension)
+  ) {
+    throw new Error('invalid audio asset storage key')
+  }
+  return normalizeObjectKey(
+    `projects/${normalizedProjectId}/audio-assets/${normalizedAudioAssetId}${normalizedExtension}`,
+  )
 }
 
 function parseRetryAfter(value) {
@@ -48,6 +96,7 @@ export function getAudioConfig() {
     ),
     apiKey: String(process.env.DASHSCOPE_API_KEY || process.env.AUDIO_API_KEY || '').trim(),
     defaultModel: String(process.env.AUDIO_MODEL || 'qwen3-tts-flash').trim(),
+    voiceDesignModel: String(process.env.AUDIO_VOICE_DESIGN_MODEL || 'cosyvoice-v3.5-flash').trim(),
     fallbackModel: String(process.env.AUDIO_FALLBACK_MODEL || 'qwen3-tts-instruct-flash').trim(),
     defaultVoice: String(process.env.AUDIO_VOICE || 'Cherry').trim(),
     languageType: String(process.env.AUDIO_LANGUAGE_TYPE || 'Chinese').trim(),
@@ -56,6 +105,96 @@ export function getAudioConfig() {
     retryAttempts: parseNonNegativeInt(process.env.AUDIO_RETRY_ATTEMPTS, 2),
     retryBaseDelayMs: parsePositiveInt(process.env.AUDIO_RETRY_BASE_DELAY_MS, 3000),
     fallbackToMock: parseBoolean(process.env.AUDIO_FALLBACK_TO_MOCK, false),
+  }
+}
+
+export function resolveSpeechModelEndpoint(modelName) {
+  const model = String(modelName || '').trim().toLowerCase()
+  if (model.startsWith('cosyvoice-')) {
+    return 'https://maas.qianwenaiapi.com/api/v1/services/audio/tts/SpeechSynthesizer'
+  }
+  if (model.startsWith('qwen-audio-')) {
+    return 'https://maas.qianwenaiapi.com/api/v1/services/audio/tts/SpeechSynthesizer'
+  }
+  return ''
+}
+
+export function limitCosyVoiceInstruction(value, maxUnits = 100) {
+  let output = ''
+  let units = 0
+  for (const character of String(value || '').trim()) {
+    const nextUnits = /\p{Script=Han}/u.test(character) ? 2 : 1
+    if (units + nextUnits > maxUnits) break
+    output += character
+    units += nextUnits
+  }
+  return output.trim()
+}
+
+export async function createQwenDesignedVoice({
+  apiKey,
+  targetModel = getAudioConfig().voiceDesignModel,
+  voicePrompt,
+  previewText,
+  prefix,
+  fetchImpl = fetch,
+}) {
+  if (!apiKey) throw new Error('Missing DASHSCOPE_API_KEY or AUDIO_API_KEY configuration')
+  const normalizedPrompt = String(voicePrompt || '').trim()
+  const normalizedPreviewText = String(previewText || '').trim()
+  const normalizedPrefix = String(prefix || '').replace(/[^a-z0-9]/gi, '').slice(0, 10)
+  if (!normalizedPrompt || normalizedPrompt.length > 500) {
+    throw new Error('Voice design prompt must contain 1 to 500 characters')
+  }
+  if (normalizedPreviewText.length < 15 || normalizedPreviewText.length > 200) {
+    throw new Error('Voice design preview text must contain 15 to 200 characters')
+  }
+  if (!normalizedPrefix) throw new Error('Voice design prefix must contain letters or digits')
+  if (!/^cosyvoice-v3\.5-(?:flash|plus)$/i.test(targetModel)) {
+    throw new Error('Qwen text voice design requires a supported CosyVoice v3.5 target model')
+  }
+
+  const response = await fetchImpl(
+    'https://maas.qianwenaiapi.com/api/v1/services/audio/tts/customization',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'voice-enrollment',
+        input: {
+          action: 'create_voice',
+          target_model: targetModel,
+          voice_prompt: normalizedPrompt,
+          preview_text: normalizedPreviewText,
+          prefix: normalizedPrefix,
+          language_hints: ['zh'],
+        },
+        parameters: { sample_rate: 24000, response_format: 'wav' },
+      }),
+      signal: AbortSignal.timeout(120000),
+    },
+  )
+  const responseText = await response.text()
+  let payload = null
+  try { payload = responseText ? JSON.parse(responseText) : null } catch { payload = null }
+  if (!response.ok) {
+    const detail = payload?.message || payload?.code || responseText.slice(0, 300) || `HTTP ${response.status}`
+    throw createProviderError(`Qwen voice design failed: ${detail}`, { status: response.status })
+  }
+  const output = payload?.output || {}
+  const voiceId = String(output.voice_id || '').trim()
+  const previewAudioData = String(output.preview_audio?.data || '').trim()
+  if (!voiceId || !previewAudioData) throw new Error('Qwen voice design returned no custom voice id or preview audio')
+  return {
+    voiceId,
+    targetModel: String(output.target_model || targetModel),
+    previewAudioData,
+    previewAudioFormat: String(output.preview_audio?.response_format || 'wav'),
+    sampleRate: Number(output.preview_audio?.sample_rate) || 24000,
+    requestId: String(payload?.request_id || '').trim() || null,
   }
 }
 
@@ -71,12 +210,23 @@ function createProviderError(message, options = {}) {
   return error
 }
 
-async function requestDashScopeAudio({ config, text, voiceName, modelName, instructions }) {
+async function requestDashScopeAudio({
+  config,
+  text,
+  voiceName,
+  modelName,
+  instructions,
+  languageType,
+}) {
+  // 调用 DashScope TTS 接口。
+  // 供应商可能返回远程 audio.url，也可能直接返回 base64 audio.data，下面统一处理。
   if (!config.apiKey) throw new Error('Missing DASHSCOPE_API_KEY or AUDIO_API_KEY configuration')
 
   let response
   try {
-    response = await fetch(config.baseUrl, {
+    const endpoint = resolveSpeechModelEndpoint(modelName) || config.baseUrl
+    const isCosyVoice = String(modelName || '').toLowerCase().startsWith('cosyvoice-')
+    response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
@@ -87,11 +237,15 @@ async function requestDashScopeAudio({ config, text, voiceName, modelName, instr
         input: {
           text,
           voice: voiceName,
-          language_type: config.languageType,
+          ...(isCosyVoice
+            ? { format: 'wav', sample_rate: 24000 }
+            : { language_type: String(languageType || config.languageType || 'Chinese').trim() || 'Chinese' }),
           ...(instructions
             ? {
-                instructions,
-                optimize_instructions: true,
+                [isCosyVoice ? 'instruction' : 'instructions']: isCosyVoice
+                  ? limitCosyVoiceInstruction(instructions)
+                  : instructions,
+                ...(!isCosyVoice ? { optimize_instructions: true } : {}),
               }
             : {}),
         },
@@ -145,6 +299,7 @@ async function requestDashScopeAudio({ config, text, voiceName, modelName, instr
 }
 
 async function requestDashScopeAudioWithRetry(args) {
+  // 只对明确可重试的错误进行指数退避重试，并尊重供应商的 Retry-After。
   const { config } = args
   let lastError = null
 
@@ -174,6 +329,7 @@ function extensionFromContentType(contentType) {
 }
 
 async function resolveAudioBytes(result, config) {
+  // 把“base64 音频”和“远程 URL 音频”统一转成 Buffer。
   if (result.audioData) {
     const normalized = result.audioData.replace(/^data:audio\/[^;]+;base64,/i, '')
     const bytes = Buffer.from(normalized, 'base64')
@@ -206,6 +362,7 @@ async function resolveAudioBytes(result, config) {
 }
 
 function readWavDurationSeconds(bytes) {
+  // 从 WAV 的 fmt/data chunk 计算真实时长，供时间线和导出使用。
   if (bytes.length < 44 || bytes.toString('ascii', 0, 4) !== 'RIFF') return null
   if (bytes.toString('ascii', 8, 12) !== 'WAVE') return null
 
@@ -245,10 +402,13 @@ export async function generateAudioCandidates({
   voiceName,
   modelName,
   instructions,
+  languageType = null,
   publicBaseUrl,
   outputDir,
   candidateCount = 1,
+  allowModelFallback = true,
 }) {
+  // 音频生成主入口：校验文本 -> 调 TTS -> 下载文件 -> 计算时长 -> 持久化到本地。
   const config = getAudioConfig()
   if (isMockAudioProvider(config)) throw new Error('AUDIO_PROVIDER=mock')
   if (config.provider !== 'dashscope') throw new Error(`Unsupported AUDIO_PROVIDER: ${config.provider}`)
@@ -276,6 +436,7 @@ export async function generateAudioCandidates({
         voiceName: effectiveVoice,
         modelName: model,
         instructions: String(instructions || '').trim() || null,
+        languageType,
       })
       const resolved = await resolveAudioBytes(providerResult, config)
       return {
@@ -290,6 +451,7 @@ export async function generateAudioCandidates({
       generated = await requestAudio(generationModel)
     } catch (error) {
       const canFallback =
+        allowModelFallback &&
         fallbackModel &&
         fallbackModel !== generationModel &&
         /invalid audio|no audio url|no audio data/i.test(String(error?.message || ''))
@@ -300,6 +462,7 @@ export async function generateAudioCandidates({
 
     const durationFloor = expectedSpeechDurationSeconds(normalizedText) * 0.55
     if (
+      allowModelFallback &&
       fallbackModel &&
       fallbackModel !== generationModel &&
       generated.durationSeconds &&
@@ -322,6 +485,7 @@ export async function generateAudioCandidates({
 
     candidates.push({
       audioUrl: `${publicBaseUrl}/${fileName}`,
+      filePath: path.join(outputDir, fileName),
       durationSeconds,
       voiceName: effectiveVoice,
       modelName: generationModel,

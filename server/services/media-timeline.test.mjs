@@ -3,8 +3,10 @@ import test from 'node:test'
 
 import {
   buildAtempoFilter,
+  buildBroadcastVisualCropFilter,
   buildLegacySceneAudioOffsets,
   buildMediaTimeline,
+  buildSpeechVisualSegments,
   hasStoryboardTimelineEntry,
   resolveMediaStartSeconds,
   resolveRequiredSpeechDuration,
@@ -77,4 +79,77 @@ test('strict storyboard audio only accepts clips present in the final timeline',
 test('speech duration does not add a phantom second at zero offset', () => {
   assert.equal(resolveRequiredSpeechDuration({ durationSeconds: 5, startOffsetSeconds: 0 }), 5.18)
   assert.equal(resolveRequiredSpeechDuration({ durationSeconds: 5, startOffsetSeconds: 1.25 }), 6.43)
+})
+
+test('cuts a broadcast visual segment instead of showing the talking character for narration', () => {
+  assert.deepEqual(
+    buildSpeechVisualSegments({
+      clip: {
+        storyboardId: 186,
+        sourceType: 'video',
+        durationSeconds: 3,
+        broadcastVisual: { type: 'source-video-crop', preset: 'left-control-panel' },
+      },
+      audioTracks: {
+        narration: [{
+          id: 171,
+          storyboardId: 186,
+          startOffsetSeconds: 1.1,
+          durationSeconds: 0.56,
+        }],
+      },
+    }),
+    [
+      {
+        startSeconds: 0,
+        endSeconds: 1.1,
+        visualSource: 'original-video',
+        speechTrack: null,
+        audioId: null,
+      },
+      {
+        startSeconds: 1.1,
+        endSeconds: 1.66,
+        visualSource: 'broadcast-device',
+        visualPreset: 'left-control-panel',
+        speechTrack: 'narration',
+        audioId: 171,
+      },
+      {
+        startSeconds: 1.66,
+        endSeconds: 3,
+        visualSource: 'original-video',
+        speechTrack: null,
+        audioId: null,
+      },
+    ],
+  )
+})
+
+test('uses the left control panel as the default broadcast visual crop', () => {
+  assert.equal(
+    buildBroadcastVisualCropFilter(),
+    'crop=trunc(iw*0.32/2)*2:trunc(ih*0.96/2)*2:min(iw-ow\\,max(0\\,trunc(iw*0.47*(t-0.8)/2)*2)):trunc(ih*0.02/2)*2',
+  )
+})
+
+test('blocks a video narration when no non-face visual source is configured', () => {
+  assert.throws(
+    () => buildSpeechVisualSegments({
+      clip: {
+        storyboardId: 186,
+        sourceType: 'video',
+        durationSeconds: 3,
+      },
+      audioTracks: {
+        narration: [{
+          id: 171,
+          storyboardId: 186,
+          startOffsetSeconds: 1.1,
+          durationSeconds: 0.56,
+        }],
+      },
+    }),
+    (error) => error?.code === 'narration-visual-source-missing',
+  )
 })

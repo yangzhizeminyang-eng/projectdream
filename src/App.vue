@@ -22,6 +22,8 @@ const route = useRoute()
  *        - Auth: 登录/注册/找回密码/重置密码（横向位移，模拟"侧向进入"）
  *        - Workspace: 仪表板/工作台（纵向位移 + 轻微 scale，模拟"向下进入工作空间"）
  */
+// 根据来源页和目标页决定过渡动画：
+// Auth 页面之间横向切换，工作台页面之间纵向切换，登录后进入工作台使用专门的过渡。
 type PageFamily = 'auth' | 'workspace'
 
 const AUTH_NAMES = new Set(['login', 'register', 'forgot-password', 'reset-password'])
@@ -32,6 +34,7 @@ const AUTH_NAMES = new Set(['login', 'register', 'forgot-password', 'reset-passw
  * @returns {PageFamily} 'auth' 或 'workspace'
  */
 function familyOf(name?: string): PageFamily {
+  // 未知路由按 workspace 处理，保证新加工作台页面默认也有动画。
   return name && AUTH_NAMES.has(name) ? 'auth' : 'workspace'
 }
 
@@ -42,6 +45,8 @@ function familyOf(name?: string): PageFamily {
  * - 首次加载（appear）：使用 enter-workspace-initial 或 enter-auth-initial
  */
 const transitionName = computed(() => {
+  // route.meta.fromName 由 router.beforeEach 写入。
+  // 这里只负责把“来源/目标页面类型”映射成 CSS transition name。
   const from = familyOf(typeof route.meta.fromName === 'string' ? route.meta.fromName : undefined)
   const to = familyOf(route.name as string | undefined)
   if (from === 'auth' && to === 'workspace') return 'auth-to-workspace'

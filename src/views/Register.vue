@@ -16,6 +16,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { checkPhone, registerWithSms, saveAuthSession, sendSmsCode } from '@/api/auth'
+import CaptchaSlider from '@/components/auth/CaptchaSlider.vue'
 import BrandPanel from '@/components/BrandPanel.vue'
 
 const router = useRouter()
@@ -33,6 +34,7 @@ const showPassword = ref(false)
 const showConfirmPassword = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
+const captchaToken = ref('')
 
 /** 倒计时定时器 */
 let timer: number | null = null
@@ -86,6 +88,7 @@ function formatPhone(value: string): string {
  */
 function onPhoneInput(value: string): void {
   phone.value = formatPhone(value)
+  captchaToken.value = ''
   errorMessage.value = ''
   successMessage.value = ''
 }
@@ -138,7 +141,12 @@ async function handleSendCode(): Promise<void> {
       errorMessage.value = '该手机号已注册，请直接前往登录'
       return
     }
-    const sendResult = await sendSmsCode(phoneNumber, 'register')
+    if (!captchaToken.value) {
+      errorMessage.value = '请先完成滑块验证'
+      return
+    }
+    const sendResult = await sendSmsCode(phoneNumber, 'register', captchaToken.value)
+    captchaToken.value = ''
     startCountdown(sendResult.countdown || 60)
     successMessage.value = sendResult.devCode
       ? `验证码已发送，开发验证码：${sendResult.devCode}`
@@ -288,6 +296,8 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </label>
+
+          <CaptchaSlider :phone="normalizePhone(phone)" @verified="captchaToken = $event" />
 
           <!-- 昵称 -->
           <label class="field">

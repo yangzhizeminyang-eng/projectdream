@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   buildFrameConsistencyPrompt,
   createFrameCharacterSnapshot,
+  isHandOnlyShot,
   resolveFrameCharacterContext,
 } from './frame-character-consistency.mjs'
 
@@ -79,6 +80,68 @@ test('multiple named characters receive separate constraints and references', ()
   ])
   assert.equal(snapshot.characters.length, 2)
   assert.equal(snapshot.characters[0].gender, 'female')
+})
+
+test('character snapshots persist reference storage keys instead of signed URLs', () => {
+  const context = resolveFrameCharacterContext(
+    {
+      character_id: 11,
+      character_name: '沈砚',
+      action_text: '沈砚站在档案室窗前。',
+      visual_prompt: '沈砚站在暴雨中的档案室。',
+    },
+    [
+      {
+        ...characters[0],
+        reference_image_storage_key: 'projects/12/frames/characters/11/v2/c1.png',
+        reference_image_url: null,
+      },
+    ],
+  )
+
+  const snapshot = createFrameCharacterSnapshot(context)
+
+  assert.equal(
+    snapshot.characters[0].referenceImageStorageKey,
+    'projects/12/frames/characters/11/v2/c1.png',
+  )
+  assert.equal(snapshot.characters[0].referenceImageUrl, undefined)
+  assert.deepEqual(
+    buildFrameConsistencyPrompt({ storyboard: {}, context }).referenceImageStorageKeys,
+    ['projects/12/frames/characters/11/v2/c1.png'],
+  )
+  assert.deepEqual(
+    buildFrameConsistencyPrompt({ storyboard: {}, context }).referenceImageUrls,
+    [],
+    'when a stable object key exists, the expiring signed URL must not be captured as task input',
+  )
+})
+
+test('frame constraints carry the active character version and fixed costume', () => {
+  const versionedCharacters = [
+    {
+      ...characters[0],
+      costume: '深灰制服，银色识别牌',
+      character_version_no: 4,
+    },
+  ]
+  const storyboard = {
+    character_id: 11,
+    character_name: '沈砚',
+    action_text: '沈砚站在档案室窗前。',
+    visual_prompt: '沈砚站在暴雨中的档案室。',
+  }
+  const context = resolveFrameCharacterContext(storyboard, versionedCharacters)
+  const result = buildFrameConsistencyPrompt({ storyboard, context })
+  const snapshot = createFrameCharacterSnapshot(context)
+
+  assert.equal(context.ready, true)
+  assert.equal(context.characters[0].costume, '深灰制服，银色识别牌')
+  assert.equal(context.characters[0].characterVersionNo, 4)
+  assert.match(result.prompt, /固定服装与随身物件=深灰制服，银色识别牌/)
+  assert.match(result.prompt, /角色版本=v4/)
+  assert.equal(snapshot.characters[0].characterVersionNo, 4)
+  assert.equal(snapshot.characters[0].costume, '深灰制服，银色识别牌')
 })
 
 test('reference image numbering stays aligned when a character has no image', () => {
@@ -360,4 +423,145 @@ test('subway station wording does not imply a visible audio character', () => {
   assert.equal(context.ready, true)
   assert.equal(context.characterFree, true)
   assert.deepEqual(context.characters, [])
+})
+
+test('continuity contract constrains a hand-only prop shot even when a character is bound', () => {
+  const storyboard = {
+    character_id: 11,
+    character_name: '沈砚',
+    action_text: '只拍沈砚的手、签字笔、协议和手机；手机突然亮起。',
+    visual_prompt: '只拍沈砚的手、签字笔、协议和手机，不出现其他人物。',
+    continuity_contract_json: JSON.stringify({
+      visibleEntities: ['签字笔', '协议', '手机'],
+      forbiddenEntities: ['其他人物', '脸部', '完整上半身'],
+      primarySubject: '手机与签字笔',
+      primaryAction: '手机亮起，手部动作停住。',
+    }),
+  }
+  const context = resolveFrameCharacterContext(storyboard, characters)
+  const result = buildFrameConsistencyPrompt({ storyboard, context })
+
+  assert.match(result.prompt, /【画面实体边界】/)
+  assert.match(result.prompt, /只允许出现：签字笔、协议、手机/)
+  assert.match(result.prompt, /不得出现角色的脸、头部、完整上半身/)
+  assert.match(result.negativePrompt, /脸部/)
+})
+
+test('does not treat a name inside phone text as a visible character', () => {
+  const storyboard = {
+    character_id: 11,
+    character_name: '沈砚',
+    action_text: '只拍沈砚的手和手机。',
+    visual_prompt: '只拍沈砚的手和手机；手机屏幕显示“程默：别进来”。',
+  }
+  const context = resolveFrameCharacterContext(storyboard, characters)
+
+  assert.equal(context.ready, true)
+  assert.deepEqual(context.characters.map((item) => item.name), ['沈砚'])
+})
+
+test('does not send face references for a hand-only prop shot', () => {
+  const storyboard = {
+    character_id: 11,
+    character_name: '沈砚',
+    action_text: '只拍沈砚的手、签字笔和手机。',
+    visual_prompt: '只拍沈砚的手、签字笔和手机，不出现脸部或完整上半身。',
+    continuity_contract_json: JSON.stringify({
+      visibleEntities: ['签字笔', '手机'],
+      forbiddenEntities: ['脸部', '完整上半身'],
+      primarySubject: '手机与签字笔',
+      primaryAction: '手部停住，手机亮起。',
+    }),
+  }
+  const context = resolveFrameCharacterContext(storyboard, characters)
+  const result = buildFrameConsistencyPrompt({ storyboard, context })
+
+  assert.deepEqual(result.referenceImageUrls, [])
+  assert.match(result.prompt, /准确中文由后期叠加/)
+  assert.doesNotMatch(result.prompt, /固定外貌=/)
+  assert.doesNotMatch(result.prompt, /同一张脸/)
+  assert.match(result.prompt, /仅局部手部身份/)
+})
+
+test('treats an explicitly hand-only shot as local even without a face exclusion sentence', () => {
+  const storyboard = {
+    character_id: 11,
+    character_name: '沈砚',
+    action_text: '只拍沈砚的手、签字笔、协议和手机；手机突然亮起。',
+    visual_prompt: '黑色签字笔停在离职协议上方，手机突然亮起。',
+  }
+  const context = resolveFrameCharacterContext(storyboard, [
+    {
+      ...characters[0],
+      costume: '深灰衬衫、米色西装外套、米色西裤、银色腕表、白色低跟鞋',
+      reference_image_storage_key: 'projects/12/characters/11/v1/c1.png',
+    },
+  ])
+  const result = buildFrameConsistencyPrompt({ storyboard, context })
+
+  assert.deepEqual(result.referenceImageUrls, [])
+  assert.deepEqual(result.referenceImageStorageKeys, [])
+  assert.match(result.prompt, /仅局部手部身份/)
+  assert.doesNotMatch(result.prompt, /固定外貌=/)
+  assert.doesNotMatch(result.prompt, /同一张脸/)
+  assert.doesNotMatch(result.prompt, /米色西裤/)
+  assert.doesNotMatch(result.prompt, /白色低跟鞋/)
+  assert.match(result.prompt, /只保留袖口与腕表/)
+})
+
+test('recognizes hand-only framing from the storyboard action alone', () => {
+  assert.equal(
+    isHandOnlyShot({
+      action_text: '只拍唐宁的手、签字笔、协议和手机；手机突然亮起。',
+      visual_prompt: '桌面特写。',
+    }),
+    true,
+  )
+})
+
+test('removes exact screen copy from a hand-only image prompt', () => {
+  const storyboard = {
+    character_id: 11,
+    character_name: '沈砚',
+    action_text: '只拍沈砚的手、签字笔、协议和手机；手机突然亮起。',
+    visual_prompt:
+      '只拍沈砚的手、签字笔、《离职及保密协议》和手机；手机屏幕清楚显示“赵启明：别签字。”，屏幕文字必须为简体中文且只出现这一句。',
+  }
+  const context = resolveFrameCharacterContext(storyboard, characters)
+  const result = buildFrameConsistencyPrompt({ storyboard, context })
+
+  assert.doesNotMatch(result.prompt, /手机屏幕清楚显示/)
+  assert.doesNotMatch(result.prompt, /屏幕文字必须为简体中文/)
+  assert.doesNotMatch(result.prompt, /离职及保密协议/)
+  assert.match(result.prompt, /空白法律文件/)
+  assert.match(result.prompt, /手机屏幕保持留白/)
+})
+
+test('hand-only prop shots suppress the office background and generated document text', () => {
+  const storyboard = {
+    character_id: 11,
+    character_name: '沈砚',
+    action_text: '只拍沈砚的手、签字笔、空白法律文件和手机；手机突然亮起。',
+    visual_prompt: '冷色办公室夜景，电脑蓝光，桌面特写，签字笔停在文件上方，手机亮起。',
+    continuity_contract_json: JSON.stringify({
+      visibleEntities: ['签字笔', '空白法律文件', '手机'],
+      forbiddenEntities: ['其他人物', '脸部', '完整上半身', '显示器', '台灯', '键盘', '随机文字'],
+      primarySubject: '手机与签字笔',
+      primaryAction: '签字笔停住，手机亮起。',
+    }),
+  }
+  const context = resolveFrameCharacterContext(storyboard, characters)
+  const result = buildFrameConsistencyPrompt({
+    storyboard,
+    context,
+    projectVisualStyle: '写实都市悬疑漫剧，冷白办公室与电脑蓝光，竖屏',
+  })
+
+  assert.match(result.prompt, /局部手部静物特写/)
+  assert.match(result.prompt, /不出现躯干、胸口、肩膀/)
+  assert.match(result.prompt, /背景只保留不可辨认的浅景深色块/)
+  assert.match(result.prompt, /所有文件和屏幕保持无文字留白/)
+  assert.match(result.negativePrompt, /显示器/)
+  assert.match(result.negativePrompt, /台灯/)
+  assert.match(result.negativePrompt, /随机文字/)
 })

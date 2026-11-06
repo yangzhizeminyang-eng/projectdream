@@ -35,6 +35,8 @@ const TIME_POOL = ['夜', '晨', '黄昏', '深夜', '午后', '拂晓']
  * @returns {() => number} 0-1 之间的伪随机函数
  */
 function seededRandom(seed) {
+  // mock 模式也要稳定：同一个项目重复生成时，尽量得到相同结构。
+  // 这样本地演示和测试不会因为真正的随机数而每次变化。
   let h = 2166136261
   for (let i = 0; i < seed.length; i += 1) {
     h ^= seed.charCodeAt(i)
@@ -136,6 +138,9 @@ function generateMockOutline(project) {
 }
 
 export async function generateOutline(project) {
+  // 总纲生成支持两种模式：
+  // - mock：本地拼装三幕结构和场景
+  // - real：调用文本模型，再用 parser 归一化返回 JSON
   const config = getAiConfig()
   if (isMockProvider(config)) {
     return generateMockOutline(project)

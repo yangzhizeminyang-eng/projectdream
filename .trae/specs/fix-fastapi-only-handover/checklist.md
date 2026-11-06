@@ -1,0 +1,27 @@
+﻿﻿# Checklist
+
+- [x] 全仓交付物中探针路径统一为 /health 与 /ready，无 /health/ready 残留（docs 与易误导历史记录处已修正）
+- [x] Nginx 未新增探针暴露（location 面不变）；runbook 含「探针不经公网」契约说明
+- [x] smoke probe 对 200+text/html 的 SPA fallback 判定 FAIL（有测试证明）
+- [x] smoke 提供 --exec-compose 容器内 readiness 模式且 exec 命令构造有 dry-run 断言
+- [x] 公网黑盒模式通过 4040/4010 收口形状验证 FastAPI（不再直连探针）
+- [x] --check-compose 输出明确标注「静态结构检查」
+- [x] 登录态链路使用唯一临时项目并在成功/失败路径均尽力清理（有测试证明清理调用）
+- [x] 手册数据库命令不依赖宿主 shell 的 MYSQL_ROOT_PASSWORD（exec 容器 env 机制，四处统一）
+- [x] 备份目录创建/秒级时间戳/gzip -t/先备份后迁移停止条件/回滚同机制 齐备
+- [x] 手册无 API 容器内 curl 调用（python:3.12-slim 事实一致）
+- [x] 手册默认清理步骤无全局 docker image prune -f，改为列示+显式确认
+- [x] 手册无无限阻塞命令（logs -f 已改），每步有失败停止条件与回退指向
+- [x] 最终报告九条硬条件逐条证据可复核，路径统一 /ready，生产侧 PENDING 保持
+- [x] 501 口径拆分清晰：20 条路由级 + 2 个内联 mock 动作，native 计数含义显式说明
+- [x] 报告含「仍 501 的用户功能及影响」节，未隐藏限制
+- [x] scripts/runbook-consistency.test.mjs 存在且 node --test 全绿
+- [x] node scripts/assert-fastapi-only.mjs 退出码 0
+- [x] node --test（assert/fastapi-only-smoke/runbook-consistency）全绿
+- [x] pytest api-service/tests 全绿（基线 1003 + 新增，无回归）
+- [x] npm test 实际执行并记录结果（含脚本范围确认）
+- [x] npm run build 实际执行并记录结果
+- [x] docker compose --env-file .env.production.example config --services 实际执行并记录
+- [x] Docker Engine 可用性如实记录；可用则 build check + 隔离 smoke，不可用则注明并给云端指引
+- [x] git diff 复核：无无关文件改动、无密钥/本地产物混入
+- [x] 旧任务书（retire-node-http-api/tasks.md）勾选状态与新证据一致

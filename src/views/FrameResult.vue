@@ -39,7 +39,7 @@ const selectedImageId = ref<number | null>(null)
 const selectedFrameRole = ref<FrameRole>('primary')
 const promptText = ref('')
 const negativePrompt = ref('')
-const modelName = ref('cogview-3-flash')
+const modelName = ref('agnes-image-2.1-flash')
 const generating = ref(false)
 const confirmingImageId = ref<number | null>(null)
 const errorMsg = ref('')
@@ -125,19 +125,21 @@ function backToStoryboardEditor(): void {
 
 function backToGenerate(): void {
   router.push({
-    path: '/workspace/frame',
+    path: '/workspace/episodes/studio',
     query: buildQuery(),
   })
 }
 
 function goToVideoModule(): void {
   router.push({
-    path: '/workspace/video',
+    path: '/workspace/episodes/studio',
     query: buildQuery(),
   })
 }
 
 function syncSelectedImage(preferredId?: number | null): void {
+  // 结果页的选中策略：优先保留用户刚操作的图片，
+  // 其次选择当前画面类型的 confirmed/候选，最后才选列表第一项。
   if (preferredId && images.value.some((item) => item.id === preferredId)) {
     selectedImageId.value = preferredId
     return
@@ -168,6 +170,7 @@ function syncSelectedImage(preferredId?: number | null): void {
 }
 
 async function refreshImages(preferredId?: number | null): Promise<void> {
+  // 重新拉取当前分镜的所有图片候选，并同步页面状态。
   const items = await listShotImages(storyboardId.value)
   images.value = items
 
@@ -182,6 +185,8 @@ async function refreshImages(preferredId?: number | null): Promise<void> {
 }
 
 async function loadPage(): Promise<void> {
+  // 结果页和生成页共用同一组项目/场景/分镜上下文。
+  // 加载成功后只负责展示候选和确认状态，不重新生成图片。
   if (!projectId.value) {
     pageState.value = 'missing-project'
     return
@@ -229,6 +234,7 @@ async function loadModelDefaults(): Promise<void> {
 }
 
 async function onGenerateMore(): Promise<void> {
+  // 追加生成仍然走后台 generation job，成功后刷新候选列表。
   if (!storyboardId.value || generating.value) return
 
   generating.value = true
@@ -279,6 +285,8 @@ async function pollGenerationJob(jobId: number): Promise<void> {
 }
 
 async function onConfirm(imageId: number): Promise<void> {
+  // 确认图片会让后端把同一 frameRole 的其他候选归档，
+  // 同时回写 storyboards.image_url / start/end_image_url。
   if (confirmingImageId.value) return
 
   confirmingImageId.value = imageId
@@ -516,7 +524,7 @@ onUnmounted(() => {
                 </span>
               </div>
               <p class="result-meta">{{ frameRoleLabel(item.frameRole) }}</p>
-              <p class="result-meta">{{ item.modelName || 'cogview-3-flash' }}</p>
+              <p class="result-meta">{{ item.modelName || 'agnes-image-2.1-flash' }}</p>
               <p class="result-meta line-clamp">{{ item.promptSnapshot || '未记录提示词快照' }}</p>
               <button
                 class="confirm-btn"

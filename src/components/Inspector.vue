@@ -29,6 +29,8 @@ const input = ref('')
 const diskUsed = 60
 
 function sendMsg() {
+  // Inspector 目前是本地演示状态，输入内容只追加到右侧消息列表，
+  // 尚未接入真实 AI 对话接口。
   const value = input.value.trim()
   if (!value) return
   messages.value.push({ role: 'You', text: value })

@@ -4,7 +4,7 @@
  * @description 从 query.projectId / query.sceneId 读取上下文，
  *              加载当前场景的分镜列表（GET /api/scenes/:id/storyboards），
  *              支持生成分镜 / 重新生成分镜（POST /api/scenes/:id/storyboards/generate），
- *              点击镜头卡片跳到单镜头编辑页（/workspace/storyboard/editor）。
+ *              点击镜头卡片跳到当前分镜视频创作工作台。
  *
  *              状态机：missing-project / missing-scene / loading / error / empty / ready
  *              核心保护：
@@ -26,6 +26,7 @@ import {
   type StoryboardDTO,
 } from '@/api/project'
 import { setWorkspaceContext } from '@/lib/context'
+import { formatAggregateDuration, formatShotDuration } from '@/lib/episode-clips.mjs'
 
 const route = useRoute()
 const router = useRouter()
@@ -150,6 +151,7 @@ async function fetchShots(): Promise<StoryboardDTO[]> {
  * @returns {Promise<void>}
  */
 async function loadAll(): Promise<void> {
+  // 项目、场景、分镜要作为同一页面快照提交，避免不同场景的数据拼到一起。
   if (!projectId.value) {
     pageState.value = 'missing-project'
     return
@@ -189,6 +191,7 @@ async function loadAll(): Promise<void> {
  * @returns {void}
  */
 function onRequestGenerate(): void {
+  // 用户点击按钮时先判断依赖和是否已有分镜，再决定直接生成还是弹确认框。
   if (generating.value || !sceneId.value) return
   // 前置依赖：当前场景必须有剧本正文
   if (!sceneHasContent.value) {
@@ -218,6 +221,7 @@ function cancelRegenerate(): void {
  * @returns {Promise<void>}
  */
 async function doGenerate(): Promise<void> {
+  // 重新生成采用覆盖语义：服务端会先删除当前场景旧分镜，再写入新结果。
   if (generating.value || !sceneId.value) return
   confirmRegenerate.value = false
   const snap = snapshotContext()
@@ -247,10 +251,11 @@ async function doGenerate(): Promise<void> {
 function openShot(shotId: number): void {
   if (generating.value) return
   router.push({
-    path: '/workspace/storyboard/editor',
+    path: '/workspace/episodes/studio',
     query: {
       projectId: String(projectId.value),
       sceneId: String(sceneId.value),
+      episodeNo: String(scene.value?.episodeNo || 1),
       storyboardId: String(shotId),
     },
   })
@@ -404,7 +409,7 @@ onMounted(() => {
           </h1>
           <p class="text-body-md text-on-surface-variant">
             <span v-if="project">项目：{{ project.name }} · </span>
-            共 {{ shots.length }} 个镜头 · 预计总时长 {{ totalDuration }}s
+            共 {{ shots.length }} 个镜头 · 预计总时长 {{ formatAggregateDuration(totalDuration) }}
           </p>
         </div>
         <div class="flex gap-2">
@@ -470,11 +475,11 @@ onMounted(() => {
           class="shot-card cv-auto group relative cursor-pointer border border-outline-variant bg-surface-charcoal transition-all duration-300 hover:border-primary"
           @click="openShot(shot.id)"
         >
-          <div class="absolute left-2 top-2 z-10 bg-black/80 px-2 py-1 text-[10px] font-bold tracking-widest text-primary">
-            SHOT {{ shot.shotNo }}
-          </div>
-          <div class="absolute right-2 top-2 z-10 flex gap-2">
-            <span :class="['px-2 py-0.5 text-[10px] font-bold', statusMeta(shot.status).cls]">
+          <div class="shot-card-header flex items-start justify-between gap-3 border-b border-outline-variant/70 bg-surface-container px-4 py-3">
+            <div class="bg-black/80 px-2 py-1 text-[10px] font-bold tracking-widest text-primary">
+              SHOT {{ shot.shotNo }}
+            </div>
+            <span :class="['shrink-0 whitespace-nowrap px-2 py-0.5 text-[10px] font-bold', statusMeta(shot.status).cls]">
               {{ statusMeta(shot.status).text }}
             </span>
           </div>
@@ -484,7 +489,7 @@ onMounted(() => {
                 <div class="mb-1 text-[10px] uppercase tracking-tighter text-on-surface-variant">景别 / 时长</div>
                 <div class="flex gap-2">
                   <span class="font-bold text-label-md text-on-surface">{{ shot.shotType || '—' }}</span>
-                  <span class="font-bold text-label-md text-primary-container">{{ shot.durationSeconds || 0 }}s</span>
+                  <span class="font-bold text-label-md text-primary-container">{{ formatShotDuration(shot.durationSeconds) }}</span>
                 </div>
               </div>
               <div class="text-right">

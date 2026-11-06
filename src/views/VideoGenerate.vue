@@ -12,12 +12,15 @@ import {
   listProjectAudio,
   listShotImages,
   listStoryboardVideos,
+  saveRecoveryVideoReview,
   type AudioAssetDTO,
   type ImageAssetDTO,
   type StoryboardDTO,
   type VideoAssetDTO,
 } from '@/api/project'
 import { setWorkspaceContext } from '@/lib/context'
+import { claimReworkItem, completeReworkItem } from '@/lib/rework-queue'
+import { formatShotDuration } from '@/lib/episode-clips.mjs'
 
 type PageState =
   | 'missing-project'
@@ -28,12 +31,20 @@ type PageState =
   | 'error'
   | 'ready'
 
+type RecoveryReviewDecision = 'approved' | 'rework'
+type RecoveryCharacterReviewDecision = 'matched' | 'rework'
+type RecoveryCharacterCheckDraft = {
+  decision: RecoveryCharacterReviewDecision | ''
+  note: string
+}
+
 const route = useRoute()
 const router = useRouter()
 
 const projectId = computed(() => Number(route.query.projectId) || 0)
 const sceneId = computed(() => Number(route.query.sceneId) || 0)
 const storyboardId = computed(() => Number(route.query.storyboardId) || 0)
+const reworkCandidateId = computed(() => Number(route.query.reworkCandidateId) || 0)
 
 const pageState = ref<PageState>('loading')
 const storyboard = ref<StoryboardDTO | null>(null)
@@ -47,21 +58,37 @@ const selectedVideoId = ref<number | null>(null)
 const motionMode = ref('PAN')
 const motionPrompt = ref('')
 const durationSeconds = ref(5)
-const modelName = ref('cogvideox-flash')
+const modelName = ref('agnes-video-2.5-flash')
 const lipSyncProvider = ref('')
 const isFixedDurationModel = computed(() => /^cogvideox(?:-|$)/i.test(modelName.value.trim()))
 
 const loadingVideos = ref(false)
 const generating = ref(false)
+const generationProgress = ref(0)
 const lipSyncing = ref(false)
 const lipSyncProgress = ref(0)
 const confirmingVideoId = ref<number | null>(null)
+const savingRecoveryReviewId = ref<number | null>(null)
 const errorMsg = ref('')
 const infoMsg = ref('')
+const reworkContext = ref<{ candidateId: number } | null>(null)
+const recoveryReviewDecision = ref<RecoveryReviewDecision>('approved')
+const recoveryReviewChecklist = ref({
+  visualReviewed: false,
+  characterConsistencyReviewed: false,
+  motionContinuityReviewed: false,
+})
+const recoveryCharacterChecks = ref<Record<number, RecoveryCharacterCheckDraft>>({})
+const recoveryReviewNote = ref('')
 let lipSyncTimer: ReturnType<typeof setTimeout> | null = null
+let videoGenerationTimer: ReturnType<typeof setTimeout> | null = null
 
 const selectedVideo = computed<VideoAssetDTO | null>(
   () => videos.value.find((item) => item.id === selectedVideoId.value) || null,
+)
+
+const selectedRecoveryVideo = computed<VideoAssetDTO | null>(() =>
+  selectedVideo.value?.isRecoveryVideo ? selectedVideo.value : null,
 )
 
 const confirmedVideo = computed<VideoAssetDTO | null>(
@@ -92,6 +119,8 @@ const confirmedDialogueAudios = computed(() =>
 )
 
 const confirmedDialogueAudio = computed<AudioAssetDTO | null>(() => {
+  // 口型同步优先使用“当前分镜角色”对应的已确认对白音频。
+  // 如果找不到精确角色匹配，才退回该分镜最新的一条对白音频。
   const currentCharacterId = Number(storyboard.value?.characterId || 0)
   const matched = confirmedDialogueAudios.value.find(
     (item) => currentCharacterId && Number(item.characterId || 0) === currentCharacterId,
@@ -136,6 +165,8 @@ const hasMultiSpeakerDialogue = computed(() => {
 })
 
 const lipSyncBlockedReason = computed(() => {
+  // 口型同步前置条件比较严格：
+  // 必须有说话角色、有已确认对白、角色不能错配，多人对白还要先拆成单人分镜。
   if (!storyboard.value?.characterId) return '当前分镜还没有绑定说话角色，请先回分镜编辑页选择说话人。'
   if (!confirmedDialogueAudio.value) return '当前分镜还没有已确认对白音频，请先到音频页生成并确认对白。'
   if (audioRoleMismatch.value) {
@@ -198,7 +229,7 @@ function backToStoryboardEditor(): void {
 
 function goToFrameModule(): void {
   router.push({
-    path: '/workspace/frame/result',
+    path: '/workspace/episodes/studio',
     query: buildQuery(),
   })
 }
@@ -224,6 +255,95 @@ function syncSelectedVideo(): void {
   selectedVideoId.value = null
 }
 
+function loadRecoveryReviewDraft(video: VideoAssetDTO | null): void {
+  const review = video?.recoveryReview
+  recoveryReviewDecision.value = review?.decision === 'rework' ? 'rework' : 'approved'
+  recoveryReviewChecklist.value = {
+    visualReviewed: review?.checklist?.visualReviewed === true,
+    characterConsistencyReviewed: review?.checklist?.characterConsistencyReviewed === true,
+    motionContinuityReviewed: review?.checklist?.motionContinuityReviewed === true,
+  }
+  const savedCharacterChecks = new Map(
+    (review?.checklist?.characterChecks || []).map((item) => [item.characterId, item]),
+  )
+  recoveryCharacterChecks.value = Object.fromEntries(
+    (video?.recoveryInspection?.characterChecklist || []).map((character) => {
+      const saved = savedCharacterChecks.get(character.characterId)
+      return [
+        character.characterId,
+        {
+          decision: saved?.decision || '',
+          note: saved?.note || '',
+        },
+      ]
+    }),
+  )
+  recoveryReviewNote.value = review?.note || ''
+}
+
+function hasMatchedCharacterReviews(video: VideoAssetDTO): boolean {
+  const expectedCharacters = video.recoveryInspection?.characterChecklist || []
+  const savedChecks = video.recoveryReview?.checklist?.characterChecks || []
+  return expectedCharacters.every((character) =>
+    savedChecks.some(
+      (item) => item.characterId === character.characterId && item.decision === 'matched',
+    ),
+  )
+}
+
+const recoveryCharacterCheckError = computed(() => {
+  const video = selectedRecoveryVideo.value
+  if (!video) return ''
+  for (const character of video.recoveryInspection?.characterChecklist || []) {
+    const check = recoveryCharacterChecks.value[character.characterId]
+    if (!check?.decision) return `请为角色“${character.name}”选择通过或返工`
+    if (check.decision === 'rework' && !check.note.trim()) {
+      return `角色“${character.name}”标记返工时必须填写原因`
+    }
+  }
+  return ''
+})
+
+function isRecoveryReviewApproved(video: VideoAssetDTO): boolean {
+  const review = video.recoveryReview
+  const inspection = video.recoveryInspection
+  return Boolean(
+    video.isRecoveryVideo &&
+      inspection?.status === 'ready' &&
+      inspection.sampleFrames.length >= 3 &&
+      review?.decision === 'approved' &&
+      review.checklist.visualReviewed &&
+      review.checklist.characterConsistencyReviewed &&
+      review.checklist.motionContinuityReviewed &&
+      hasMatchedCharacterReviews(video),
+  )
+}
+
+function isConfirmBlocked(video: VideoAssetDTO): boolean {
+  return video.isRecoveryVideo === true && !isRecoveryReviewApproved(video)
+}
+
+function recoveryReviewStatusLabel(video: VideoAssetDTO): string {
+  if (!video.isRecoveryVideo) return statusLabel(video.status)
+  if (isRecoveryReviewApproved(video)) return '复核已批准'
+  if (video.recoveryReview?.decision === 'rework') return '复核返工'
+  return '恢复待复核'
+}
+
+function releaseReadinessLabel(video: VideoAssetDTO): string {
+  const readiness = video.recoveryInspection?.releaseReadiness
+  if (readiness?.status === 'release-format-ready') return '发布规格就绪'
+  if (readiness?.status === 'needs-vertical-final-edit') return '需竖屏终剪'
+  return '不可直发平台'
+}
+
+function releaseReadinessClass(video: VideoAssetDTO): string {
+  const status = video.recoveryInspection?.releaseReadiness?.status
+  if (status === 'release-format-ready') return 'release-ready'
+  if (status === 'needs-vertical-final-edit') return 'needs-final-edit'
+  return 'not-ready'
+}
+
 async function refreshVideos(): Promise<void> {
   loadingVideos.value = true
   try {
@@ -236,6 +356,8 @@ async function refreshVideos(): Promise<void> {
 }
 
 async function loadPage(): Promise<void> {
+  // 视频生成必须建立在“已确认静帧”之上。
+  // 页面会优先找 start 帧，其次找 primary 帧；end 帧只作为动作终点约束。
   if (!projectId.value) {
     pageState.value = 'missing-project'
     return
@@ -254,6 +376,12 @@ async function loadPage(): Promise<void> {
   infoMsg.value = ''
 
   try {
+    if (reworkCandidateId.value) {
+      const claimed = claimReworkItem(projectId.value, reworkCandidateId.value, 'video')
+      if (claimed) {
+        reworkContext.value = { candidateId: claimed.candidateId }
+      }
+    }
     const shot = await getStoryboard(storyboardId.value)
     if (shot.sceneId !== sceneId.value) {
       throw new Error('当前分镜与场景上下文不一致，请检查页面参数')
@@ -306,30 +434,65 @@ async function loadModelDefaults(): Promise<void> {
 }
 
 async function onGenerate(): Promise<void> {
+  // 普通视频生成：把已确认静帧 + 动作提示词提交给后端，创建图生视频任务。
   if (!storyboardId.value || !confirmedImage.value || generating.value) return
 
   generating.value = true
+  generationProgress.value = 0
   errorMsg.value = ''
   infoMsg.value = ''
   try {
-    await generateStoryboardVideos(storyboardId.value, {
+    const job = await generateStoryboardVideos(storyboardId.value, {
       prompt: motionPrompt.value.trim() || undefined,
       motionMode: motionMode.value,
       durationSeconds: durationSeconds.value,
       modelName: modelName.value,
       candidateCount: 1,
     })
-    await refreshVideos()
-    pageState.value = 'ready'
-    infoMsg.value = '已生成 1 条候选视频'
+    infoMsg.value = '视频任务已进入后台队列，可以离开此页面'
+    void pollVideoGenerationJob(job.id)
   } catch (error) {
-    errorMsg.value = error instanceof Error ? error.message : '视频生成失败'
-  } finally {
     generating.value = false
+    errorMsg.value = error instanceof Error ? error.message : '视频生成失败'
+  }
+}
+
+async function pollVideoGenerationJob(jobId: number): Promise<void> {
+  // 视频任务通常耗时更久，所以轮询间隔比静帧更长。
+  // 成功后刷新候选视频列表，用户再手动确认主版本。
+  try {
+    const job = await getGenerationJob(jobId)
+    generationProgress.value = job.progressPercent
+    if (job.status === 'success') {
+      generating.value = false
+      generationProgress.value = 100
+      await refreshVideos()
+      if (reworkContext.value) {
+        completeReworkItem(projectId.value, reworkContext.value.candidateId, 'video')
+        reworkContext.value = null
+      }
+      pageState.value = 'ready'
+      errorMsg.value = ''
+      infoMsg.value = '候选视频已生成并保存到本地'
+      return
+    }
+    if (job.status === 'failed' || job.status === 'canceled') {
+      generating.value = false
+      infoMsg.value = ''
+      errorMsg.value = job.errorText || '视频生成失败'
+      return
+    }
+    videoGenerationTimer = setTimeout(() => void pollVideoGenerationJob(jobId), 5000)
+  } catch (error) {
+    generating.value = false
+    infoMsg.value = ''
+    errorMsg.value = error instanceof Error ? error.message : '视频任务状态查询失败'
   }
 }
 
 async function pollLipSyncJob(jobId: number): Promise<void> {
+  // 口型同步也是 generation job，只是 job_type 不同。
+  // 成功后会刷新视频列表，并通常自动确认成当前主版本。
   try {
     const job = await getGenerationJob(jobId)
     lipSyncProgress.value = job.progressPercent
@@ -356,6 +519,8 @@ async function pollLipSyncJob(jobId: number): Promise<void> {
 }
 
 async function onGenerateLipSync(): Promise<void> {
+  // 口型同步：用确认过的对白音频驱动角色嘴型。
+  // 如果已有确认动作视频，DashScope 分支会尽量在动作视频基础上加口型。
   if (!storyboardId.value || !confirmedImage.value || lipSyncing.value) return
   if (lipSyncBlockedReason.value) {
     errorMsg.value = lipSyncBlockedReason.value
@@ -377,7 +542,14 @@ async function onGenerateLipSync(): Promise<void> {
 }
 
 async function onConfirm(videoId: number): Promise<void> {
+  // 确认视频时，后端会把同分镜其他视频归档，并把 storyboards.video_url 指向这个主版本。
   if (confirmingVideoId.value) return
+  const video = videos.value.find((item) => item.id === videoId)
+  if (video && isConfirmBlocked(video)) {
+    errorMsg.value = '恢复视频需要先完成自动抽帧证据检查，并保存批准三项人工复核。'
+    infoMsg.value = ''
+    return
+  }
 
   confirmingVideoId.value = videoId
   errorMsg.value = ''
@@ -394,11 +566,64 @@ async function onConfirm(videoId: number): Promise<void> {
   }
 }
 
+async function onSaveRecoveryReview(): Promise<void> {
+  const video = selectedRecoveryVideo.value
+  if (!video || savingRecoveryReviewId.value) return
+  if (recoveryCharacterCheckError.value) {
+    errorMsg.value = recoveryCharacterCheckError.value
+    infoMsg.value = ''
+    return
+  }
+
+  const characterChecks = []
+  for (const character of video.recoveryInspection?.characterChecklist || []) {
+    const check = recoveryCharacterChecks.value[character.characterId]
+    if (!check || (check.decision !== 'matched' && check.decision !== 'rework')) {
+      errorMsg.value = `请为角色“${character.name}”选择通过或返工`
+      infoMsg.value = ''
+      return
+    }
+    characterChecks.push({
+      characterId: character.characterId,
+      decision: check.decision,
+      note: check.note.trim() || undefined,
+    })
+  }
+
+  savingRecoveryReviewId.value = video.id
+  errorMsg.value = ''
+  infoMsg.value = ''
+  try {
+    const updated = await saveRecoveryVideoReview(video.id, {
+      decision: recoveryReviewDecision.value,
+      checklist: {
+        ...recoveryReviewChecklist.value,
+        characterChecks,
+      },
+      note: recoveryReviewNote.value.trim() || undefined,
+    })
+    await refreshVideos()
+    selectedVideoId.value = updated.id
+    infoMsg.value =
+      updated.recoveryReview?.decision === 'approved'
+        ? '恢复视频复核已批准；抽帧证据齐全后可以确认主版本。'
+        : '恢复视频已标记返工，原因已保存。'
+  } catch (error) {
+    errorMsg.value = error instanceof Error ? error.message : '保存恢复视频复核失败'
+  } finally {
+    savingRecoveryReviewId.value = null
+  }
+}
+
 function statusLabel(status: string): string {
   if (status === 'confirmed') return '已确认'
   if (status === 'archived') return '已归档'
   return '候选'
 }
+
+watch(selectedRecoveryVideo, (video) => {
+  if (video) loadRecoveryReviewDraft(video)
+})
 
 watch(
   () => [route.query.projectId, route.query.sceneId, route.query.storyboardId],
@@ -414,6 +639,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (lipSyncTimer) clearTimeout(lipSyncTimer)
+  if (videoGenerationTimer) clearTimeout(videoGenerationTimer)
 })
 </script>
 
@@ -504,18 +730,264 @@ onBeforeUnmount(() => {
 
       <div v-if="errorMsg" class="message error">{{ errorMsg }}</div>
       <div v-if="infoMsg" class="message success">{{ infoMsg }}</div>
+      <div v-if="reworkContext" class="message rework">
+        正在处理返工候选 #{{ reworkContext.candidateId }}。生成新候选成功后，会把该项标记为已完成。
+      </div>
 
       <div class="main-grid">
         <section class="panel preview-panel">
           <div class="panel-head">
             <h2>当前预览</h2>
-            <span v-if="confirmedVideo" class="status-badge confirmed">已确认主版本</span>
+            <span v-if="selectedVideo?.status === 'confirmed'" class="status-badge confirmed">
+              已确认主版本
+            </span>
           </div>
 
           <div v-if="selectedVideo" class="video-stage">
             <video :src="selectedVideo.videoUrl" controls playsinline class="video-player"></video>
           </div>
           <div v-else class="empty-stage">还没有候选视频，先生成一批看看。</div>
+
+          <section v-if="selectedRecoveryVideo" class="recovery-review">
+            <div class="recovery-review-head">
+              <div>
+                <h3>恢复视频人工复核</h3>
+                <p>技术参数与三张抽帧证据齐全后，才能完成三项人工复核。</p>
+              </div>
+              <span
+                class="status-badge"
+                :class="{
+                  confirmed: isRecoveryReviewApproved(selectedRecoveryVideo),
+                  rework: selectedRecoveryVideo.recoveryReview?.decision === 'rework',
+                }"
+              >
+                {{ recoveryReviewStatusLabel(selectedRecoveryVideo) }}
+              </span>
+            </div>
+
+            <div
+              v-if="selectedRecoveryVideo.recoveryInspection"
+              class="recovery-evidence"
+              :class="{ failed: selectedRecoveryVideo.recoveryInspection.status === 'failed' }"
+            >
+              <div class="recovery-evidence-head">
+                <span>自动检查证据</span>
+                <strong>
+                  {{
+                    selectedRecoveryVideo.recoveryInspection.status === 'ready'
+                      ? '已就绪'
+                      : '未通过'
+                  }}
+                </strong>
+              </div>
+              <p class="recovery-spec">
+                {{
+                  `${selectedRecoveryVideo.recoveryInspection.media.width || '-'} x ${
+                    selectedRecoveryVideo.recoveryInspection.media.height || '-'
+                  } / ${selectedRecoveryVideo.recoveryInspection.media.frameRate || '-'}fps / ${
+                    selectedRecoveryVideo.recoveryInspection.media.durationSeconds || '-'
+                  }s`
+                }}
+              </p>
+              <p class="recovery-spec">
+                {{
+                  `${selectedRecoveryVideo.recoveryInspection.media.videoCodec || '-'} + ${
+                    selectedRecoveryVideo.recoveryInspection.media.audioCodec || '无音频'
+                  } / ${selectedRecoveryVideo.recoveryInspection.media.formatName || '-'}`
+                }}
+              </p>
+              <div
+                v-if="selectedRecoveryVideo.recoveryInspection.sampleFrames.length"
+                class="recovery-sample-grid"
+              >
+                <figure
+                  v-for="sample in selectedRecoveryVideo.recoveryInspection.sampleFrames"
+                  :key="sample.storageKey"
+                  class="recovery-sample"
+                >
+                  <img :src="sample.imageUrl" :alt="`恢复抽帧 ${sample.second} 秒`" />
+                  <figcaption>{{ sample.second.toFixed(1) }}s</figcaption>
+                </figure>
+              </div>
+              <div
+                v-if="selectedRecoveryVideo.recoveryInspection.characterChecklist.length"
+                class="recovery-character-checklist"
+              >
+                <span class="recovery-character-label">角色核对</span>
+                <div
+                  v-for="character in selectedRecoveryVideo.recoveryInspection.characterChecklist"
+                  :key="character.characterId"
+                  class="recovery-character-row"
+                >
+                  <img
+                    v-if="character.referenceImageUrl"
+                    :src="character.referenceImageUrl"
+                    :alt="`${character.name} 定妆参考`"
+                  />
+                  <div>
+                    <strong>
+                      {{ character.name }}{{ character.isPrimary ? ' · 主体' : '' }}
+                      {{
+                        character.versionNo
+                          ? `· v${character.versionNo}`
+                          : '· 历史快照未记录版本'
+                      }}
+                    </strong>
+                    <p>固定外貌：{{ character.appearance || '历史快照未记录' }}</p>
+                    <p :class="{ 'recovery-character-missing': !character.costume }">
+                      固定服装：{{ character.costume || '历史快照未独立记录' }}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <ul
+                v-if="selectedRecoveryVideo.recoveryInspection.blockingIssues.length"
+                class="recovery-evidence-list error"
+              >
+                <li
+                  v-for="issue in selectedRecoveryVideo.recoveryInspection.blockingIssues"
+                  :key="issue.code"
+                >
+                  {{ issue.message }}
+                </li>
+              </ul>
+              <ul
+                v-if="selectedRecoveryVideo.recoveryInspection.warnings.length"
+                class="recovery-evidence-list warning"
+              >
+                <li
+                  v-for="warning in selectedRecoveryVideo.recoveryInspection.warnings"
+                  :key="warning.code"
+                >
+                  {{ warning.message }}
+                </li>
+              </ul>
+              <div
+                v-if="selectedRecoveryVideo.recoveryInspection.releaseReadiness"
+                class="release-readiness"
+                :class="releaseReadinessClass(selectedRecoveryVideo)"
+              >
+                <strong>{{ releaseReadinessLabel(selectedRecoveryVideo) }}</strong>
+                <p>{{ selectedRecoveryVideo.recoveryInspection.releaseReadiness.message }}</p>
+                <ul
+                  v-if="selectedRecoveryVideo.recoveryInspection.releaseReadiness.blockingIssues.length"
+                  class="recovery-evidence-list"
+                >
+                  <li
+                    v-for="issue in selectedRecoveryVideo.recoveryInspection.releaseReadiness.blockingIssues"
+                    :key="issue.code"
+                  >
+                    {{ issue.message }}
+                  </li>
+                </ul>
+              </div>
+              <ul class="recovery-evidence-list">
+                <li
+                  v-for="focus in selectedRecoveryVideo.recoveryInspection.manualFocus"
+                  :key="focus"
+                >
+                  {{ focus }}
+                </li>
+              </ul>
+            </div>
+            <p v-else class="recovery-evidence missing">
+              自动检查证据尚未生成，不能确认主版本。
+            </p>
+
+            <div class="review-checklist">
+              <label class="review-check">
+                <input v-model="recoveryReviewChecklist.visualReviewed" type="checkbox" />
+                <span>画面构图、主体与明显瑕疵已复核</span>
+              </label>
+              <label class="review-check">
+                <input v-model="recoveryReviewChecklist.characterConsistencyReviewed" type="checkbox" />
+                <span>人物外貌、服装与已确认静帧一致</span>
+              </label>
+              <label class="review-check">
+                <input v-model="recoveryReviewChecklist.motionContinuityReviewed" type="checkbox" />
+                <span>动作起止、镜头运动与场景连续性已复核</span>
+              </label>
+            </div>
+
+            <div
+              v-if="selectedRecoveryVideo.recoveryInspection?.characterChecklist.length"
+              class="review-character-decisions"
+            >
+              <span class="review-section-label">逐角色结论</span>
+              <div
+                v-for="character in selectedRecoveryVideo.recoveryInspection.characterChecklist"
+                :key="`review-${character.characterId}`"
+                class="review-character-decision"
+              >
+                <div class="review-character-decision-head">
+                  <strong>
+                    {{ character.name }}{{ character.isPrimary ? ' · 主体' : '' }}
+                  </strong>
+                  <label>
+                    <span>结论</span>
+                    <select
+                      v-model="recoveryCharacterChecks[character.characterId]!.decision"
+                      class="field-input"
+                      :aria-label="`${character.name} 的角色一致性结论`"
+                    >
+                      <option value="">未复核</option>
+                      <option value="matched">通过</option>
+                      <option value="rework">返工</option>
+                    </select>
+                  </label>
+                </div>
+                <label class="review-character-note">
+                  <span>角色备注</span>
+                  <input
+                    v-model="recoveryCharacterChecks[character.characterId]!.note"
+                    class="field-input"
+                    :aria-label="`${character.name} 的角色复核备注`"
+                    :placeholder="
+                      recoveryCharacterChecks[character.characterId]!.decision === 'rework'
+                        ? '返工时必须说明外貌、服装、主体或动作问题'
+                        : '可记录核对依据'
+                    "
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div class="review-actions">
+              <label class="review-decision">
+                <span>复核结论</span>
+                <select v-model="recoveryReviewDecision" class="field-input">
+                  <option value="approved">批准</option>
+                  <option value="rework">返工</option>
+                </select>
+              </label>
+              <label class="review-note">
+                <span>复核备注</span>
+                <textarea
+                  v-model="recoveryReviewNote"
+                  rows="2"
+                  class="field-input resize-y"
+                  placeholder="记录异常、返工原因或人工判断依据"
+                ></textarea>
+              </label>
+            </div>
+
+            <button
+              class="primary-btn compact"
+              type="button"
+              :disabled="
+                savingRecoveryReviewId === selectedRecoveryVideo.id ||
+                Boolean(recoveryCharacterCheckError)
+              "
+              :title="recoveryCharacterCheckError || undefined"
+              @click="onSaveRecoveryReview"
+            >
+              {{
+                savingRecoveryReviewId === selectedRecoveryVideo.id
+                  ? '保存复核中...'
+                  : '保存人工复核'
+              }}
+            </button>
+          </section>
 
           <div class="meta-grid">
             <div class="meta-card">
@@ -632,7 +1104,7 @@ onBeforeUnmount(() => {
           </div>
 
           <button class="primary-btn w-full" type="button" :disabled="generating" @click="onGenerate">
-            {{ generating ? '生成中...' : '开始生成视频' }}
+            {{ generating ? `后台生成中 ${generationProgress}%` : '开始生成视频' }}
           </button>
 
           <button
@@ -669,7 +1141,11 @@ onBeforeUnmount(() => {
             v-for="item in videos"
             :key="item.id"
             class="result-card"
-            :class="{ active: item.id === selectedVideoId, confirmed: item.status === 'confirmed' }"
+            :class="{
+              active: item.id === selectedVideoId,
+              confirmed: item.status === 'confirmed',
+              recovery: item.isRecoveryVideo,
+            }"
             @click="selectedVideoId = item.id"
           >
             <div class="result-thumb-wrap">
@@ -684,16 +1160,38 @@ onBeforeUnmount(() => {
             <div class="result-body">
               <div class="result-title-row">
                 <strong>V{{ item.versionNo }}</strong>
-                <span class="status-badge" :class="{ confirmed: item.status === 'confirmed' }">
-                  {{ statusLabel(item.status) }}
+                <span
+                  class="status-badge"
+                  :class="{
+                    confirmed: item.status === 'confirmed' || isRecoveryReviewApproved(item),
+                    rework: item.recoveryReview?.decision === 'rework',
+                  }"
+                >
+                  {{ recoveryReviewStatusLabel(item) }}
                 </span>
               </div>
               <p class="result-meta">{{ item.motionMode || '未设置运动模式' }}</p>
-              <p class="result-meta">{{ item.durationSeconds || 0 }} 秒 / {{ item.modelName || '-' }}</p>
+              <p class="result-meta">{{ formatShotDuration(item.durationSeconds) }} / {{ item.modelName || '-' }}</p>
+              <p v-if="item.isRecoveryVideo" class="recovery-meta">
+                {{
+                  isRecoveryReviewApproved(item)
+                    ? '抽帧证据与人工复核已留痕'
+                    : '确认主版本前必须完成抽帧证据与人工复核'
+                }}
+              </p>
               <button
                 class="confirm-btn"
                 type="button"
-                :disabled="item.status === 'confirmed' || confirmingVideoId === item.id"
+                :disabled="
+                  item.status === 'confirmed' ||
+                  confirmingVideoId === item.id ||
+                  isConfirmBlocked(item)
+                "
+                :title="
+                  isConfirmBlocked(item)
+                    ? '请先在当前预览区完成并保存三项人工复核'
+                    : undefined
+                "
                 @click.stop="onConfirm(item.id)"
               >
                 {{
@@ -701,6 +1199,8 @@ onBeforeUnmount(() => {
                     ? '当前主版本'
                     : confirmingVideoId === item.id
                       ? '确认中...'
+                      : isConfirmBlocked(item)
+                        ? '待人工复核'
                       : '确认最终版本'
                 }}
               </button>
@@ -809,6 +1309,296 @@ onBeforeUnmount(() => {
 
 .empty-stage.small {
   min-height: 120px;
+}
+
+.recovery-review {
+  margin-top: 16px;
+  border: 1px solid rgba(234, 179, 8, 0.5);
+  background: rgba(113, 63, 18, 0.14);
+  padding: 14px;
+}
+
+.recovery-review-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.recovery-review h3 {
+  margin: 0;
+  color: #fde68a;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.recovery-review-head p {
+  margin: 5px 0 0;
+  color: #d6c6ad;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.recovery-evidence {
+  margin-top: 14px;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  background: rgba(20, 83, 45, 0.14);
+  padding: 12px;
+}
+
+.recovery-evidence.failed,
+.recovery-evidence.missing {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(127, 29, 29, 0.14);
+}
+
+.recovery-evidence.missing {
+  margin: 14px 0 0;
+  color: #fecaca;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.recovery-evidence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #dcfce7;
+  font-size: 12px;
+}
+
+.recovery-evidence.failed .recovery-evidence-head {
+  color: #fecaca;
+}
+
+.recovery-evidence-head strong {
+  font-size: 12px;
+}
+
+.recovery-spec {
+  margin: 7px 0 0;
+  color: #d6c6ad;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.recovery-sample-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.recovery-sample {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #5a4938;
+  background: #161715;
+}
+
+.recovery-sample img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: #0b0c0b;
+}
+
+.recovery-sample figcaption {
+  padding: 5px 7px;
+  color: #c9ab83;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.recovery-character-checklist {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.recovery-character-label {
+  color: #e9c790;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.recovery-character-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  border-top: 1px solid rgba(201, 171, 131, 0.18);
+  padding-top: 8px;
+}
+
+.recovery-character-row img {
+  display: block;
+  width: 46px;
+  height: 58px;
+  object-fit: cover;
+  background: #0b0c0b;
+}
+
+.recovery-character-row strong {
+  display: block;
+  color: #f4ede5;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.recovery-character-row p {
+  margin: 2px 0 0;
+  color: #d6c6ad;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.recovery-character-row .recovery-character-missing {
+  color: #fde68a;
+}
+
+.recovery-evidence-list {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: #d6c6ad;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.recovery-evidence-list.error {
+  color: #fecaca;
+}
+
+.recovery-evidence-list.warning {
+  color: #fde68a;
+}
+
+.release-readiness {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+  border: 1px solid rgba(216, 180, 254, 0.35);
+  background: rgba(88, 28, 135, 0.16);
+  padding: 10px;
+  color: #f3e8ff;
+}
+
+.release-readiness.release-ready {
+  border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(6, 78, 59, 0.16);
+  color: #d1fae5;
+}
+
+.release-readiness.not-ready {
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(51, 65, 85, 0.16);
+  color: #e2e8f0;
+}
+
+.release-readiness strong {
+  font-size: 12px;
+}
+
+.release-readiness p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.review-checklist {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.review-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: #f4ede5;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.review-check input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: #d97706;
+}
+
+.review-character-decisions {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.review-section-label {
+  color: #e9c790;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.review-character-decision {
+  border-top: 1px solid rgba(201, 171, 131, 0.28);
+  padding-top: 10px;
+}
+
+.review-character-decision-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 144px;
+  gap: 12px;
+  align-items: end;
+}
+
+.review-character-decision-head strong {
+  color: #f4ede5;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.review-character-decision label > span,
+.review-character-note > span {
+  display: block;
+  margin-bottom: 5px;
+  color: #c9ab83;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.review-character-note {
+  display: block;
+  margin-top: 8px;
+}
+
+.review-actions {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.36fr) minmax(0, 1fr);
+  gap: 10px;
+  margin: 14px 0 12px;
+}
+
+.review-decision,
+.review-note {
+  display: block;
+}
+
+.review-decision > span,
+.review-note > span {
+  display: block;
+  margin-bottom: 6px;
+  color: #e9c790;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .meta-grid {
@@ -1017,6 +1807,10 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 1px rgba(240, 181, 111, 0.4);
 }
 
+.result-card.recovery {
+  border-color: rgba(234, 179, 8, 0.5);
+}
+
 .result-thumb-wrap {
   position: relative;
 }
@@ -1055,6 +1849,13 @@ onBeforeUnmount(() => {
   margin: 4px 0;
   color: #b79f84;
   font-size: 13px;
+}
+
+.recovery-meta {
+  margin: 8px 0 0;
+  color: #fde68a;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .primary-btn,
@@ -1118,6 +1919,11 @@ onBeforeUnmount(() => {
   color: #f0b56f;
 }
 
+.status-badge.rework {
+  border-color: rgba(248, 113, 113, 0.65);
+  color: #fecaca;
+}
+
 .message {
   margin-bottom: 14px;
   padding: 12px 14px;
@@ -1135,6 +1941,12 @@ onBeforeUnmount(() => {
   border-color: rgba(74, 222, 128, 0.4);
   background: rgba(20, 83, 45, 0.18);
   color: #bbf7d0;
+}
+
+.message.rework {
+  border-color: rgba(255, 183, 125, 0.42);
+  background: rgba(255, 183, 125, 0.1);
+  color: #ffd9b0;
 }
 
 .state-card {
@@ -1177,6 +1989,23 @@ onBeforeUnmount(() => {
   }
 
   .check-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .recovery-review-head {
+    flex-direction: column;
+  }
+
+  .review-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .review-character-decision-head {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .recovery-sample-grid {
     grid-template-columns: 1fr;
   }
 }

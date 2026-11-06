@@ -215,6 +215,7 @@ const activeViewItem = computed<SceneViewItem | null>(() => {
  * @returns {Promise<void>}
  */
 async function loadOutline(): Promise<void> {
+  // 总纲是后续生成场景的前置数据；没有总纲时，页面会显示“待生成”而不是报错。
   if (!projectId.value) return
   outlineState.value = 'loading'
   outlineErrorMsg.value = ''
@@ -237,6 +238,7 @@ async function loadOutline(): Promise<void> {
  * @returns {Promise<void>}
  */
 async function refreshAll() {
+  // 页面初始化按“项目 -> 总纲 -> 正式场景”的顺序读取，方便模板准确判断当前阶段。
   if (!projectId.value) return
   errorMsg.value = ''
 
@@ -296,6 +298,7 @@ function cancelRegenerateOutline(): void {
  * @returns {Promise<void>}
  */
 async function onGenerateOutline() {
+  // 重做总纲会改变后续场景的依据，所以生成成功后必须把旧场景视为过期数据。
   if (generating.value.outline || !projectId.value) return
   confirmRegenOpen.value = false
   generating.value.outline = true
@@ -324,6 +327,7 @@ async function onGenerateOutline() {
  * @returns {Promise<void>}
  */
 async function onGenerateScenes() {
+  // 这里生成的是正式场景并写入数据库，和总纲里仅用于预览的 scenes 不是同一份数据。
   if (generating.value.scenes || !projectId.value) return
   if (!outline.value) {
     errorMsg.value = '请先生成总纲'
@@ -349,6 +353,7 @@ async function onGenerateScenes() {
  * @returns {Promise<void>}
  */
 async function onGenerateScript() {
+  // 只有正式场景才有数据库 id；预览场景的下标不能拿来调用剧本接口。
   // 双重保护：UI 按钮已 disabled，但脚本入口仍做 kind 校验，防止误用预览场景的"下标 id"调接口
   if (generating.value.script) return
   if (!activeScene.value || activeScene.value.kind !== 'formal') return
@@ -485,16 +490,16 @@ onMounted(() => {
       </button>
     </div>
 
-    <div class="flex h-full min-h-0 overflow-hidden">
+    <div class="script-workspace flex min-h-0">
       <!-- 三幕结构侧栏 -->
-      <aside class="flex min-h-0 w-80 shrink-0 flex-col border-r border-outline-variant bg-surface">
+      <aside class="script-act-sidebar flex min-h-0 w-80 shrink-0 flex-col border-r border-outline-variant bg-surface">
         <div class="border-b border-outline-variant bg-surface-container p-4">
           <h3 class="flex items-center gap-2 font-label-md uppercase tracking-widest text-primary">
             <span class="material-symbols-outlined text-sm">reorder</span>
             三幕式结构
           </h3>
         </div>
-        <div class="flex-1 space-y-6 overflow-y-auto overscroll-y-contain p-4">
+        <div class="script-act-list flex-1 space-y-6 p-4">
           <template v-if="outline && acts.length">
             <div v-for="act in acts" :key="act.act">
               <div class="mb-2 flex items-center gap-2">
@@ -544,7 +549,7 @@ onMounted(() => {
       </aside>
 
       <!-- 中间：当前选中场景的剧本预览 -->
-      <section class="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain bg-surface-dim p-8">
+      <section class="script-content flex min-h-0 flex-1 flex-col bg-surface-dim p-8">
         <!-- 顶部操作条 -->
         <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -614,6 +619,16 @@ onMounted(() => {
                 {{ generating.script ? 'progress_activity' : 'edit_note' }}
               </span>
               {{ generating.script ? '生成中...' : '生成剧本' }}
+            </button>
+            <button
+              type="button"
+              class="flex items-center gap-2 border border-primary/60 bg-primary/10 px-4 py-2 text-sm font-bold text-primary transition-all hover:border-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="!activeScene || activeScene.kind !== 'formal'"
+              :title="!activeScene || activeScene.kind !== 'formal' ? '请先生成正式场景' : '进入当前场景的剧本编辑器'"
+              @click="activeScene && activeScene.kind === 'formal' && goScriptEditor(activeScene.id)"
+            >
+              <span class="material-symbols-outlined text-base">edit</span>
+              编辑剧本
             </button>
           </div>
           <!-- 重做总纲后果短提示：让用户不用点开弹窗就知道这是项目级操作 -->
@@ -840,7 +855,7 @@ onMounted(() => {
       </section>
 
       <!-- 右侧：场景概览 -->
-      <aside class="flex w-[320px] flex-col border-l border-outline-variant bg-surface shrink-0">
+      <aside class="script-scene-sidebar flex w-[320px] flex-col border-l border-outline-variant bg-surface shrink-0">
         <div class="flex items-center justify-between border-b border-outline-variant bg-surface-container p-4">
           <h3 class="flex items-center gap-2 font-label-md uppercase tracking-widest text-primary">
             <span class="material-symbols-outlined text-sm">format_list_bulleted</span>
@@ -854,7 +869,7 @@ onMounted(() => {
             <span class="border border-primary/30 bg-primary-container/20 px-1.5 text-[10px] text-primary">{{ sceneView.items.length }}</span>
           </div>
         </div>
-        <div class="scroll-optimized flex-1 space-y-2 overflow-y-auto overscroll-y-contain p-3">
+        <div class="script-scene-list flex-1 space-y-2 p-3">
           <button
             v-for="(item, idx) in sceneView.items"
             :key="(item.kind === 'formal' ? 'f-' + item.data.id : 'p-' + idx)"
@@ -955,3 +970,118 @@ onMounted(() => {
     </div>
   </WorkspaceLayout>
 </template>
+
+<style scoped>
+.script-workspace {
+  background: #111311;
+  min-height: 100%;
+  height: 100%;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+  scroll-padding-block: 1rem;
+}
+
+.script-act-sidebar,
+.script-scene-sidebar,
+.script-content {
+  overflow: visible;
+}
+
+.script-act-sidebar,
+.script-scene-sidebar {
+  align-self: stretch;
+}
+
+.script-act-sidebar {
+  width: 280px;
+}
+
+.script-scene-sidebar {
+  width: 280px;
+}
+
+@media (max-width: 1440px) {
+  .script-workspace {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .script-act-sidebar,
+  .script-scene-sidebar {
+    width: 100%;
+    flex: 0 0 auto;
+  }
+
+  .script-act-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid rgba(164, 132, 84, 0.3);
+  }
+
+  .script-scene-sidebar {
+    border-top: 1px solid rgba(164, 132, 84, 0.3);
+    border-left: 0;
+  }
+
+  .script-content {
+    min-height: auto;
+    padding: 1.25rem;
+  }
+}
+
+@media (max-width: 1023px) {
+  .script-workspace {
+    flex-direction: column;
+    height: auto;
+    min-height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .script-act-sidebar,
+  .script-scene-sidebar {
+    width: 100%;
+    flex: 0 0 auto;
+  }
+
+  .script-act-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid rgba(164, 132, 84, 0.3);
+  }
+
+  .script-content {
+    min-height: auto;
+    padding: 1.25rem;
+  }
+
+  .script-scene-sidebar {
+    border-top: 1px solid rgba(164, 132, 84, 0.3);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 639px) {
+  .script-content {
+    padding: 1rem;
+  }
+
+  .script-content > div:first-child {
+    align-items: flex-start;
+  }
+
+  .script-content > div:first-child > div:last-child {
+    width: 100%;
+  }
+
+  .script-content > div:first-child > div:last-child button {
+    flex: 1 1 auto;
+    justify-content: center;
+    padding-right: 0.7rem;
+    padding-left: 0.7rem;
+  }
+}
+</style>

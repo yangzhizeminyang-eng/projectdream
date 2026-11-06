@@ -145,6 +145,7 @@ async function loadScene(): Promise<SceneDTO> {
  * @returns {Promise<void>}
  */
 async function loadAll(): Promise<void> {
+  // 先记住本次请求对应的项目和场景，防止用户快速切换后旧请求回包覆盖新页面。
   if (!projectId.value) {
     pageState.value = 'no-project'
     return
@@ -256,6 +257,7 @@ function cancelSwitchScene(): void {
  * @returns {Promise<void>}
  */
 async function onSave(): Promise<void> {
+  // 保存接口返回服务端最终版本，成功后用它同时更新 currentScene、列表和编辑草稿。
   if (saving.value || !currentScene.value) return
   if (!isDraftDirty.value) {
     infoMsg.value = '未检测到修改'
@@ -317,6 +319,7 @@ function cancelRewriteScript(): void {
  * @returns {Promise<void>}
  */
 async function doGenerateScript(): Promise<void> {
+  // AI 生成不是“追加文字”，而是用服务端生成结果替换当前场景的剧本字段。
   if (generating.value || !currentScene.value) return
   confirmRewriteScript.value = false
   const snap = snapshotContext()
@@ -349,6 +352,7 @@ async function doGenerateScript(): Promise<void> {
  * @returns {Promise<void>}
  */
 async function onGenerateStoryboard(): Promise<void> {
+  // 分镜生成完成后才跳转；跳转前再次确认场景没变，避免进入错误场景的分镜页。
   if (generatingStoryboard.value || !currentScene.value) return
   if (!hasContent.value) {
     errorMsg.value = '请先生成或编辑当前场景剧本，再生成分镜'

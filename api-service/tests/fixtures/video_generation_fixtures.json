@@ -1,0 +1,1167 @@
+{
+  "generator": "node server/services/*.mjs（纯函数子集）",
+  "cases": [
+    {
+      "name": "sanitize_prompt_strips_template_tail",
+      "group": "sanitizeStoryboardPrompt",
+      "input": {
+        "value": "中景固定镜头，林知夏转身看向屏幕。\n\n参考模板来源：角色生成提示词模板（自动生成）",
+        "characterNames": [
+          "林知夏"
+        ]
+      },
+      "expected": "中景固定镜头，林知夏转身看向屏幕。"
+    },
+    {
+      "name": "sanitize_prompt_strips_character_profile_note",
+      "group": "sanitizeStoryboardPrompt",
+      "input": {
+        "value": "近景，林知夏（28岁女性，短发瓜子脸，灰色风衣）站在值班台前。",
+        "characterNames": [
+          "林知夏"
+        ]
+      },
+      "expected": "近景，站在值班台前。"
+    },
+    {
+      "name": "sanitize_prompt_empty",
+      "group": "sanitizeStoryboardPrompt",
+      "input": {
+        "value": "",
+        "characterNames": []
+      },
+      "expected": ""
+    },
+    {
+      "name": "continuity_enabled_by_tool_name",
+      "group": "shouldUseStoryboardContinuity",
+      "input": {
+        "tools": [
+          "片段衔接"
+        ],
+        "prompt": "林知夏走向走廊尽头。",
+        "assetReference": {
+          "tools": []
+        }
+      },
+      "expected": true
+    },
+    {
+      "name": "continuity_enabled_by_prompt_keyword",
+      "group": "shouldUseStoryboardContinuity",
+      "input": {
+        "tools": [],
+        "prompt": "承接上一镜，林知夏继续往前走。",
+        "assetReference": {}
+      },
+      "expected": true
+    },
+    {
+      "name": "continuity_source_shot_no_bracket",
+      "group": "resolveContinuitySourceShotNo",
+      "input": {
+        "prompt": "@片段衔接[镜头03] 继续动作。",
+        "assetReference": {}
+      },
+      "expected": "03"
+    },
+    {
+      "name": "continuity_source_shot_no_paren_and_reference",
+      "group": "resolveContinuitySourceShotNo",
+      "input": {
+        "prompt": "",
+        "assetReference": {
+          "continuityFromShot": "镜头07B"
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "frame_reference_with_previous_end_frame",
+      "group": "buildStoryboardFrameReference",
+      "input": {
+        "continuityEnabled": true,
+        "previousShot": {
+          "id": 88,
+          "shot_no": "03"
+        },
+        "previousVideo": {
+          "end_frame_url": "https://media.example.com/end-88.jpg",
+          "end_frame_storage_key": "videos/end-88.jpg"
+        },
+        "currentShot": {
+          "end_image_url": null
+        },
+        "currentEndFrame": {
+          "image_url": "https://media.example.com/current-end.jpg",
+          "storage_key": null
+        }
+      },
+      "expected": {
+        "enabled": true,
+        "sourceStoryboardId": 88,
+        "sourceShotNo": "03",
+        "startFrameUrl": "https://media.example.com/end-88.jpg",
+        "startFrameStorageKey": "videos/end-88.jpg",
+        "endFrameUrl": "https://media.example.com/current-end.jpg",
+        "endFrameStorageKey": null,
+        "missingStartFrame": false
+      }
+    },
+    {
+      "name": "frame_reference_missing_start_frame",
+      "group": "buildStoryboardFrameReference",
+      "input": {
+        "continuityEnabled": true,
+        "previousShot": {
+          "id": 88,
+          "shot_no": "03"
+        },
+        "previousVideo": {
+          "end_frame_url": null,
+          "end_frame_storage_key": null
+        },
+        "currentShot": {},
+        "currentEndFrame": null
+      },
+      "expected": {
+        "enabled": false,
+        "sourceStoryboardId": 88,
+        "sourceShotNo": "03",
+        "startFrameUrl": null,
+        "startFrameStorageKey": null,
+        "endFrameUrl": null,
+        "endFrameStorageKey": null,
+        "missingStartFrame": true
+      }
+    },
+    {
+      "name": "frame_reference_disabled",
+      "group": "buildStoryboardFrameReference",
+      "input": {
+        "continuityEnabled": false,
+        "previousShot": {
+          "id": 88,
+          "shot_no": "03"
+        },
+        "previousVideo": {
+          "end_frame_url": "https://media.example.com/end-88.jpg"
+        },
+        "currentShot": {},
+        "currentEndFrame": {
+          "image_url": "https://media.example.com/current-end.jpg"
+        }
+      },
+      "expected": {
+        "enabled": false,
+        "sourceStoryboardId": null,
+        "sourceShotNo": null,
+        "startFrameUrl": null,
+        "startFrameStorageKey": null,
+        "endFrameUrl": "https://media.example.com/current-end.jpg",
+        "endFrameStorageKey": null,
+        "missingStartFrame": false
+      }
+    },
+    {
+      "name": "continuity_prompt_enabled",
+      "group": "buildStoryboardContinuityPrompt",
+      "input": {
+        "frameReference": {
+          "enabled": true,
+          "sourceShotNo": "03",
+          "sourceStoryboardId": 88,
+          "missingStartFrame": false
+        }
+      },
+      "expected": "@片段衔接[镜头03]\n本镜首帧必须直接使用上一镜确认尾帧，不得重新构图、换装、换脸或重排场景。\n首帧到本镜尾帧之间只执行当前镜头动作，保持人物、道具、灯光方向和空间布局连续。"
+    },
+    {
+      "name": "continuity_prompt_missing_start",
+      "group": "buildStoryboardContinuityPrompt",
+      "input": {
+        "frameReference": {
+          "enabled": false,
+          "missingStartFrame": true
+        }
+      },
+      "expected": "已选择片段衔接，但上一镜没有可读取的确认尾帧；必须先补齐上一镜尾帧，禁止用随机首帧替代。"
+    },
+    {
+      "name": "mention_context_full",
+      "group": "normalizeStoryboardMentionContext",
+      "input": {
+        "referencedAssets": [
+          {
+            "id": 5,
+            "refId": 9,
+            "characterId": 9,
+            "kind": "character",
+            "name": "林知夏",
+            "imageUrl": "https://media.example.com/char-9.png",
+            "viewKeys": [
+              "front",
+              "side",
+              "back"
+            ],
+            "viewSetVersion": 2,
+            "voiceProfileKey": "female-calm",
+            "voiceLocked": true,
+            "referenceAudioUrl": "https://media.example.com/ref-9.wav"
+          },
+          {
+            "ref_id": 3,
+            "type": "scene",
+            "label": "监控室",
+            "image_url": "https://media.example.com/scene-3.png",
+            "scene_view_key": "wide",
+            "promptText": "冷蓝色调机房"
+          }
+        ],
+        "tools": [
+          "片段衔接",
+          "添加时间"
+        ],
+        "voiceBindings": [
+          {
+            "characterId": 9,
+            "characterName": "林知夏",
+            "voiceProfileKey": "female-calm",
+            "voiceLocked": true
+          }
+        ],
+        "prompt": "@片段衔接[镜头03] 林知夏转身。"
+      },
+      "expected": {
+        "assets": [
+          {
+            "id": 5,
+            "refId": 9,
+            "characterId": 9,
+            "sceneViewKey": null,
+            "key": "",
+            "kind": "character",
+            "name": "林知夏",
+            "imageUrl": "https://media.example.com/char-9.png",
+            "promptText": null,
+            "viewKeys": [
+              "front",
+              "side",
+              "back"
+            ],
+            "viewSetVersion": 2,
+            "versionNo": null,
+            "voiceProfileKey": "female-calm",
+            "voiceLocked": true,
+            "referenceAudioUrl": "https://media.example.com/ref-9.wav"
+          },
+          {
+            "id": null,
+            "refId": 3,
+            "characterId": null,
+            "sceneViewKey": "wide",
+            "key": "",
+            "kind": "scene",
+            "name": "监控室",
+            "imageUrl": "https://media.example.com/scene-3.png",
+            "promptText": "冷蓝色调机房",
+            "viewKeys": [],
+            "viewSetVersion": null,
+            "versionNo": null,
+            "voiceProfileKey": null,
+            "voiceLocked": false,
+            "referenceAudioUrl": null
+          }
+        ],
+        "tools": [
+          {
+            "key": "tool-片段衔接",
+            "name": "片段衔接",
+            "rule": "继承上一镜结束时的人物状态、视线方向、道具位置和空间关系，禁止跳变。",
+            "from": "镜头03"
+          },
+          {
+            "key": "tool-添加时间",
+            "name": "添加时间",
+            "rule": "保留镜头时长标签，视频时长以分镜 duration_seconds 为准，不擅自压缩对白或动作。",
+            "from": null
+          }
+        ],
+        "voices": [
+          {
+            "characterId": 9,
+            "characterName": "林知夏",
+            "voiceProfileKey": "female-calm",
+            "voiceLocked": true,
+            "referenceAudioUrl": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "mention_context_empty_inputs",
+      "group": "normalizeStoryboardMentionContext",
+      "input": {
+        "referencedAssets": [],
+        "tools": [],
+        "voiceBindings": [],
+        "prompt": ""
+      },
+      "expected": {
+        "assets": [],
+        "tools": [],
+        "voices": []
+      }
+    },
+    {
+      "name": "mention_context_prompt_full",
+      "group": "buildMentionContextPrompt",
+      "input": {
+        "context": {
+          "assets": [
+            {
+              "id": null,
+              "refId": null,
+              "characterId": null,
+              "sceneViewKey": null,
+              "key": "",
+              "kind": "character",
+              "name": "林知夏",
+              "imageUrl": "https://media.example.com/char-9.png",
+              "promptText": null,
+              "viewKeys": [
+                "front",
+                "side",
+                "back"
+              ],
+              "viewSetVersion": null,
+              "versionNo": null,
+              "voiceProfileKey": "female-calm",
+              "voiceLocked": true,
+              "referenceAudioUrl": null
+            },
+            {
+              "id": null,
+              "refId": null,
+              "characterId": null,
+              "sceneViewKey": null,
+              "key": "",
+              "kind": "scene",
+              "name": "监控室",
+              "imageUrl": null,
+              "promptText": "冷蓝机房",
+              "viewKeys": [],
+              "viewSetVersion": null,
+              "versionNo": null,
+              "voiceProfileKey": null,
+              "voiceLocked": false,
+              "referenceAudioUrl": null
+            }
+          ],
+          "tools": [
+            {
+              "key": "tool-continuity",
+              "name": "片段衔接",
+              "rule": "继承上一镜结束时的人物状态、视线方向、道具位置和空间关系，禁止跳变。",
+              "from": "镜头02"
+            }
+          ],
+          "voices": [
+            {
+              "characterId": null,
+              "characterName": "林知夏",
+              "voiceProfileKey": "female-calm",
+              "voiceLocked": false,
+              "referenceAudioUrl": null
+            }
+          ]
+        }
+      },
+      "expected": "本镜 @ 引用执行上下文：\n@林知夏（角色）：角色身份、外貌、服装和配饰只读取已确认角色参考图与资产版本；已绑定参考图，必须读取并保持一致；视角组=front/side/back；音色=female-calm（已锁定）\n@监控室（场景）：资产外观只读取已确认参考图；不复述资产生成模板或白底展示约束；缺少参考图\n@片段衔接（工具）：继承上一镜结束时的人物状态、视线方向、道具位置和空间关系，禁止跳变。\n@音色[林知夏]：female-calm（未锁定）\n@片段衔接[镜头02]：读取该镜头确认尾帧作为本镜首帧"
+    },
+    {
+      "name": "mention_context_prompt_empty",
+      "group": "buildMentionContextPrompt",
+      "input": {
+        "context": {
+          "assets": [],
+          "tools": [],
+          "voices": []
+        }
+      },
+      "expected": ""
+    },
+    {
+      "name": "reference_snapshot_full",
+      "group": "buildStoryboardReferenceSnapshot",
+      "input": {
+        "storyboard": {
+          "asset_reference_json": "{\"characterId\":9,\"characterVersionNo\":3,\"characterViewSetVersion\":2,\"characterViewKeys\":[\"front\",\"side\",\"back\"],\"characterBaseImageId\":101,\"characterBaseVersionNo\":4,\"characterFaceImageId\":105,\"characterFaceVersionNo\":4,\"sceneAssetId\":3,\"scenePanoramaVersion\":2,\"scenePanoramaImageId\":201,\"sceneViewKey\":\"wide\",\"voiceProfileKey\":\"female-calm\",\"voiceLocked\":true,\"characterName\":\"林知夏\",\"continuityFromShot\":\"镜头03\",\"propAssetRefs\":[{\"assetNodeId\":7,\"imageId\":301,\"name\":\"终端平板\",\"versionNo\":1}]}"
+        },
+        "referenceImages": [
+          "https://media.example.com/a.png",
+          "https://media.example.com/a.png",
+          "https://media.example.com/b.png"
+        ],
+        "referencedAssets": [
+          {
+            "kind": "character",
+            "name": "林知夏",
+            "imageUrl": "https://media.example.com/a.png",
+            "viewSetVersion": "2",
+            "versionNo": 3
+          }
+        ]
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "character": {
+          "id": 9,
+          "versionNo": 3,
+          "viewSetVersion": 2,
+          "viewKeys": [
+            "front",
+            "side",
+            "back"
+          ],
+          "baseImageId": 101,
+          "baseVersionNo": 4,
+          "faceImageId": 105,
+          "faceVersionNo": 4,
+          "faceRequired": true
+        },
+        "scene": {
+          "assetId": 3,
+          "panoramaVersion": 2,
+          "panoramaImageId": 201,
+          "viewSetVersion": null,
+          "viewKey": "wide",
+          "viewIndex": null
+        },
+        "props": [
+          {
+            "assetNodeId": 7,
+            "imageId": 301,
+            "name": "终端平板",
+            "versionNo": 1
+          }
+        ],
+        "referenceImages": [
+          "https://media.example.com/a.png",
+          "https://media.example.com/b.png"
+        ],
+        "referencedAssets": [
+          {
+            "key": "",
+            "kind": "character",
+            "name": "林知夏",
+            "imageUrl": "https://media.example.com/a.png",
+            "viewKey": "",
+            "viewSetVersion": 2,
+            "versionNo": 3
+          }
+        ],
+        "voice": {
+          "profileKey": "female-calm",
+          "locked": true,
+          "characterName": "林知夏"
+        },
+        "performance": null,
+        "continuity": {
+          "fromShot": "镜头03"
+        }
+      }
+    },
+    {
+      "name": "reference_snapshot_empty_reference",
+      "group": "buildStoryboardReferenceSnapshot",
+      "input": {
+        "storyboard": {},
+        "referenceImages": [],
+        "referencedAssets": []
+      },
+      "expected": {
+        "schemaVersion": 1,
+        "character": {
+          "id": null,
+          "versionNo": null,
+          "viewSetVersion": null,
+          "viewKeys": [],
+          "baseImageId": null,
+          "baseVersionNo": null,
+          "faceImageId": null,
+          "faceVersionNo": null,
+          "faceRequired": true
+        },
+        "scene": {
+          "assetId": null,
+          "panoramaVersion": null,
+          "panoramaImageId": null,
+          "viewSetVersion": null,
+          "viewKey": null,
+          "viewIndex": null
+        },
+        "props": [],
+        "referenceImages": [],
+        "referencedAssets": [],
+        "voice": {
+          "profileKey": "",
+          "locked": false,
+          "characterName": ""
+        },
+        "performance": null,
+        "continuity": {
+          "fromShot": null
+        }
+      }
+    },
+    {
+      "name": "reference_validation_passed",
+      "group": "validateStoryboardReferenceSnapshot",
+      "input": {
+        "snapshot": {
+          "schemaVersion": 1,
+          "character": {
+            "id": 9,
+            "versionNo": 3,
+            "viewSetVersion": 2,
+            "viewKeys": [
+              "front",
+              "side",
+              "back"
+            ],
+            "baseImageId": 101,
+            "baseVersionNo": 4,
+            "faceImageId": 105,
+            "faceVersionNo": 4,
+            "faceRequired": true
+          },
+          "scene": {
+            "assetId": 3,
+            "panoramaVersion": 2,
+            "panoramaImageId": 201,
+            "viewSetVersion": null,
+            "viewKey": "wide",
+            "viewIndex": null
+          },
+          "props": [
+            {
+              "assetNodeId": 7,
+              "imageId": 301,
+              "name": "终端平板",
+              "versionNo": 1
+            }
+          ],
+          "referenceImages": [
+            "https://media.example.com/a.png"
+          ],
+          "referencedAssets": [],
+          "voice": {
+            "profileKey": "female-calm",
+            "locked": true,
+            "characterName": "林知夏"
+          },
+          "performance": null,
+          "continuity": {
+            "fromShot": "镜头03"
+          }
+        }
+      },
+      "expected": {
+        "passed": true,
+        "blockers": []
+      }
+    },
+    {
+      "name": "reference_validation_missing_scene_and_images",
+      "group": "validateStoryboardReferenceSnapshot",
+      "input": {
+        "snapshot": {
+          "character": null,
+          "scene": {
+            "assetId": null,
+            "panoramaVersion": null
+          },
+          "props": [
+            {
+              "assetNodeId": null,
+              "imageId": 301,
+              "name": "终端平板",
+              "versionNo": null
+            }
+          ],
+          "referenceImages": []
+        }
+      },
+      "expected": {
+        "passed": false,
+        "blockers": [
+          "视频缺少已确认场景全景引用",
+          "视频缺少已确认道具「终端平板」引用",
+          "视频缺少可供模型读取的角色或场景参考图"
+        ]
+      }
+    },
+    {
+      "name": "reference_validation_incomplete_view_keys",
+      "group": "validateStoryboardReferenceSnapshot",
+      "input": {
+        "snapshot": {
+          "character": {
+            "id": 9,
+            "versionNo": 3,
+            "viewSetVersion": 2,
+            "viewKeys": [
+              "front",
+              "side"
+            ],
+            "baseImageId": 101,
+            "baseVersionNo": 4,
+            "faceImageId": 105,
+            "faceVersionNo": 4,
+            "faceRequired": true
+          },
+          "scene": {
+            "assetId": 3,
+            "panoramaVersion": 2
+          },
+          "props": [],
+          "referenceImages": [
+            "https://media.example.com/a.png"
+          ]
+        }
+      },
+      "expected": {
+        "passed": false,
+        "blockers": [
+          "视频缺少已确认角色三视图引用",
+          "视频缺少已确认角色正面、侧面、背面引用"
+        ]
+      }
+    },
+    {
+      "name": "unified_prompt_detected",
+      "group": "hasUnifiedStoryboardPrompt",
+      "input": {
+        "prompt": "画面与资产：冷蓝机房。\n\n动作与表演：林知夏转身看向屏幕。\n\n对白与声音：（无对白）"
+      },
+      "expected": true
+    },
+    {
+      "name": "unified_prompt_legacy_text",
+      "group": "hasUnifiedStoryboardPrompt",
+      "input": {
+        "prompt": "近景，林知夏转身。"
+      },
+      "expected": false
+    },
+    {
+      "name": "video_prompt_parts_unified_skips_legacy",
+      "group": "buildStoryboardVideoPromptParts",
+      "input": {
+        "prompt": "画面与资产：冷蓝机房。\n\n动作与表演：林知夏转身看向屏幕。\n\n对白与声音：（无对白）",
+        "contextParts": [
+          "【视线执行合同】x"
+        ],
+        "legacyFieldParts": [
+          "景别：中景"
+        ]
+      },
+      "expected": [
+        "画面与资产：冷蓝机房。\n\n动作与表演：林知夏转身看向屏幕。\n\n对白与声音：（无对白）",
+        "【视线执行合同】x"
+      ]
+    },
+    {
+      "name": "video_prompt_parts_legacy_appended",
+      "group": "buildStoryboardVideoPromptParts",
+      "input": {
+        "prompt": "近景，林知夏转身。",
+        "contextParts": [
+          "",
+          "参考图1（角色）：x"
+        ],
+        "legacyFieldParts": [
+          "景别：中景",
+          "   "
+        ]
+      },
+      "expected": [
+        "近景，林知夏转身。",
+        "参考图1（角色）：x",
+        "景别：中景"
+      ]
+    },
+    {
+      "name": "video_reference_image_guide_mixed",
+      "group": "buildVideoReferenceImageGuide",
+      "input": {
+        "assetRows": [
+          {
+            "node_type": "character",
+            "label": "林知夏"
+          },
+          {
+            "node_type": "scene",
+            "label": "监控室"
+          },
+          {
+            "node_type": "prop",
+            "label": "终端平板"
+          }
+        ],
+        "transitionImageCount": 2
+      },
+      "expected": "参考图1（角色）：角色「林知夏」：只锁定身份、外貌、服装和配饰，不限定本镜动作。\n参考图2（场景）：场景「监控室」：只锁定空间结构、固定设施、材质和光线，不把参考图构图当作本镜首帧。\n参考图3（道具）：道具「终端平板」：只锁定道具外观与材质，不代表本镜初始位置；位置和移动以本镜动作与时间轴为准。\n其后2张为镜头首尾状态参考，只约束对应时刻的构图与状态；中间动作必须按时间轴连续完成。"
+    },
+    {
+      "name": "video_reference_image_guide_empty",
+      "group": "buildVideoReferenceImageGuide",
+      "input": {
+        "assetRows": [],
+        "transitionImageCount": 0
+      },
+      "expected": ""
+    },
+    {
+      "name": "direction_prompt_full",
+      "group": "buildStoryboardDirectionPrompt",
+      "input": {
+        "gazePlan": {
+          "startTarget": "屏幕",
+          "transitions": [
+            {
+              "fromSecond": 0,
+              "toSecond": 5,
+              "target": "屏幕",
+              "observable": "视线保持在屏幕"
+            }
+          ],
+          "eyeLead": "眼睛先动",
+          "endTarget": "屏幕",
+          "promptText": "视线保持"
+        },
+        "soundPlan": {
+          "bed": "机房低频底噪",
+          "cues": [
+            {
+              "atSecond": 1.5,
+              "sound": "打印声",
+              "syncAction": "打印机吐纸"
+            }
+          ],
+          "silencePolicy": "无对白不等于无声",
+          "promptText": "拟音同步"
+        }
+      },
+      "expected": "【视线执行合同】起始注视屏幕；0-5秒视线落到屏幕（视线保持在屏幕）；眼睛先动；结束锁定屏幕\n【声音执行合同】从0秒到镜头结束保持机房低频底噪；1.5秒打印声，与打印机吐纸同步；无对白不等于无声"
+    },
+    {
+      "name": "direction_prompt_empty_plans",
+      "group": "buildStoryboardDirectionPrompt",
+      "input": {
+        "gazePlan": null,
+        "soundPlan": null
+      },
+      "expected": ""
+    },
+    {
+      "name": "performance_prompt_full_fields",
+      "group": "buildStoryboardPerformancePrompt",
+      "input": {
+        "input": {
+          "emotion": "克制紧张",
+          "emotion_intensity": 70,
+          "emotion_start": "镜头开始时手指悬停",
+          "emotion_trigger": "异常信号灯亮起",
+          "emotion_change": "从压抑到警觉",
+          "emotion_end": "警觉收束",
+          "micro_expression": "眉眼收紧",
+          "breath_action": "短促吸气",
+          "body_action": "肩膀微沉",
+          "voice_tone": "低声",
+          "voice_volume": "轻",
+          "speech_rate": "慢",
+          "speech_pauses": "句中停半拍",
+          "lip_sync": "逐字对应",
+          "continuity_from_previous": "承接上一镜转身",
+          "current_emotion": "",
+          "gaze_plan": {
+            "startTarget": "屏幕",
+            "transitions": [
+              {
+                "fromSecond": 0,
+                "toSecond": 5,
+                "target": "屏幕"
+              }
+            ],
+            "eyeLead": "眼睛先动",
+            "endTarget": "屏幕",
+            "promptText": "视线保持在屏幕"
+          },
+          "sound_plan": {
+            "bed": "机房底噪",
+            "cues": [],
+            "silencePolicy": "无对白不等于无声",
+            "promptText": "拟音与画面同步"
+          }
+        }
+      },
+      "expected": "当前情绪：克制紧张（强度 70/100）\n情绪起点：镜头开始时手指悬停\n情绪触发：异常信号灯亮起\n情绪变化：从压抑到警觉\n情绪结束：警觉收束\n微表情：眉眼收紧\n呼吸与停顿：短促吸气\n身体与手部动作：肩膀微沉\n声音：低声；音量：轻；语速：慢；停顿：句中停半拍\n口型同步：逐字对应\n上一镜衔接：承接上一镜转身\n视线执行：视线保持在屏幕；眼睛与头部：眼睛先动；结束锁定：屏幕\n声音执行：拟音与画面同步；静音策略：无对白不等于无声"
+    },
+    {
+      "name": "performance_prompt_defaults",
+      "group": "buildStoryboardPerformancePrompt",
+      "input": {
+        "input": {}
+      },
+      "expected": "当前情绪：情绪随剧情自然推进（强度 50/100）\n情绪起点：镜头开始时承接上一镜头的情绪状态\n情绪触发：由本镜头的剧情信息或动作触发\n情绪变化：情绪随本镜头动作和信息逐步变化\n情绪结束：镜头结束时保留可供下一镜头承接的情绪余波\n微表情：眼神、眉眼、嘴角和下颌保持可读且克制的变化\n呼吸与停顿：按情绪完成吸气、呼气或短暂停顿\n身体与手部动作：身体重心、肩颈、手指和姿态随情绪发生细微变化\n声音：与角色固定声线一致，并匹配当前情绪；音量：按情绪自然变化，避免无依据夸张；语速：自然语速，按对白情绪调整；停顿：在语义和情绪转折处保留可听见的停顿\n口型同步：对白逐字对应口型，停顿时闭唇并保留呼吸和面部反应\n上一镜衔接：承接上一镜头的视线、姿态、空间位置和情绪强度\n视线执行：视线保持在当前动作对象，动作结果出现后停住半拍；眼睛与头部：若发生转移，眼睛先动，头部延迟半拍跟随；没有转移时保持目标稳定；结束锁定：本镜动作结果\n声音执行：从0秒到镜头结束保持连续空间底噪；静音策略：只允许剧本明确要求的短暂停顿；无对白不等于无声"
+    },
+    {
+      "name": "video_continuity_constraints_with_character",
+      "group": "buildVideoContinuityConstraints",
+      "input": {
+        "characterName": "林知夏",
+        "sceneAssetPrompt": "冷蓝机房；金属墙面"
+      },
+      "expected": "视频连续性硬约束：全程只允许同一个角色、同一套服装和同一组随身配饰，不得换装、脱掉、增加或替换任何服装和配饰。\n角色的脸型、发型、发长、眼镜、体型、年龄感、肤色和手部特征从第一帧到最后一帧必须保持一致；禁止把固定服装改成连帽衫、便服或其他替代服装。\n角色身份锁定：林知夏，以已确认角色参考图和角色资产版本为唯一外貌、服装与配饰来源；视频提示词不得重新设计角色。\n场景资产固定设定：以已确认场景参考图为准，保持空间结构、材质、灯光方向和固定物件；不得复述或套用场景生图模板。\n保持角色身份、服装、配饰和场景结构连续；固定设施与背景物件保持稳定。分镜明确要求移动的角色或道具，必须按镜头动作和时间轴完成可见移动，不得锁定在参考图位置，也不得弱化为静止展示。"
+    },
+    {
+      "name": "video_continuity_constraints_empty",
+      "group": "buildVideoContinuityConstraints",
+      "input": {
+        "characterName": "",
+        "sceneAssetPrompt": ""
+      },
+      "expected": "视频连续性硬约束：全程只允许同一个角色、同一套服装和同一组随身配饰，不得换装、脱掉、增加或替换任何服装和配饰。\n角色的脸型、发型、发长、眼镜、体型、年龄感、肤色和手部特征从第一帧到最后一帧必须保持一致；禁止把固定服装改成连帽衫、便服或其他替代服装。\n保持角色身份、服装、配饰和场景结构连续；固定设施与背景物件保持稳定。分镜明确要求移动的角色或道具，必须按镜头动作和时间轴完成可见移动，不得锁定在参考图位置，也不得弱化为静止展示。"
+    },
+    {
+      "name": "color_continuity_cold_blue",
+      "group": "buildColorContinuityConstraints",
+      "input": {
+        "visualStyle": "冷蓝色调科幻风",
+        "scenePrompt": "机房冷蓝灯光、金属材质",
+        "shotPrompt": "林知夏转身看向屏幕，冷光打脸"
+      },
+      "expected": "色彩连续性硬约束：项目与场景中的既有色彩设定是唯一调色来源；不得为了“电影感”擅自更换主色、色温或对比关系。\n项目色彩证据：冷蓝色调科幻风\n场景色彩证据：机房冷蓝灯光、金属材质\n本镜色彩证据：林知夏转身看向屏幕，冷光打脸\n主色锚点：冷蓝、青蓝、低饱和金属灰；冷色用于环境和金属材质，不代表给整张画面套蓝色滤镜。\n人物保护：肤色、黑色服装和眼镜材质不得被强烈染色；白色/金属材质与固定配饰要保留真实局部颜色。\n镜头连续性：起始帧到结束帧保持同一白平衡、曝光和饱和度关系；镜头运动不能造成色温跳变、闪烁或曝光呼吸。\n禁止全画面单色滤镜；同时禁止全画面蓝染、红染、过曝、死黑、彩色雾化、彩虹渐变和随机霓虹色。\n不得擅自加入青橙、紫色或霓虹渐变，也不得把局部警示色扩展为全局调色。"
+    },
+    {
+      "name": "color_continuity_warm_and_red",
+      "group": "buildColorContinuityConstraints",
+      "input": {
+        "visualStyle": "",
+        "scenePrompt": "",
+        "shotPrompt": "暖黄色台灯与红色警示灯交替闪烁"
+      },
+      "expected": "色彩连续性硬约束：项目与场景中的既有色彩设定是唯一调色来源；不得为了“电影感”擅自更换主色、色温或对比关系。\n本镜色彩证据：暖黄色台灯与红色警示灯交替闪烁\n光源锚点：暖黄色只保留在提示词明确的灯具或实际暖色光源上，不能把全场景改成暖橙色。\n警示色锚点：红色仅限局部警示灯、状态指示灯或剧情明确的红色光源；不能铺满墙面、人物或全画面。\n人物保护：肤色、黑色服装和眼镜材质不得被强烈染色；白色/金属材质与固定配饰要保留真实局部颜色。\n镜头连续性：起始帧到结束帧保持同一白平衡、曝光和饱和度关系；镜头运动不能造成色温跳变、闪烁或曝光呼吸。\n禁止全画面单色滤镜；同时禁止全画面蓝染、红染、过曝、死黑、彩色雾化、彩虹渐变和随机霓虹色。\n不得擅自加入青橙、紫色或霓虹渐变，也不得把局部警示色扩展为全局调色。"
+    },
+    {
+      "name": "color_continuity_no_palette",
+      "group": "buildColorContinuityConstraints",
+      "input": {
+        "visualStyle": "",
+        "scenePrompt": "",
+        "shotPrompt": ""
+      },
+      "expected": "色彩连续性硬约束：项目与场景中的既有色彩设定是唯一调色来源；不得为了“电影感”擅自更换主色、色温或对比关系。\n没有明确色板时，保持参考资产的真实颜色和中性白平衡，不主动发明新配色。\n人物保护：肤色、黑色服装和眼镜材质不得被强烈染色；白色/金属材质与固定配饰要保留真实局部颜色。\n镜头连续性：起始帧到结束帧保持同一白平衡、曝光和饱和度关系；镜头运动不能造成色温跳变、闪烁或曝光呼吸。\n禁止全画面单色滤镜；同时禁止全画面蓝染、红染、过曝、死黑、彩色雾化、彩虹渐变和随机霓虹色。\n不得擅自加入青橙、紫色或霓虹渐变，也不得把局部警示色扩展为全局调色。"
+    },
+    {
+      "name": "generation_context_passed",
+      "group": "inspectStoryboardGenerationContext",
+      "input": {
+        "storyboard": {
+          "id": 21,
+          "visual_prompt": "固定中景，林知夏在监控室里转身看向屏幕。",
+          "shot_type": "中景",
+          "camera_angle": "平视",
+          "action_text": "林知夏转身看向屏幕。",
+          "dialogue_text": "（无对白）"
+        },
+        "assets": [
+          {
+            "id": 3,
+            "label": "监控室",
+            "status": "confirmed",
+            "image_url": "https://media.example.com/scene-3.png"
+          }
+        ],
+        "characterVoices": [],
+        "requireConfirmedAssets": true
+      },
+      "expected": {
+        "passed": true,
+        "blockers": [],
+        "warnings": [],
+        "summary": "质检通过，可以提交视频生成"
+      }
+    },
+    {
+      "name": "generation_context_dialogue_without_voice",
+      "group": "inspectStoryboardGenerationContext",
+      "input": {
+        "storyboard": {
+          "id": 21,
+          "visual_prompt": "固定中景，林知夏在监控室里转身看向屏幕。",
+          "shot_type": "中景",
+          "camera_angle": "平视",
+          "action_text": "林知夏转身看向屏幕。",
+          "dialogue_text": "林知夏：谁在机房？"
+        },
+        "assets": [
+          {
+            "id": 3,
+            "label": "监控室",
+            "status": "confirmed",
+            "image_url": "https://media.example.com/scene-3.png"
+          }
+        ],
+        "characterVoices": [],
+        "requireConfirmedAssets": true
+      },
+      "expected": {
+        "passed": false,
+        "blockers": [
+          {
+            "code": "voice-binding-missing",
+            "message": "当前分镜包含对白，但没有绑定角色音色",
+            "severity": "blocker"
+          }
+        ],
+        "warnings": [],
+        "summary": "质检未通过：1 个问题需要处理"
+      }
+    },
+    {
+      "name": "generation_context_unconfirmed_assets_and_private_url",
+      "group": "inspectStoryboardGenerationContext",
+      "input": {
+        "storyboard": {
+          "id": 21,
+          "visual_prompt": "固定中景，林知夏在监控室里转身看向屏幕。",
+          "shot_type": "中景",
+          "camera_angle": "平视",
+          "action_text": "林知夏转身看向屏幕。",
+          "dialogue_text": "（无对白）"
+        },
+        "assets": [
+          {
+            "id": 3,
+            "label": "监控室",
+            "status": "candidate",
+            "image_url": "http://127.0.0.1:8000/storage/x.png"
+          },
+          {
+            "id": 4,
+            "label": "终端平板",
+            "status": "confirmed",
+            "image_url": null
+          }
+        ],
+        "characterVoices": [
+          {
+            "character_id": 9,
+            "character_name": "林知夏",
+            "voice_profile_key": "",
+            "reference_audio_url": ""
+          }
+        ],
+        "requireConfirmedAssets": true
+      },
+      "expected": {
+        "passed": false,
+        "blockers": [
+          {
+            "code": "asset-image-not-public",
+            "message": "资产「监控室」图片地址不是供应商可访问的公网地址",
+            "severity": "blocker"
+          },
+          {
+            "code": "asset-not-confirmed",
+            "message": "资产「监控室」还没有确认，不能用于生成视频",
+            "severity": "blocker"
+          },
+          {
+            "code": "asset-image-missing",
+            "message": "资产「终端平板」还没有可用图片",
+            "severity": "blocker"
+          }
+        ],
+        "warnings": [],
+        "summary": "质检未通过：3 个问题需要处理"
+      }
+    },
+    {
+      "name": "candidate_expectations_motion_and_dialogue",
+      "group": "inferVideoCandidateExpectations",
+      "input": {
+        "durationSeconds": 5,
+        "actionText": "林知夏转身走向机房深处",
+        "actingBeat": "先看屏幕再回头",
+        "dialogueText": "谁在机房？",
+        "audioDirection": "环境声继续",
+        "gazePlan": {
+          "transitions": [
+            {
+              "target": "屏幕"
+            },
+            {
+              "target": "门口"
+            },
+            {
+              "target": "屏幕"
+            }
+          ]
+        },
+        "soundPlan": {
+          "bed": "机房低频底噪",
+          "cues": [
+            {
+              "sound": "打印声"
+            },
+            {
+              "sound": "脚步声"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "durationSeconds": 5,
+        "requiresMotion": true,
+        "requiresAudio": true,
+        "requiresGazeReview": true,
+        "gazeTargetCount": 2,
+        "requiresContinuousAmbience": true,
+        "soundCueCount": 2
+      }
+    },
+    {
+      "name": "candidate_expectations_explicit_silence",
+      "group": "inferVideoCandidateExpectations",
+      "input": {
+        "durationSeconds": "4",
+        "actionText": "静止镜头缓缓推进",
+        "dialogueText": "",
+        "audioDirection": "完全静音",
+        "gazePlan": null,
+        "soundPlan": null
+      },
+      "expected": {
+        "durationSeconds": 4,
+        "requiresMotion": false,
+        "requiresAudio": false,
+        "requiresGazeReview": false,
+        "gazeTargetCount": 0,
+        "requiresContinuousAmbience": false,
+        "soundCueCount": 0
+      }
+    },
+    {
+      "name": "candidate_expectations_defaults",
+      "group": "inferVideoCandidateExpectations",
+      "input": {
+        "durationSeconds": null
+      },
+      "expected": {
+        "durationSeconds": 4,
+        "requiresMotion": false,
+        "requiresAudio": false,
+        "requiresGazeReview": false,
+        "gazeTargetCount": 0,
+        "requiresContinuousAmbience": false,
+        "soundCueCount": 0
+      }
+    },
+    {
+      "name": "assert_model_provider_minimax_ok",
+      "group": "assertVideoModelProvider",
+      "input": {
+        "modelName": "MiniMax-H3",
+        "provider": "minimax"
+      },
+      "expected": {
+        "raised": null,
+        "value": true
+      }
+    },
+    {
+      "name": "assert_model_provider_agnes_model_on_minimax",
+      "group": "assertVideoModelProvider",
+      "input": {
+        "modelName": "agnes-video-2.5-flash",
+        "provider": "minimax"
+      },
+      "expected": {
+        "raised": "Agnes 模型需要配置视频服务商为 agnes，当前为 minimax。",
+        "value": null
+      }
+    },
+    {
+      "name": "assert_model_provider_unknown_model_ok",
+      "group": "assertVideoModelProvider",
+      "input": {
+        "modelName": "cogvideox-flash",
+        "provider": "bigmodel"
+      },
+      "expected": {
+        "raised": null,
+        "value": true
+      }
+    },
+    {
+      "name": "lip_sync_prompt_full",
+      "group": "buildLipSyncPrompt",
+      "input": {
+        "characterName": "林知夏",
+        "dialogueText": "谁在机房？",
+        "actionText": "林知夏盯着屏幕轻声问。"
+      },
+      "expected": "保持图片1中林知夏的脸、发型、年龄、服装、构图和光线稳定。 让图片1中的人物面对当前方向自然说中文，嘴唇开合严格跟随音频1，停顿时闭嘴。 只允许当前说话人物做轻微表情、眨眼和呼吸动作，不改变身份，不新增人物，不切镜头。 对白语义：谁在机房？ 表演要求：林知夏盯着屏幕轻声问。"
+    },
+    {
+      "name": "lip_sync_prompt_defaults_and_clip",
+      "group": "buildLipSyncPrompt",
+      "input": {
+        "characterName": "",
+        "dialogueText": "",
+        "actionText": "动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作"
+      },
+      "expected": "保持图片1中人物的脸、发型、年龄、服装、构图和光线稳定。 让图片1中的人物面对当前方向自然说中文，嘴唇开合严格跟随音频1，停顿时闭嘴。 只允许当前说话人物做轻微表情、眨眼和呼吸动作，不改变身份，不新增人物，不切镜头。 表演要求：动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作动作"
+    },
+    {
+      "name": "lip_sync_duration_floor",
+      "group": "resolveLipSyncDuration",
+      "input": {
+        "audioDurationSeconds": 2,
+        "storyboardDurationSeconds": 3
+      },
+      "expected": 4
+    },
+    {
+      "name": "lip_sync_duration_cap",
+      "group": "resolveLipSyncDuration",
+      "input": {
+        "audioDurationSeconds": 22,
+        "storyboardDurationSeconds": 6
+      },
+      "expected": 15
+    },
+    {
+      "name": "dashscope_lip_sync_duration_floor",
+      "group": "resolveDashScopeLipSyncDuration",
+      "input": {
+        "audioDurationSeconds": 1,
+        "storyboardDurationSeconds": 2
+      },
+      "expected": 3
+    },
+    {
+      "name": "dashscope_lip_sync_duration_cap",
+      "group": "resolveDashScopeLipSyncDuration",
+      "input": {
+        "audioDurationSeconds": 300,
+        "storyboardDurationSeconds": 4
+      },
+      "expected": 119
+    }
+  ]
+}

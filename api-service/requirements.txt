@@ -1,0 +1,11 @@
+fastapi==0.128.1
+uvicorn==0.40.0
+httpx==0.28.1
+pydantic-settings==2.15.0
+pymysql==1.1.1
+cos-python-sdk-v5==1.9.44
+langgraph==1.2.15
+langchain-core==1.6.11
+langchain-openai==1.7.2
+deepagents==0.7.26
+tencentcloud-sdk-python-sms==3.0.1302

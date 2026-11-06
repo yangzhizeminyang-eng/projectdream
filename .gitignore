@@ -8,6 +8,9 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+__pycache__/
+*.py[cod]
+.pytest_cache/
 .DS_Store
 dist
 dist-ssr
@@ -21,6 +24,7 @@ coverage
 .env
 .env.*
 !.env.example
+!.env.production.example
 
 # Editor directories and files
 .vscode/*
@@ -62,3 +66,5 @@ __screenshots__/
 /brace.log
 /esbuild.log
 /node_check.log
+*.mp4
+*.mp4

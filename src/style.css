@@ -2,7 +2,28 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  src: url('/fonts/material-symbols-outlined.woff2') format('woff2');
+}
+
 @layer base {
+  :root {
+    --pd-bg: #121412;
+    --pd-panel: #171917;
+    --pd-panel-raised: #1e201e;
+    --pd-line: rgba(164, 132, 84, 0.28);
+    --pd-line-strong: rgba(255, 183, 125, 0.52);
+    --pd-ink: #eee8df;
+    --pd-muted: #b7aa9c;
+    --pd-accent: #ffb77d;
+    --pd-accent-deep: #d97707;
+    --pd-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
   /* ---------------------------------------------------------------
    * 基础层：滚动体验全局基线
    * ------------------------------------------------------------- */
@@ -13,12 +34,17 @@
     overscroll-behavior-y: none;
     /* 在移动端保持滚动条宽度恒定，避免滚动条出现/消失造成横向抖动 */
     scrollbar-gutter: stable;
+    /* 全局滚动条与 darkroom 主题保持一致 */
+    scrollbar-width: thin;
+    scrollbar-color: #6d5740 #121412;
   }
 
   body {
-    background-color: #121412;
-    color: #e2e3df;
-    font-family: 'Noto Sans', sans-serif;
+    background-color: var(--pd-bg);
+    color: var(--pd-ink);
+    font-family: 'Noto Sans SC', 'Noto Sans', sans-serif;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
     /* 不再用 overflow: hidden 锁死 body，改为 inner scrolling；
        这样移动端的下拉刷新/橡皮筋效果可以由具体容器自主控制 */
     min-height: 100vh;
@@ -26,10 +52,90 @@
     -webkit-tap-highlight-color: transparent;
   }
 
+  html::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+  }
+
+  html::-webkit-scrollbar-track {
+    background: #121412;
+    border-left: 1px solid rgba(164, 132, 84, 0.12);
+  }
+
+  html::-webkit-scrollbar-thumb {
+    border: 1px solid #121412;
+    border-radius: 999px;
+    background: #705d4b;
+    background-clip: padding-box;
+  }
+
+  html::-webkit-scrollbar-thumb:hover {
+    background: #b58b63;
+    background-clip: padding-box;
+  }
+
+  html::-webkit-scrollbar-button {
+    display: none;
+  }
+
+  html::-webkit-scrollbar-corner {
+    background: #121412;
+  }
+
+  /*
+   * 所有可滚动容器共享同一套低存在感滚动条。
+   * 页面里有不少独立滚动面板，只改 html 会让它们退回浏览器默认箭头。
+   */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(112, 93, 75, 0.78) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: rgba(112, 93, 75, 0.78);
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(181, 139, 99, 0.92);
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:active {
+    background: rgba(255, 183, 125, 0.96);
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
   html, body, #app {
     height: 100vh;
     height: 100dvh; /* 移动端浏览器地址栏高度自适应 */
-    width: 100vw;
+    width: 100%;
+  }
+
+  ::selection {
+    background: rgba(255, 183, 125, 0.28);
+    color: #fff8ef;
   }
 
   /* 减少动画偏好：尊重操作系统的"减少动效"设置 */
@@ -64,6 +170,43 @@
     font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
     vertical-align: middle;
     user-select: none;
+  }
+
+  .workspace-backbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    min-height: 3.25rem;
+    border-bottom: 1px solid rgba(164, 132, 84, 0.2);
+    background: rgba(18, 20, 18, 0.92);
+    padding: 0.35rem 1.5rem;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+
+  .workspace-back-button {
+    display: inline-flex;
+    min-height: 2.25rem;
+    align-items: center;
+    gap: 0.55rem;
+    color: var(--pd-muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+    transition:
+      color 220ms var(--pd-ease),
+      transform 220ms var(--pd-ease);
+  }
+
+  .workspace-back-button:hover {
+    color: var(--pd-accent);
+    transform: translateX(-2px);
+  }
+
+  .workspace-back-button .material-symbols-outlined {
+    font-size: 1.1rem;
   }
 
   .burning-orange-btn {
@@ -114,11 +257,15 @@
     background: #121412;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #A48454;
-    border-radius: 0;
+    background: #5d5147;
+    border-radius: 999px;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: #ffb77d;
+    background: #9b775b;
+  }
+  .custom-scrollbar::-webkit-scrollbar-button,
+  .horizontal-scrollbar::-webkit-scrollbar-button {
+    display: none;
   }
   .custom-scrollbar::-webkit-scrollbar-corner {
     background: transparent;
@@ -131,13 +278,14 @@
   }
   .horizontal-scrollbar::-webkit-scrollbar {
     width: 4px;
-    height: 6px;
+    height: 4px;
   }
   .horizontal-scrollbar::-webkit-scrollbar-track {
     background: #0d0f0d;
   }
   .horizontal-scrollbar::-webkit-scrollbar-thumb {
-    background: #554336;
+    background: #5d5147;
+    border-radius: 999px;
   }
   .horizontal-scrollbar::-webkit-scrollbar-thumb:hover {
     background: #ffb77d;
@@ -249,6 +397,12 @@
 
   /* 滚动条固定宽度占位，避免滚动条出现造成的横向 layout shift */
   .scrollbar-stable {
-    scrollbar-gutter: stable;
+    scrollbar-gutter: stable both-edges;
+  }
+
+  .workspace-scroll-owner {
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable both-edges;
+    scroll-padding-block: 1rem;
   }
 }

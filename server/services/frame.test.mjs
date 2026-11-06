@@ -4,18 +4,121 @@ import test from 'node:test'
 import {
   assertFrameImageRatio,
   assertFrameReferenceImageSupport,
+  buildAgnesGenerationPayload,
   buildCharacterReferencePrompt,
+  buildVolcengineGenerationPayload,
+  resolveVolcengineImageSize,
   buildBigModelFramePayload,
   buildToApiGenerationPayload,
+  buildVariantPrompt,
+  buildCharacterImageStorageKey,
+  buildAssetNodeImageStorageKey,
+  buildGeneratedFrameStorageKey,
   extractToApiImageUrl,
   extractImageDimensions,
   generateFrameCandidates,
+  getFrameConfig,
   normalizeFramePromptAspectRatio,
   parseFrameModelList,
   resolveFrameReferenceImageUrls,
   resolveBigModelFrameSize,
+  resolveFrameImageRatio,
   resolveFrameModelChain,
+  resolveFrameGenerationEndpoint,
 } from './frame.mjs'
+
+test('empty scene variants never inject character-design language', () => {
+  const prompt = buildVariantPrompt(
+    '空无一人的深夜公寓客厅，沙发靠墙',
+    '人物，文字，水印',
+    0,
+    '16:9',
+    'scene-environment',
+  )
+
+  assert.match(prompt, /empty environment/i)
+  assert.doesNotMatch(prompt, /character design/i)
+  assert.doesNotMatch(prompt, /core action and blocking/i)
+})
+
+test('builds stable storage keys for storyboard frames and character images', () => {
+  assert.equal(
+    buildGeneratedFrameStorageKey({
+      projectId: 12,
+      storyboardId: 88,
+      versionNo: 3,
+      candidateNo: 2,
+      extension: '.png',
+    }),
+    'projects/12/frames/storyboards/88/v3/c2.png',
+  )
+  assert.equal(
+    buildCharacterImageStorageKey({
+      projectId: 12,
+      characterId: 7,
+      versionNo: 4,
+      candidateNo: 1,
+      extension: '.webp',
+    }),
+    'projects/12/frames/characters/7/v4/c1.webp',
+  )
+})
+
+test('builds a stable storage key for asset canvas node images', () => {
+  assert.equal(
+    buildAssetNodeImageStorageKey({
+      projectId: 12,
+      assetNodeId: 45,
+      versionNo: 1,
+      candidateNo: 2,
+      extension: '.png',
+    }),
+    'projects/12/frames/asset-nodes/45/v1/c2.png',
+  )
+  // 资产画布节点图必须和分镜静帧落在不同前缀下，
+  // 否则节点 id 和 storyboard id 撞号时会互相覆盖。
+  assert.notEqual(
+    buildAssetNodeImageStorageKey({
+      projectId: 12,
+      assetNodeId: 88,
+      versionNo: 1,
+      candidateNo: 1,
+      extension: '.png',
+    }),
+    buildGeneratedFrameStorageKey({
+      projectId: 12,
+      storyboardId: 88,
+      versionNo: 1,
+      candidateNo: 1,
+      extension: '.png',
+    }),
+  )
+})
+
+test('rejects unsafe image storage key parts', () => {
+  assert.throws(
+    () =>
+      buildGeneratedFrameStorageKey({
+        projectId: 12,
+        storyboardId: '../escape',
+        versionNo: 1,
+        candidateNo: 1,
+        extension: '.png',
+      }),
+    /invalid generated frame storage key/i,
+  )
+  assert.throws(
+    () =>
+      buildAssetNodeImageStorageKey({
+        projectId: 12,
+        assetNodeId: 0,
+        versionNo: 1,
+        candidateNo: 1,
+        extension: '.png',
+      }),
+    /invalid asset node image storage key/i,
+  )
+})
 
 test('frame fallback model list ignores empty entries', () => {
   assert.deepEqual(parseFrameModelList('agnes-image-2.0-flash, ,backup-image'), [
@@ -35,6 +138,379 @@ test('requested frame model stays first and duplicate fallbacks are removed', ()
     ),
     ['agnes-image-2.1-flash', 'agnes-image-2.0-flash'],
   )
+})
+
+test('Agnes 2.1 request uses the documented 2K ratio and img2img payload', () => {
+  assert.deepEqual(
+    buildAgnesGenerationPayload({
+      config: { imageSize: '2K', imageRatio: '16:9' },
+      prompt: 'cinematic character frame',
+      modelName: 'agnes-image-2.1-flash',
+      referenceImageUrls: ['https://example.com/character.png'],
+    }),
+    {
+      model: 'agnes-image-2.1-flash',
+      prompt: 'cinematic character frame',
+      size: '2K',
+      ratio: '16:9',
+      extra_body: {
+        response_format: 'b64_json',
+        image: 'https://example.com/character.png',
+      },
+    },
+  )
+})
+
+test('Agnes provider enables the unified character asset board by default', () => {
+  const original = {
+    FRAME_PROVIDER: process.env.FRAME_PROVIDER,
+    FRAME_BASE_URL: process.env.FRAME_BASE_URL,
+    FRAME_MODEL: process.env.FRAME_MODEL,
+    FRAME_ASSET_PACK_MODEL: process.env.FRAME_ASSET_PACK_MODEL,
+    FRAME_CHARACTER_ASSET_PACK_ENABLED: process.env.FRAME_CHARACTER_ASSET_PACK_ENABLED,
+  }
+  process.env.FRAME_PROVIDER = 'agnes'
+  process.env.FRAME_BASE_URL = 'https://apihub.agnes-ai.com/v1'
+  process.env.FRAME_MODEL = 'agnes-image-2.1-flash'
+  delete process.env.FRAME_ASSET_PACK_MODEL
+  delete process.env.FRAME_CHARACTER_ASSET_PACK_ENABLED
+  try {
+    const config = getFrameConfig()
+    assert.equal(config.defaultModel, 'agnes-image-2.1-flash')
+    assert.equal(config.assetPackModel, 'agnes-image-2.1-flash')
+    assert.equal(config.characterAssetPackEnabled, true)
+  } finally {
+    for (const [key, value] of Object.entries(original)) {
+      if (value == null) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
+test('Agnes requests inline base64 output so generated assets do not depend on output-host redirects', () => {
+  const payload = buildAgnesGenerationPayload({
+    config: { imageSize: '2K', imageRatio: '16:9' },
+    prompt: 'empty apartment environment',
+    modelName: 'agnes-image-2.1-flash',
+  })
+  assert.equal(payload.extra_body.response_format, 'b64_json')
+})
+
+test('asset view generation can override the global frame ratio without changing the default config', () => {
+  assert.equal(resolveFrameImageRatio({ imageRatio: '16:9' }, '9:16'), '9:16')
+  assert.equal(
+    buildAgnesGenerationPayload({
+      config: { imageSize: '2K', imageRatio: '16:9' },
+      imageRatio: '9:16',
+      prompt: 'full-body character asset',
+      modelName: 'agnes-image-2.1-flash',
+    }).ratio,
+    '9:16',
+  )
+})
+
+test('Volcengine Seedream request uses the Ark image-generation payload', () => {
+  assert.deepEqual(
+    buildVolcengineGenerationPayload({
+      config: { imageSize: '2K', watermarkEnabled: false },
+      prompt: 'cinematic character frame',
+      modelName: 'doubao-seedream-4.5-251128',
+      referenceImageUrls: ['data:image/png;base64,AAAA'],
+    }),
+    {
+      model: 'doubao-seedream-4-5-251128',
+      prompt: 'cinematic character frame',
+      size: '2048x1152',
+      stream: false,
+      response_format: 'url',
+      watermark: false,
+      image: 'data:image/png;base64,AAAA',
+    },
+  )
+})
+
+test('Volcengine defaults to the official Seedream 5.0 Flash model and request contract', () => {
+  const originalEnv = {
+    FRAME_PROVIDER: process.env.FRAME_PROVIDER,
+    FRAME_BASE_URL: process.env.FRAME_BASE_URL,
+    FRAME_MODEL: process.env.FRAME_MODEL,
+    FRAME_IMAGE_SIZE: process.env.FRAME_IMAGE_SIZE,
+    FRAME_WATERMARK_ENABLED: process.env.FRAME_WATERMARK_ENABLED,
+    FRAME_API_KEY: process.env.FRAME_API_KEY,
+    ARK_API_KEY: process.env.ARK_API_KEY,
+    VOLCENGINE_API_KEY: process.env.VOLCENGINE_API_KEY,
+    FRAME_ASSET_PACK_MODEL: process.env.FRAME_ASSET_PACK_MODEL,
+    FRAME_FALLBACK_MODELS: process.env.FRAME_FALLBACK_MODELS,
+  }
+  process.env.FRAME_PROVIDER = 'volcengine'
+  process.env.FRAME_BASE_URL = 'https://apihub.agnes-ai.com/v1'
+  delete process.env.FRAME_MODEL
+  delete process.env.FRAME_IMAGE_SIZE
+  process.env.FRAME_API_KEY = ''
+  process.env.ARK_API_KEY = 'ark-test-key'
+  process.env.VOLCENGINE_API_KEY = ''
+  process.env.FRAME_ASSET_PACK_MODEL = 'agnes-image-2.1-flash'
+  process.env.FRAME_FALLBACK_MODELS = 'agnes-image-2.0-flash, doubao-seedream-5-0-flash-260915'
+  process.env.FRAME_WATERMARK_ENABLED = 'false'
+  try {
+    const config = getFrameConfig()
+    assert.equal(config.baseUrl, 'https://ark.cn-beijing.volces.com/api/v3')
+    assert.equal(config.apiKey, 'ark-test-key')
+    assert.equal(config.defaultModel, 'doubao-seedream-5-0-flash-260915')
+    assert.equal(config.assetPackModel, 'doubao-seedream-5-0-flash-260915')
+    assert.deepEqual(config.fallbackModels, ['doubao-seedream-5-0-flash-260915'])
+    assert.deepEqual(
+      buildVolcengineGenerationPayload({
+        config,
+        prompt: '中文角色资产板',
+        modelName: config.defaultModel,
+      }),
+      {
+        model: 'doubao-seedream-5-0-flash-260915',
+        prompt: '中文角色资产板',
+        size: '2048x1152',
+        stream: false,
+        response_format: 'url',
+        watermark: false,
+      },
+    )
+  } finally {
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
+test('frame asset payload can explicitly disable image watermarks', () => {
+  assert.equal(
+    buildVolcengineGenerationPayload({
+      config: { imageSize: '2K', watermarkEnabled: false },
+      prompt: '中文道具资产',
+      modelName: 'doubao-seedream-5-0-flash-260915',
+    }).watermark,
+    false,
+  )
+})
+
+test('Volcengine converts unsupported 2K presets into valid dimensions', () => {
+  assert.equal(resolveVolcengineImageSize({ imageSize: '2K', imageRatio: '16:9' }), '2048x1152')
+  assert.equal(resolveVolcengineImageSize({ imageSize: '2K', imageRatio: '9:16' }), '1152x2048')
+  assert.equal(resolveVolcengineImageSize({ imageSize: '2K', imageRatio: '1:1' }), '2048x2048')
+  assert.equal(resolveVolcengineImageSize({ imageSize: '1024x1024', imageRatio: '16:9' }), '1024x1024')
+})
+
+test('Volcengine generation endpoint avoids duplicating the images path', () => {
+  assert.equal(
+    resolveFrameGenerationEndpoint({
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    }),
+    'https://ark.cn-beijing.volces.com/api/v3/images/generations',
+  )
+  assert.equal(
+    resolveFrameGenerationEndpoint({
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/v3/images/generations',
+    }),
+    'https://ark.cn-beijing.volces.com/api/v3/images/generations',
+  )
+})
+
+test('Agnes converts a local signed reference image into a valid image data URL', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(Buffer.from([137, 80, 78, 71]), {
+    status: 200,
+    headers: { 'Content-Type': 'image/png' },
+  })
+
+  try {
+    const refs = await resolveFrameReferenceImageUrls(
+      ['http://127.0.0.1:3001/storage/projects/12/characters/18/v7/c1.png?expires=1&signature=test'],
+      {
+        provider: 'agnes',
+        referenceUploadBaseUrl: 'https://toapis.com/v1',
+        referenceUploadApiKey: 'test-key',
+        referenceUploadTimeoutMs: 1000,
+        referenceUploadRetryAttempts: 0,
+        referenceUploadRetryBaseDelayMs: 1,
+      },
+    )
+    assert.deepEqual(refs, ['data:image/png;base64,iVBORw=='])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('frame references are re-signed from the locked storage key after an old URL expires', async () => {
+  const originalFetch = globalThis.fetch
+  const requested = []
+  globalThis.fetch = async (url) => {
+    requested.push(String(url))
+    if (String(url).includes('expires=1')) return new Response('expired', { status: 403 })
+    return new Response(Buffer.from([137, 80, 78, 71]), {
+      status: 200,
+      headers: { 'Content-Type': 'image/png' },
+    })
+  }
+
+  try {
+    const refs = await resolveFrameReferenceImageUrls(
+      ['https://storage.test/characters/11/approved-v4.png?expires=1'],
+      { provider: 'agnes', referenceUploadTimeoutMs: 1000 },
+      {
+        referenceImageStorageKeys: ['characters/11/approved-v4.png'],
+        createSignedUrl: (key) => `https://storage.test/${key}?expires=999`,
+      },
+    )
+    assert.deepEqual(refs, ['data:image/png;base64,iVBORw=='])
+    assert.deepEqual(requested, ['https://storage.test/characters/11/approved-v4.png?expires=999'])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('frame references fail closed if a locked storage key cannot be signed', async () => {
+  let fetched = false
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => {
+    fetched = true
+    return new Response('stale URL must not be used', { status: 403 })
+  }
+
+  try {
+    await assert.rejects(
+      resolveFrameReferenceImageUrls(
+        ['https://storage.test/old.png?expires=1'],
+        { provider: 'agnes', referenceUploadTimeoutMs: 1000 },
+        {
+          referenceImageStorageKeys: ['characters/11/approved-v4.png'],
+          createSignedUrl: () => { throw new Error('object unavailable') },
+        },
+      ),
+      /无法刷新已锁定的人物参考图/u,
+    )
+    assert.equal(fetched, false)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('Agnes converts a COS-style public signed reference image into a valid image data URL', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(Buffer.from([137, 80, 78, 71]), {
+    status: 200,
+    headers: { 'Content-Type': 'image/png' },
+  })
+
+  try {
+    const refs = await resolveFrameReferenceImageUrls(
+      ['https://projectdream-media.cos.ap-guangzhou.myqcloud.com/projects/12/characters/18/v1/c17.png?q-signature=test'],
+      {
+        provider: 'agnes',
+        referenceUploadTimeoutMs: 1000,
+      },
+    )
+    assert.deepEqual(refs, ['data:image/png;base64,iVBORw=='])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('Agnes retains an already materialized reference image instead of silently dropping it', async () => {
+  const inlineReference = 'data:image/png;base64,iVBORw=='
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => {
+    throw new Error('an inline reference must not be fetched again')
+  }
+
+  try {
+    assert.deepEqual(
+      assertFrameReferenceImageSupport({
+        config: { provider: 'agnes', defaultModel: 'agnes-image-2.1-flash' },
+        modelName: 'agnes-image-2.1-flash',
+        referenceImageUrls: [inlineReference],
+      }),
+      [inlineReference],
+    )
+    assert.deepEqual(
+      await resolveFrameReferenceImageUrls([inlineReference], { provider: 'agnes' }),
+      [inlineReference],
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('Agnes provider uses its own API key when the generic frame key is empty', () => {
+  const originalEnv = {
+    FRAME_PROVIDER: process.env.FRAME_PROVIDER,
+    FRAME_API_KEY: process.env.FRAME_API_KEY,
+    AGNES_API_KEY: process.env.AGNES_API_KEY,
+    TOAPI_API_KEY: process.env.TOAPI_API_KEY,
+  }
+
+  process.env.FRAME_PROVIDER = 'agnes'
+  process.env.FRAME_API_KEY = ''
+  process.env.AGNES_API_KEY = 'agnes-test-key'
+  process.env.TOAPI_API_KEY = 'toapi-test-key'
+
+  try {
+    assert.equal(getFrameConfig().apiKey, 'agnes-test-key')
+  } finally {
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
+test('Agnes network failures preserve the upstream host and low-level cause', async () => {
+  const originalFetch = globalThis.fetch
+  const originalEnv = {
+    FRAME_PROVIDER: process.env.FRAME_PROVIDER,
+    FRAME_API_KEY: process.env.FRAME_API_KEY,
+    AGNES_API_KEY: process.env.AGNES_API_KEY,
+    FRAME_BASE_URL: process.env.FRAME_BASE_URL,
+    FRAME_MODEL: process.env.FRAME_MODEL,
+    FRAME_FALLBACK_MODELS: process.env.FRAME_FALLBACK_MODELS,
+    FRAME_RETRY_ATTEMPTS: process.env.FRAME_RETRY_ATTEMPTS,
+  }
+
+  process.env.FRAME_PROVIDER = 'agnes'
+  process.env.FRAME_API_KEY = 'test-key'
+  process.env.AGNES_API_KEY = ''
+  process.env.FRAME_BASE_URL = 'https://agnes.test/v1'
+  process.env.FRAME_MODEL = 'agnes-image-test'
+  process.env.FRAME_FALLBACK_MODELS = ' '
+  process.env.FRAME_RETRY_ATTEMPTS = '0'
+  globalThis.fetch = async () => {
+    throw Object.assign(new TypeError('fetch failed'), {
+      cause: { code: 'ENETUNREACH', message: 'network is unreachable' },
+    })
+  }
+
+  try {
+    await assert.rejects(
+      () => generateFrameCandidates({
+        storyboardId: 1,
+        versionNo: 1,
+        prompt: 'test frame',
+        candidateCount: 1,
+        publicBaseUrl: '',
+        outputDir: '',
+      }),
+      (error) => {
+        assert.match(error.message, /ENETUNREACH/)
+        assert.match(error.message, /upstream agnes\.test/)
+        return true
+      },
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
 })
 
 test('ToAPI image URL is read from completed async task responses', () => {
@@ -93,6 +569,14 @@ test('BigModel blocks reference images because it cannot lock character identity
         modelName: 'cogview-3-flash',
         referenceImageUrls: ['http://127.0.0.1:3001/generated/frame/ref.png'],
       }),
+    /不支持定妆参考图输入/,
+  )
+  assert.throws(
+    () => assertFrameReferenceImageSupport({
+      config: { provider: 'bigmodel', defaultModel: 'cogview-3-flash' },
+      modelName: 'cogview-3-flash',
+      referenceImageStorageKeys: ['characters/11/approved-v4.png'],
+    }),
     /不支持定妆参考图输入/,
   )
 })

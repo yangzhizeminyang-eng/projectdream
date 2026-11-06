@@ -34,7 +34,7 @@ const storyboard = ref<StoryboardDTO | null>(null)
 const selectedFrameRole = ref<FrameRole>('primary')
 const promptText = ref('')
 const negativePrompt = ref('')
-const modelName = ref('cogview-3-flash')
+const modelName = ref('agnes-image-2.1-flash')
 const generating = ref(false)
 const rewritingPrompt = ref(false)
 const errorMsg = ref('')
@@ -60,6 +60,8 @@ function frameRoleLabel(role: FrameRole): string {
 }
 
 function defaultPromptForRole(role: FrameRole, shot: StoryboardDTO | null): string {
+  // 普通静帧、起始帧、结束帧共用一个页面，但默认提示词来源不同。
+  // 起始帧/结束帧用于控制后续视频动作的开始和收尾。
   if (!shot) return ''
   if (role === 'start') return shot.startVisualPrompt || shot.visualPrompt || ''
   if (role === 'end') return shot.endVisualPrompt || shot.visualPrompt || ''
@@ -83,12 +85,14 @@ function backToStoryboardEditor(): void {
 
 function goToResult(): void {
   router.push({
-    path: '/workspace/frame/result',
+    path: '/workspace/episodes/studio',
     query: buildQuery(),
   })
 }
 
 async function loadPage(): Promise<void> {
+  // 页面加载时必须同时拿到项目、场景、分镜三个上下文。
+  // 少任何一个，后端都无法判断应该给哪条分镜生成图片。
   if (!projectId.value) {
     pageState.value = 'missing-project'
     return
@@ -126,6 +130,8 @@ async function loadPage(): Promise<void> {
 }
 
 async function loadModelDefaults(): Promise<void> {
+  // 模型默认值来自“模型设置中心”。
+  // 如果设置接口暂时不可用，页面保留内置默认模型，避免直接崩掉。
   try {
     const settings = await getModelSettings()
     modelName.value = settings.effective.frame.defaultModel || modelName.value
@@ -135,6 +141,8 @@ async function loadModelDefaults(): Promise<void> {
 }
 
 async function onGenerate(): Promise<void> {
+  // 用户点击生成时，只是提交一个后台任务。
+  // 真正调用图片模型、下载图片、入库都在后端 generation job 中完成。
   if (!storyboardId.value || generating.value) return
   if (!canGenerate.value) {
     errorMsg.value = frameCharacterContext.value?.blockers[0] || '请先完善分镜角色信息'
@@ -163,6 +171,8 @@ async function onGenerate(): Promise<void> {
 }
 
 async function onRewritePrompt(): Promise<void> {
+  // 让文本模型根据项目/场景/分镜/角色上下文重写视觉提示词。
+  // 注意：这里改的是提示词，不直接生成图片。
   if (!storyboardId.value || rewritingPrompt.value) return
   rewritingPrompt.value = true
   errorMsg.value = ''
@@ -186,6 +196,8 @@ async function onRewritePrompt(): Promise<void> {
 }
 
 async function pollGenerationJob(jobId: number): Promise<void> {
+  // 轮询后台任务状态。
+  // success 后跳结果页；failed/canceled 则停在当前页展示错误。
   if (generationTimer) clearTimeout(generationTimer)
   try {
     const job = await getGenerationJob(jobId)

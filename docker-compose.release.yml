@@ -1,0 +1,157 @@
+name: projectdream
+
+# Isolated release topology: reuses the production database, networks, and data volumes.
+# MySQL is deliberately external so a code release cannot recreate or reconfigure it.
+services:
+  api:
+    image: ${PROJECTDREAM_API_IMAGE:-projectdream-api:release-20261020}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${PRODUCTION_ENV_FILE:-/opt/projects/projectdream/.env.production}
+    environment:
+      APP_ENV: ${RAG_APP_ENV:-production}
+      API_PORT: 8000
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: ${MYSQL_USER:-projectdream}
+      DB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      DB_NAME: ${MYSQL_DATABASE:-projectdream}
+      TZ: Asia/Shanghai
+      MOCK_ASSET_IMAGE_PATH: /app/public/images/login-hero-clean.png
+    volumes:
+      - runtime_data:/app/.codex-runtime
+      - ./public/images/login-hero-clean.png:/app/public/images/login-hero-clean.png:ro
+    expose:
+      - "8000"
+    networks:
+      - frontend_net
+      - backend_net
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    mem_limit: 256m
+    mem_reservation: 96m
+    cpus: 0.35
+    security_opt:
+      - no-new-privileges:true
+
+  worker-node:
+    image: ${PROJECTDREAM_WORKER_IMAGE:-projectdream-worker-node:release-20261020}
+    restart: unless-stopped
+    init: true
+    command: ["node", "server/index.mjs"]
+    env_file:
+      - ${PRODUCTION_ENV_FILE:-/opt/projects/projectdream/.env.production}
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: ${MYSQL_USER:-projectdream}
+      DB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      DB_NAME: ${MYSQL_DATABASE:-projectdream}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://<YOUR_SERVER_IP>}
+      FFMPEG_BIN: ffmpeg
+      FFPROBE_BIN: ffprobe
+      APP_RUNTIME_ROLE: worker
+      RAG_ENABLED: ${RAG_ENABLED:-false}
+      RAG_INDEX_ENABLED: ${RAG_INDEX_ENABLED:-false}
+      RAG_SERVICE_URL: ${RAG_SERVICE_URL:-http://rag:8001}
+      RAG_INTERNAL_TOKEN: ${RAG_INTERNAL_TOKEN:-${INTERNAL_TOKEN:-}}
+      RAG_TIMEOUT_MS: ${RAG_TIMEOUT_MS:-15000}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+      BACKGROUND_QUEUE_POLL_INTERVAL_MS: ${BACKGROUND_QUEUE_POLL_INTERVAL_MS:-15000}
+      TZ: Asia/Shanghai
+    volumes:
+      - runtime_data:/app/.codex-runtime
+    healthcheck:
+      test: ["CMD", "node", "scripts/worker-healthcheck.mjs"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 45s
+    networks:
+      - backend_net
+    mem_limit: 640m
+    mem_reservation: 256m
+    cpus: 0.55
+    security_opt:
+      - no-new-privileges:true
+
+  rag:
+    image: projectdream-rag:release-20261020
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${PRODUCTION_ENV_FILE:-/opt/projects/projectdream/.env.production}
+    environment:
+      RAG_APP_ENV: ${RAG_APP_ENV:-production}
+      RAG_PORT: 8001
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-}
+      RAG_MILVUS_URI: ${RAG_MILVUS_URI:-/app/.codex-runtime/milvus/projectdream.db}
+      RAG_MILVUS_TOKEN: ${RAG_MILVUS_TOKEN:-}
+      MILVUS_COLLECTION: ${MILVUS_COLLECTION:-projectdream_rag_v1}
+      MILVUS_DIM: ${MILVUS_DIM:-2048}
+      ZHIPU_MODEL: ${ZHIPU_MODEL:-embedding-3}
+      ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
+      ZHIPU_BASE_URL: ${ZHIPU_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      ZHIPU_DIMENSIONS: ${ZHIPU_DIMENSIONS:-2048}
+      TZ: Asia/Shanghai
+    volumes:
+      - rag_runtime_data:/app/.codex-runtime
+    expose:
+      - "8001"
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 45s
+    mem_limit: 384m
+    mem_reservation: 128m
+    cpus: 0.25
+    security_opt:
+      - no-new-privileges:true
+
+  frontend:
+    image: ${PROJECTDREAM_FRONTEND_IMAGE:-projectdream-frontend:release-20261020}
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${HTTP_PORT:-8002}:8080"
+    networks:
+      - frontend_net
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:8080/nginx-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 128m
+    mem_reservation: 48m
+    cpus: 0.25
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  runtime_data:
+    external: true
+    name: projectdream_runtime_data
+  rag_runtime_data:
+    external: true
+    name: projectdream_rag_runtime_data
+
+networks:
+  frontend_net:
+    external: true
+    name: projectdream_frontend_net
+  backend_net:
+    external: true
+    name: projectdream_backend_net

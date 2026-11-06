@@ -1,0 +1,23 @@
+{
+  "skill_name": "cinematic-final-edit",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "把第 1 集所有已确认分镜合成一条成片，同场景动作连续用硬切，明确换场用短溶解；如果缺素材就阻止完成并列出问题镜头。",
+      "expected_output": "A scoped non-destructive cinematic edit plan, per-boundary transitions, a quality gate result, and blocked handling for missing shots.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "终剪明显像拼接，检查镜头衔接、音频桥接和 FFmpeg 输出，但不能改写已确认的分镜视频；不通过就给出可以执行的返工动作。",
+      "expected_output": "An auditable inspection and repair loop that preserves source assets and never reports a failed quality gate as completed.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "按建议重新规划第 2 集并导出，确认没有跨集串片，验证最终 MP4 可播放且包含所需音频流。",
+      "expected_output": "Episode-scoped selection, non-destructive re-plan, FFprobe evidence, and a completed result only when all gates pass.",
+      "files": []
+    }
+  ]
+}

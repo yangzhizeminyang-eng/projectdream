@@ -1,0 +1,98 @@
+<svg width="1080" height="1440" viewBox="0 0 1080 1440" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="100" y1="0" x2="1000" y2="1440" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07121C"/>
+      <stop offset="0.55" stop-color="#0C2230"/>
+      <stop offset="1" stop-color="#03070B"/>
+    </linearGradient>
+    <radialGradient id="amber" cx="0" cy="0" r="1" gradientTransform="translate(596 445) rotate(90) scale(475 330)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F6B66A" stop-opacity="0.58"/>
+      <stop offset="0.48" stop-color="#D8732D" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#D8732D" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cyan" cx="0" cy="0" r="1" gradientTransform="translate(756 170) rotate(124) scale(590 440)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#55B4CB" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#55B4CB" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="portal" x1="412" y1="162" x2="808" y2="1018" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8D293"/>
+      <stop offset="0.5" stop-color="#D97B32"/>
+      <stop offset="1" stop-color="#713720"/>
+    </linearGradient>
+    <linearGradient id="lowerShade" x1="540" y1="620" x2="540" y2="1440" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#02060A" stop-opacity="0"/>
+      <stop offset="0.72" stop-color="#02060A" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#02060A" stop-opacity="0.96"/>
+    </linearGradient>
+    <filter id="blur28" x="-100" y="-100" width="1300" height="1600" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="28"/>
+    </filter>
+    <filter id="glow" x="250" y="50" width="700" height="1100" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="12"/>
+    </filter>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.82" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer>
+        <feFuncA type="table" tableValues="0 0.1"/>
+      </feComponentTransfer>
+    </filter>
+    <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
+      <path d="M34 0H0V34" stroke="#B8D9E2" stroke-opacity="0.08"/>
+    </pattern>
+    <clipPath id="arch">
+      <path d="M304 1052V464C304 282 404 166 540 166C676 166 776 282 776 464V1052H304Z"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1080" height="1440" fill="url(#bg)"/>
+  <rect width="1080" height="1440" fill="url(#cyan)"/>
+  <rect width="1080" height="1440" fill="url(#amber)"/>
+  <g opacity="0.5" filter="url(#blur28)">
+    <ellipse cx="557" cy="415" rx="290" ry="165" fill="#E08B3E"/>
+    <ellipse cx="850" cy="640" rx="190" ry="280" fill="#3D8CA5"/>
+  </g>
+
+  <path d="M-50 220C260 124 508 126 780 248C925 313 1022 376 1130 420" stroke="#D3EDF1" stroke-opacity="0.25" stroke-width="2"/>
+  <path d="M-60 246C250 150 510 154 795 282C929 342 1026 406 1132 454" stroke="#E59B53" stroke-opacity="0.28" stroke-width="1"/>
+  <g opacity="0.62">
+    <circle cx="90" cy="194" r="5" fill="#F3B15D"/>
+    <circle cx="134" cy="184" r="4" fill="#F3B15D"/>
+    <circle cx="178" cy="177" r="3" fill="#F3B15D"/>
+  </g>
+
+  <g opacity="0.68">
+    <rect x="64" y="350" width="228" height="306" rx="4" transform="rotate(-12 64 350)" fill="#8CB4C0" fill-opacity="0.12" stroke="#CDE9ED" stroke-opacity="0.35"/>
+    <path d="M108 472L171 421L207 450L262 402" stroke="#F5B56D" stroke-opacity="0.72" stroke-width="4"/>
+    <path d="M105 548L252 548M105 580L236 580" stroke="#D2E9ED" stroke-opacity="0.32" stroke-width="4"/>
+  </g>
+
+  <g opacity="0.42">
+    <rect x="824" y="230" width="178" height="274" rx="4" transform="rotate(13 824 230)" fill="#7AAFC1" fill-opacity="0.12" stroke="#CDE9ED" stroke-opacity="0.34"/>
+    <path d="M853 336L965 336M853 370L944 370M853 404L978 404" stroke="#D2E9ED" stroke-opacity="0.42" stroke-width="4"/>
+    <path d="M859 447L898 416L927 440L978 390" stroke="#F5B56D" stroke-opacity="0.7" stroke-width="3"/>
+  </g>
+
+  <g opacity="0.55" filter="url(#glow)">
+    <path d="M304 1052V464C304 282 404 166 540 166C676 166 776 282 776 464V1052" stroke="#F5AE63" stroke-width="23"/>
+  </g>
+  <path d="M304 1052V464C304 282 404 166 540 166C676 166 776 282 776 464V1052" stroke="url(#portal)" stroke-width="8"/>
+  <path d="M330 1030V470C330 304 418 194 540 194C662 194 750 304 750 470V1030" stroke="#FFE0A8" stroke-opacity="0.42" stroke-width="2"/>
+
+  <g clip-path="url(#arch)">
+    <rect x="296" y="150" width="500" height="930" fill="#0A2632" fill-opacity="0.62"/>
+    <rect x="296" y="150" width="500" height="930" fill="url(#grid)" opacity="0.7"/>
+    <circle cx="540" cy="466" r="92" fill="#F9B76F" fill-opacity="0.18" filter="url(#blur28)"/>
+    <circle cx="540" cy="466" r="34" fill="#FFE0AB" fill-opacity="0.64"/>
+    <path d="M300 774C416 694 502 692 588 738C679 786 736 890 796 972V1110H300V774Z" fill="#02070B" fill-opacity="0.78"/>
+    <path d="M334 938C440 832 505 807 566 830C628 853 697 916 758 1011" stroke="#E5A25C" stroke-opacity="0.56" stroke-width="3"/>
+  </g>
+
+  <g opacity="0.38">
+    <path d="M80 930H1000M80 1002H1000M80 1074H1000M80 1146H1000" stroke="#A7CBD4" stroke-width="2"/>
+    <path d="M132 1220L430 1055M340 1260L498 1055M580 1260L584 1055M820 1260L670 1055M1000 1220L728 1055" stroke="#A7CBD4" stroke-width="2"/>
+  </g>
+
+  <rect width="1080" height="1440" fill="url(#lowerShade)"/>
+  <rect width="1080" height="1440" filter="url(#grain)" opacity="0.42"/>
+</svg>

@@ -4,7 +4,9 @@
  */
 
 import { getAiConfig, isMockProvider } from './config.mjs'
+import { getVideoConfig, isOfficialAgnesModel } from '../video.mjs'
 import { normalizeStoryboardPayload } from './parsers.mjs'
+import { estimateMinimumDialogueSeconds, validateStoryboardDurationContracts } from '../storyboard-duration-contract.mjs'
 import { buildStoryboardPrompts } from './prompts/storyboard.mjs'
 import { generateStructuredJson } from './provider.mjs'
 
@@ -17,7 +19,25 @@ function pick(arr, index) {
   return arr[index % arr.length]
 }
 
+function getConfiguredVideoDurationRange() {
+  const config = getVideoConfig()
+  const modelName = String(config.defaultModel || '').trim()
+  if (/^minimax(?:-|$)/i.test(modelName)) return { min: 4, max: 15 }
+  if (isOfficialAgnesModel(modelName) || config.provider === 'agnes') return { min: 4, max: 12 }
+  return { min: 1, max: 30 }
+}
+
+function validateConfiguredVideoDurations(shots, range) {
+  return shots.flatMap((shot) => {
+    const duration = Number(shot.duration_seconds)
+    return Number.isInteger(duration) && duration >= range.min && duration <= range.max
+      ? []
+      : [`镜头 ${shot.shot_no} 时长须符合当前视频模型 ${range.min}-${range.max} 秒范围`]
+  })
+}
+
 function generateMockStoryboards(ctx) {
+  // mock 分镜生成把一场戏拆成若干镜头，并填充景别、机位、动作和视觉提示词。
   const scene = ctx.scene || {}
   const project = ctx.project || {}
   const content = String(ctx.scriptContent || '')
@@ -38,7 +58,7 @@ function generateMockStoryboards(ctx) {
     const shotType = pick(SHOT_TYPES, i)
     const cameraAngle = pick(ANGLES, i + 1)
     const composition = pick(COMPOSITIONS, i + 2)
-    const duration = 3 + (i % 3)
+    const baseDuration = 4 + (i % 3)
     const actions = [
       `${character} 从阴影中缓慢走出，背景里的环境噪声压低成一层底音。`,
       `镜头切到 ${character} 的侧脸，角色开始观察前方不稳定的局面。`,
@@ -60,48 +80,93 @@ function generateMockStoryboards(ctx) {
       '（无对白）',
     ]
 
+    const dialogue = pick(dialogues, i)
+    const action = pick(actions, i)
+    const duration = Math.max(baseDuration, estimateMinimumDialogueSeconds(dialogue))
+
     return {
       shot_no: shotNo,
       shot_type: shotType,
       camera_angle: cameraAngle,
       composition,
       duration_seconds: duration,
+      duration_breakdown: [{
+        phase: '主要动作与结果',
+        seconds: duration,
+        observable: action,
+      }],
+      duration_basis: '按单一可见动作及其结果停留时长规划。',
       character_name: character,
-      action_text: pick(actions, i),
-      dialogue_text: pick(dialogues, i),
-      visual_prompt: `${basePrompt}，${shotType}，${cameraAngle}，${composition}，电影感构图，cinemascope 2.39:1`,
+      action_text: action,
+      dialogue_text: dialogue,
+      visual_prompt: `时间轴：0-${duration}秒，${action}；镜头：${shotType}，${cameraAngle}；位置：${composition}；动作：${action}；要求：${basePrompt}，电影感构图，cinemascope 2.39:1${dialogue && dialogue !== '（无对白）' ? `；对白：${dialogue}` : ''}；声音：${i % 3 === 0 ? '保留环境声，人物不说话时保持短暂静默。' : '语速自然，关键词轻微重读，句中保留短停顿。'}`,
+      shot_purpose: i === 0 ? 'hook' : i % 3 === 0 ? 'reaction' : 'dialogue',
+      acting_beat:
+        i % 3 === 0
+          ? `${character}先停顿并观察，再用视线或动作回应刚刚发生的信息。`
+          : `${character}先吸气确认情绪，再在关键词处停顿后完成动作或对白。`,
+      audio_direction:
+        i % 3 === 0 ? '保留环境声，人物不说话时保持短暂静默。' : '语速自然，关键词轻微重读，句中保留短停顿。',
+      speech_duration_policy: 'preserve',
+      reaction_shot: i % 3 === 0,
     }
   })
 
-  return {
+  return normalizeStoryboardPayload({
     scene_id: Number(ctx.sceneId) || 0,
     shots,
-  }
+  }, ctx)
 }
 
 export async function generateStoryboards(ctx) {
+  // 分镜生成流程：读取场景剧本 -> 调文本模型 -> 归一化镜头字段。
+  // 后端随后会把每个镜头写入 storyboards，图片/视频阶段再逐镜头处理。
   const config = getAiConfig()
+  const videoDurationRange = getConfiguredVideoDurationRange()
   if (isMockProvider(config)) {
-    return generateMockStoryboards(ctx)
+    const normalized = generateMockStoryboards(ctx)
+    const contract = validateStoryboardDurationContracts(normalized.shots, { requireVisibleTimeline: true })
+    const modelBlockers = validateConfiguredVideoDurations(normalized.shots, videoDurationRange)
+    if (!contract.passed || modelBlockers.length) {
+      throw new Error(`模拟分镜时长规划无效：${[...contract.blockers, ...modelBlockers].join('；')}`)
+    }
+    return normalized
   }
 
-  const { systemPrompt, userPrompt } = buildStoryboardPrompts(ctx)
+  const { systemPrompt, userPrompt } = buildStoryboardPrompts({ ...ctx, videoDurationRange })
 
   try {
-    const result = await generateStructuredJson({
-      task: 'storyboard',
-      systemPrompt,
-      userPrompt,
-      model: config.storyboardModel,
-      temperature: 0.8,
-    })
-    return normalizeStoryboardPayload(result.json, ctx)
-  } catch (error) {
-    console.error('[ai:storyboard]', error)
-    if (config.fallbackToMock) {
-      console.warn('[ai:storyboard] real provider failed, fallback to mock')
-      return generateMockStoryboards(ctx)
+    let blockers = []
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const correction = attempt === 0
+        ? ''
+        : `\n上一次输出未通过时长或镜头内时间轴契约，请只修正这些问题后重新输出完整 JSON：${blockers.join('；')}`
+      const result = await generateStructuredJson({
+        task: 'storyboard',
+        systemPrompt,
+        userPrompt: `${userPrompt}${correction}`,
+        model: config.storyboardModel,
+        temperature: 0.2,
+        responseFormat: { type: 'json_object' },
+      })
+      const normalized = normalizeStoryboardPayload(result.json, ctx)
+      const contract = validateStoryboardDurationContracts(normalized.shots, { requireVisibleTimeline: true })
+      const modelBlockers = validateConfiguredVideoDurations(normalized.shots, videoDurationRange)
+      if (contract.passed && !modelBlockers.length) return normalized
+      blockers = [...contract.blockers, ...modelBlockers]
     }
+    const error = new Error(`分镜 Agent 两次输出均未通过时长规划校验：${blockers.join('；')}`)
+    error.statusCode = 422
+    error.code = 'STORYBOARD_DURATION_CONTRACT_FAILED'
     throw error
+  } catch (error) {
+    if (error?.code === 'STORYBOARD_DURATION_CONTRACT_FAILED') throw error
+    console.error('[ai:storyboard]', error)
+    if (!config.fallbackToMock) throw error
+    // 分镜是后续资产和视频流程的硬前置。文本模型暂时不可用时，
+    // 使用规则化分镜降级，保证用户仍能进入可编辑的分镜创作页。
+    // 后续重新生成时仍可切回真实模型，不覆盖用户已经手动调整的镜头。
+    console.warn('[ai:storyboard] real provider failed, fallback to editable storyboard')
+    return generateMockStoryboards(ctx)
   }
 }

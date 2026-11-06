@@ -5,7 +5,49 @@
 
 import { getAiConfig, isMockProvider } from './config.mjs'
 
+const LONG_TASKS = new Set([
+  'story-bible',
+  'outline',
+  'season-structure',
+  'script',
+  'storyboard',
+  'scene-extraction',
+  'characters',
+])
+
+function isTimeoutError(error) {
+  return error?.name === 'TimeoutError' || error?.code === 'ETIMEDOUT' || error?.code === 'UND_ERR_HEADERS_TIMEOUT'
+}
+
+function normalizeUpstreamDetail(error) {
+  return String(error?.message || error || '').trim()
+}
+
+export function resolveAiRequestTimeoutMs(config, task, longTask = false) {
+  return (longTask || LONG_TASKS.has(String(task || '').trim()))
+    ? Math.max(config.longTaskTimeoutMs || config.timeoutMs, config.timeoutMs)
+    : config.timeoutMs
+}
+
+export function describeAiRequestError(error, task, status = 0) {
+  const detail = normalizeUpstreamDetail(error).toLowerCase()
+  if (isTimeoutError(error)) {
+    return `${task === 'story-bible' ? '故事设定' : 'AI'}生成超时，上游模型处理时间较长，请稍后重试。`
+  }
+  if (status === 401 || status === 403 || /unauthorized|invalid api key|authentication|鉴权|密钥/.test(detail)) {
+    return '文本模型接口密钥无效或无权限，请打开模型设置检查文本服务商和接口密钥。'
+  }
+  if (status === 402 || /insufficient account balance|insufficient balance|余额不足|quota|额度/.test(detail)) {
+    return '文本模型额度不足，请打开模型设置更换可用账号或充值后重试。'
+  }
+  if (/fetch failed|econnrefused|enotfound|connect timeout|socket/.test(detail)) {
+    return '文本模型接口暂时无法连接，请打开模型设置检查接口地址，确认服务可访问后重试。'
+  }
+  return `AI 请求失败：${normalizeUpstreamDetail(error) || '上游服务未返回具体原因'}`
+}
+
 class AiProviderError extends Error {
+  // 统一包装 AI 调用错误，调用方可以根据 status/detail 判断是配置错、超时还是供应商错误。
   /**
    * @param {string} message
    * @param {object} [options]
@@ -21,12 +63,15 @@ class AiProviderError extends Error {
 }
 
 function stripCodeFence(text) {
+  // 模型有时会把 JSON 放进 ```json ... ``` 代码块里，先去掉外层标记。
   const raw = String(text || '').trim()
   if (!raw.startsWith('```')) return raw
   return raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
 }
 
 function extractJsonText(text) {
+  // 尽量从模型的自然语言回复中截取最外层 JSON。
+  // 这是容错，不代表提示词可以不要求模型只返回 JSON。
   const raw = stripCodeFence(text)
   const firstBrace = raw.indexOf('{')
   const firstBracket = raw.indexOf('[')
@@ -40,19 +85,84 @@ function extractJsonText(text) {
   return raw.slice(start, end + 1).trim()
 }
 
+function findBalancedJsonCandidates(text) {
+  const raw = stripCodeFence(text)
+  const candidates = []
+  for (let start = 0; start < raw.length; start += 1) {
+    if (raw[start] !== '{' && raw[start] !== '[') continue
+    const stack = []
+    let inString = false
+    let escaped = false
+    for (let index = start; index < raw.length; index += 1) {
+      const char = raw[index]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (char === '\\') escaped = true
+        else if (char === '"') inString = false
+        continue
+      }
+      if (char === '"') {
+        inString = true
+        continue
+      }
+      if (char === '{' || char === '[') stack.push(char)
+      else if (char === '}' || char === ']') {
+        const expected = char === '}' ? '{' : '['
+        if (stack[stack.length - 1] !== expected) break
+        stack.pop()
+        if (!stack.length) {
+          candidates.push(raw.slice(start, index + 1).trim())
+          break
+        }
+      }
+    }
+  }
+  return candidates
+}
+
 /**
  * @param {string} text
  * @returns {any}
  */
-function parseJsonPayload(text) {
+export function parseJsonPayload(text) {
+  // 解析失败时抛出专用错误，方便上层决定是否 fallback 到 mock。
   const jsonText = extractJsonText(text)
-  try {
-    return JSON.parse(jsonText)
-  } catch (error) {
-    throw new AiProviderError('AI 返回内容不是合法 JSON', {
-      detail: jsonText.slice(0, 400),
-    })
+  const candidates = [jsonText, ...findBalancedJsonCandidates(text)]
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      // Continue with the next balanced object. Some reasoning models put a
+      // JSON example or a short explanation before the actual payload.
+    }
   }
+  throw new AiProviderError('AI 返回内容不是合法 JSON', {
+    detail: String(text || '').slice(0, 600),
+  })
+}
+
+export function buildAiRequestPayload(params, config) {
+  const payload = {
+    model: String(params.model || config.defaultModel || '').trim(),
+    temperature: typeof params.temperature === 'number' ? params.temperature : 0.7,
+    messages: [
+      { role: 'system', content: String(params.systemPrompt || '').trim() },
+      { role: 'user', content: String(params.userPrompt || '').trim() },
+    ],
+  }
+
+  if (params.responseFormat) {
+    payload.response_format = params.responseFormat
+  }
+
+  if (Number.isInteger(params.maxTokens) && params.maxTokens > 0) {
+    payload.max_tokens = params.maxTokens
+  }
+  if (params.thinking) {
+    payload.thinking = params.thinking
+  }
+
+  return payload
 }
 
 /**
@@ -65,6 +175,8 @@ function parseJsonPayload(text) {
  * @returns {Promise<{ content: string, json: any, raw: any }>}
  */
 export async function generateStructuredJson(params) {
+  // 所有文本生成能力都走这里，统一完成：
+  // 配置检查 -> POST /chat/completions -> 超时处理 -> HTTP 错误处理 -> JSON 解析。
   const config = getAiConfig()
   if (isMockProvider(config)) {
     throw new AiProviderError('当前 AI_PROVIDER=mock，不执行真实模型调用')
@@ -83,14 +195,7 @@ export async function generateStructuredJson(params) {
     throw new AiProviderError('缺少 AI_MODEL 配置')
   }
 
-  const payload = {
-    model,
-    temperature: typeof params.temperature === 'number' ? params.temperature : 0.7,
-    messages: [
-      { role: 'system', content: String(params.systemPrompt || '').trim() },
-      { role: 'user', content: String(params.userPrompt || '').trim() },
-    ],
-  }
+  const payload = buildAiRequestPayload({ ...params, model }, config)
 
   let response
   try {
@@ -101,13 +206,22 @@ export async function generateStructuredJson(params) {
         Authorization: `Bearer ${config.apiKey}`,
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(config.timeoutMs),
+      signal: AbortSignal.timeout(
+        resolveAiRequestTimeoutMs(config, params.task, params.longTask === true),
+      ),
     })
   } catch (error) {
-    if (error?.name === 'TimeoutError') {
-      throw new AiProviderError('AI 请求超时')
-    }
-    throw new AiProviderError(`AI 请求失败：${error instanceof Error ? error.message : 'unknown error'}`)
+    const diagnostic = [
+      `url=${url}`,
+      `model=${model}`,
+      `error=${error?.name || 'Error'}`,
+      `detail=${normalizeUpstreamDetail(error)}`,
+      `cause=${normalizeUpstreamDetail(error?.cause)}`,
+    ].join(' ')
+    console.error('[ai:provider] request failed', diagnostic)
+    throw new AiProviderError(describeAiRequestError(error, params.task), {
+      detail: diagnostic,
+    })
   }
 
   const text = await response.text()
@@ -125,13 +239,16 @@ export async function generateStructuredJson(params) {
       raw?.detail ||
       text.slice(0, 400) ||
       `HTTP ${response.status}`
-    throw new AiProviderError(`AI 调用失败：${detail}`, {
+    throw new AiProviderError(describeAiRequestError(new Error(detail), params.task, response.status), {
       status: response.status,
       detail,
     })
   }
 
-  const content = raw?.choices?.[0]?.message?.content
+  const contentValue = raw?.choices?.[0]?.message?.content
+  const content = Array.isArray(contentValue)
+    ? contentValue.map((part) => typeof part === 'string' ? part : part?.text || '').join('')
+    : contentValue
   if (!content || !String(content).trim()) {
     throw new AiProviderError('AI 没有返回有效内容')
   }

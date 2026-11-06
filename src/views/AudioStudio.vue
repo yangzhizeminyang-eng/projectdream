@@ -24,11 +24,24 @@ import {
   type VoiceProfileDTO,
 } from '@/api/project'
 import { getWorkspaceContext, setWorkspaceContext } from '@/lib/context'
+import { claimReworkItem, completeReworkItem } from '@/lib/rework-queue'
+import { buildVoiceBindingSummary } from '@/lib/voice-binding-status'
 
 type TrackType = 'dialogue' | 'narration' | 'music' | 'sfx'
 type PageState = 'missing-project' | 'loading' | 'empty' | 'error' | 'ready'
 type FilterTrackType = TrackType | 'all'
 type FilterStatus = 'all' | 'candidate' | 'confirmed' | 'archived'
+type PickerKey =
+  | 'track'
+  | 'scene'
+  | 'storyboard'
+  | 'character'
+  | 'voice'
+  | 'filterTrack'
+  | 'filterScene'
+  | 'filterStatus'
+  | 'placementStoryboard'
+type PickerValue = string | number
 
 interface TrackOption {
   key: TrackType
@@ -46,6 +59,14 @@ interface AudioGroup {
   title: string
   subtitle: string
   items: AudioAssetDTO[]
+}
+
+interface PickerOption {
+  value: PickerValue
+  label: string
+  meta?: string
+  icon?: string
+  disabled?: boolean
 }
 
 const TRACK_OPTIONS: TrackOption[] = [
@@ -100,6 +121,8 @@ const requestedSceneId = computed(() => {
   if (fromQuery > 0) return fromQuery
   return getWorkspaceContext()?.sceneId || 0
 })
+const requestedStoryboardId = computed(() => Number(route.query.storyboardId) || getWorkspaceContext()?.storyboardId || 0)
+const reworkCandidateId = computed(() => Number(route.query.reworkCandidateId) || 0)
 
 const pageState = ref<PageState>('loading')
 const project = ref<ProjectDTO | null>(null)
@@ -120,6 +143,7 @@ const placementOffsetSeconds = ref(0)
 
 const errorMsg = ref('')
 const infoMsg = ref('')
+const reworkContext = ref<{ candidateId: number } | null>(null)
 
 const formTrackType = ref<TrackType>('dialogue')
 const formSceneId = ref<number>(requestedSceneId.value || 0)
@@ -133,6 +157,7 @@ const defaultAudioModel = ref('qwen3-tts-flash')
 const formVoiceProfileKey = ref('female-adult-gentle')
 const MAX_AUDIO_TEXT_LENGTH = 600
 const autoTextNotice = ref('')
+const activePicker = ref<PickerKey | null>(null)
 
 const keyword = ref('')
 const filterTrackType = ref<FilterTrackType>('all')
@@ -159,7 +184,8 @@ const selectedFormVoiceProfile = computed(() => {
   if (formTrackType.value === 'dialogue') return selectedCharacterVoiceCast.value?.selectedProfile || null
   return voiceProfileMap.value.get(formVoiceProfileKey.value) || null
 })
-const lockedVoiceCount = computed(() => voiceCast.value.filter((item) => item.ready).length)
+const voiceBindingSummary = computed(() => buildVoiceBindingSummary(voiceCast.value, storyboards.value))
+const lockedVoiceCount = computed(() => voiceBindingSummary.value.ready)
 
 const sceneOptions = computed(() => [...scenes.value].sort((a, b) => a.sceneNo - b.sceneNo))
 const storyboardOptions = computed(() =>
@@ -170,6 +196,112 @@ const storyboardOptions = computed(() =>
 const storyboardEnabled = computed(() => formTrackType.value === 'dialogue' || formTrackType.value === 'narration')
 const characterOptions = computed(() =>
   [...characters.value].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')),
+)
+
+const trackPickerOptions = computed<PickerOption[]>(() =>
+  TRACK_OPTIONS.map((track) => ({
+    value: track.key,
+    label: track.label,
+    meta: track.key === 'music' || track.key === 'sfx' ? '待接入' : track.hint,
+    icon: track.icon,
+    disabled: track.key === 'music' || track.key === 'sfx',
+  })),
+)
+const scenePickerOptions = computed<PickerOption[]>(() => [
+  { value: 0, label: '项目级 / 不绑定场景', meta: '适合通用旁白、音乐或音效' },
+  ...sceneOptions.value.map((scene) => ({
+    value: scene.id,
+    label: `Scene ${String(scene.sceneNo).padStart(2, '0')} · ${scene.title || '未命名场景'}`,
+    meta: scene.summary || scene.location || '场景来源',
+  })),
+])
+const storyboardPickerOptions = computed<PickerOption[]>(() => [
+  {
+    value: 0,
+    label: storyboardEnabled.value ? '不绑定具体分镜（按场景排布）' : '当前轨道不绑定分镜',
+    meta: storyboardEnabled.value ? '导出时按场景顺序排布' : '音乐与音效暂不绑定镜头',
+  },
+  ...storyboardOptions.value.map((storyboard) => ({
+    value: storyboard.id,
+    label: `${storyboard.shotNo} · ${storyboard.shotType || '镜头'} · ${storyboard.durationSeconds || 4}s`,
+    meta: storyboard.actionText || storyboard.dialogueText || '分镜定位',
+  })),
+])
+const characterPickerOptions = computed<PickerOption[]>(() => [
+  {
+    value: 0,
+    label: characterEnabled.value ? '请选择角色' : '当前轨道不绑定角色',
+    meta: characterEnabled.value ? '选择后使用角色锁定音色' : '只有对白轨需要角色',
+  },
+  ...characterOptions.value.map((character) => {
+    const cast = voiceCastMap.value.get(character.id)
+    return {
+      value: character.id,
+      label: character.name,
+      meta: `${character.roleTag || '未设置角色标签'} · ${cast?.ready ? '已锁定音色' : '待配置音色'}`,
+    }
+  }),
+])
+const voicePickerOptions = computed<PickerOption[]>(() =>
+  voiceProfiles.value.map((profile) => ({
+    value: profile.profileKey,
+    label: profile.displayName,
+    meta: `${profile.voiceId} · ${profile.modelName}`,
+  })),
+)
+const filterTrackPickerOptions = computed<PickerOption[]>(() => [
+  { value: 'all', label: '全部轨道', meta: `共 ${totalCount.value} 条音频候选` },
+  ...TRACK_OPTIONS.map((track) => ({
+    value: track.key,
+    label: track.label,
+    meta: track.hint,
+    icon: track.icon,
+  })),
+])
+const filterScenePickerOptions = computed<PickerOption[]>(() => [
+  { value: 0, label: '全部场景 / 项目级', meta: `覆盖 ${scenes.value.length} 个场景` },
+  ...sceneOptions.value.map((scene) => ({
+    value: scene.id,
+    label: `Scene ${String(scene.sceneNo).padStart(2, '0')} · ${scene.title || '未命名场景'}`,
+    meta: scene.summary || scene.location || '场景筛选',
+  })),
+])
+const filterStatusPickerOptions = computed<PickerOption[]>(() =>
+  STATUS_OPTIONS.map((status) => {
+    const count =
+      status.value === 'candidate'
+        ? candidateCount.value
+        : status.value === 'confirmed'
+          ? confirmedCount.value
+          : status.value === 'archived'
+            ? archivedCount.value
+            : totalCount.value
+    return {
+      value: status.value,
+      label: status.label,
+      meta: `${count} 条匹配`,
+    }
+  }),
+)
+const selectedTrackPickerOption = computed(() => findPickerOption(trackPickerOptions.value, formTrackType.value))
+const selectedScenePickerOption = computed(() => findPickerOption(scenePickerOptions.value, formSceneId.value))
+const selectedStoryboardPickerOption = computed(() =>
+  findPickerOption(storyboardPickerOptions.value, formStoryboardId.value),
+)
+const selectedCharacterPickerOption = computed(() =>
+  findPickerOption(characterPickerOptions.value, formCharacterId.value),
+)
+const selectedVoicePickerOption = computed(() =>
+  findPickerOption(voicePickerOptions.value, formVoiceProfileKey.value),
+)
+const selectedFilterTrackPickerOption = computed(() =>
+  findPickerOption(filterTrackPickerOptions.value, filterTrackType.value),
+)
+const selectedFilterScenePickerOption = computed(() =>
+  findPickerOption(filterScenePickerOptions.value, filterSceneId.value),
+)
+const selectedFilterStatusPickerOption = computed(() =>
+  findPickerOption(filterStatusPickerOptions.value, filterStatus.value),
 )
 
 const totalCount = computed(() => audioItems.value.length)
@@ -275,6 +407,20 @@ const groupCount = computed(() => groupedItems.value.length)
 const selectedAudio = computed<AudioAssetDTO | null>(
   () => audioItems.value.find((item) => item.id === selectedAudioId.value) || null,
 )
+const placementStoryboardPickerOptions = computed<PickerOption[]>(() => [
+  { value: 0, label: '不绑定具体分镜（按场景排布）', meta: '导出时按场景顺序自动排布' },
+  ...storyboards.value
+    .filter((item) => !selectedAudio.value?.sceneId || item.sceneId === selectedAudio.value.sceneId)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((storyboard) => ({
+      value: storyboard.id,
+      label: `${storyboard.shotNo} · ${storyboard.shotType || '镜头'} · ${storyboard.durationSeconds || 4}s`,
+      meta: storyboard.actionText || storyboard.dialogueText || '时间线分镜',
+    })),
+])
+const selectedPlacementStoryboardPickerOption = computed(() =>
+  findPickerOption(placementStoryboardPickerOptions.value, placementStoryboardId.value),
+)
 
 const emptyStateTitle = computed(() => {
   if (!scenes.value.length) return '当前项目还没有场景'
@@ -308,6 +454,47 @@ const generateBlockedReason = computed(() => {
   if (formText.value.trim().length > MAX_AUDIO_TEXT_LENGTH) return `朗读文本不能超过 ${MAX_AUDIO_TEXT_LENGTH} 字`
   return ''
 })
+
+function findPickerOption(options: PickerOption[], value: PickerValue): PickerOption | null {
+  return options.find((option) => String(option.value) === String(value)) || null
+}
+
+function isPickerOpen(key: PickerKey): boolean {
+  return activePicker.value === key
+}
+
+function togglePicker(key: PickerKey, disabled = false): void {
+  if (disabled) return
+  activePicker.value = activePicker.value === key ? null : key
+}
+
+function closePicker(key?: PickerKey): void {
+  if (!key || activePicker.value === key) activePicker.value = null
+}
+
+function onPickerBlur(event: FocusEvent, key: PickerKey): void {
+  const nextTarget = event.relatedTarget
+  if (nextTarget instanceof Node && event.currentTarget instanceof Node) {
+    if (event.currentTarget.contains(nextTarget)) return
+  }
+  closePicker(key)
+}
+
+function onPick(key: PickerKey, option: PickerOption): void {
+  if (option.disabled) return
+
+  if (key === 'track') formTrackType.value = option.value as TrackType
+  if (key === 'scene') formSceneId.value = Number(option.value)
+  if (key === 'storyboard') formStoryboardId.value = Number(option.value)
+  if (key === 'character') formCharacterId.value = Number(option.value)
+  if (key === 'voice') formVoiceProfileKey.value = String(option.value)
+  if (key === 'filterTrack') filterTrackType.value = option.value as FilterTrackType
+  if (key === 'filterScene') filterSceneId.value = Number(option.value)
+  if (key === 'filterStatus') filterStatus.value = option.value as FilterStatus
+  if (key === 'placementStoryboard') placementStoryboardId.value = Number(option.value)
+
+  closePicker(key)
+}
 
 function syncGenerateDefaults(options?: { forceTrackType?: boolean }): void {
   const firstSceneId = scenes.value[0]?.id || 0
@@ -678,6 +865,8 @@ function buildGroupKey(
   sceneId?: number | null,
   characterId?: number | null,
 ): string {
+  // 音频列表按“轨道 + 场景 + 角色”分组。
+  // 同一个角色在同一场景下的多次候选音频会聚在一起，便于确认主版本。
   return [
     normalizeTrackType(trackType),
     Number(sceneId || 0),
@@ -721,6 +910,8 @@ function waveformBars(item: AudioAssetDTO): number[] {
 }
 
 function syncSelectedAudio(preferredId?: number | null): void {
+  // 刷新列表后尽量保持当前选中项。
+  // 如果当前项不存在，就优先选当前场景的 confirmed 音频，再选任意 confirmed 音频。
   if (preferredId && filteredItems.value.some((item) => item.id === preferredId)) {
     selectedAudioId.value = preferredId
     return
@@ -756,6 +947,8 @@ function syncPlacementState(item: AudioAssetDTO | null): void {
 }
 
 async function savePlacement(): Promise<void> {
+  // 调整音频绑定的分镜和起始微调时间。
+  // 这不会改音频文件本身，只影响后续成片导出时放到时间线上的位置。
   const item = selectedAudio.value
   if (!item || savingPlacement.value) return
 
@@ -841,6 +1034,7 @@ function goScriptScene(sceneId?: number | null): void {
 }
 
 async function refreshAudio(preferredId?: number | null): Promise<void> {
+  // 只刷新音频资产列表，不重新加载项目/角色/分镜等基础数据。
   if (!projectId.value) return
   audioItems.value = await listProjectAudio(projectId.value)
   pageState.value = audioItems.value.length ? 'ready' : 'empty'
@@ -848,6 +1042,8 @@ async function refreshAudio(preferredId?: number | null): Promise<void> {
 }
 
 async function loadPage(): Promise<void> {
+  // 音频页需要一次性加载项目、场景、角色、已有音频、角色音色绑定和系统音色目录。
+  // 后面生成对白时，表单会从这些数据里自动推导文本、角色和推荐音色。
   if (!projectId.value) {
     pageState.value = 'missing-project'
     project.value = null
@@ -866,6 +1062,12 @@ async function loadPage(): Promise<void> {
   infoMsg.value = ''
 
   try {
+    if (reworkCandidateId.value) {
+      const claimed = claimReworkItem(projectId.value, reworkCandidateId.value, 'audio')
+      if (claimed) {
+        reworkContext.value = { candidateId: claimed.candidateId }
+      }
+    }
     const [projectData, sceneItems, characterItems, audioList, voiceCastItems, voiceCatalog] = await Promise.all([
       getProject(projectId.value),
       listScenes(projectId.value),
@@ -904,6 +1106,14 @@ async function loadPage(): Promise<void> {
     if (formStoryboardId.value && !storyboards.value.some((item) => item.id === formStoryboardId.value)) {
       formStoryboardId.value = 0
     }
+    if (!formStoryboardId.value && requestedStoryboardId.value > 0) {
+      const requestedShot = storyboards.value.find((item) => item.id === requestedStoryboardId.value)
+      if (requestedShot) {
+        formStoryboardId.value = requestedShot.id
+        formSceneId.value = requestedShot.sceneId
+        filterSceneId.value = requestedShot.sceneId
+      }
+    }
     syncFormText(true)
 
     syncVoiceSelection()
@@ -926,6 +1136,8 @@ async function loadPage(): Promise<void> {
 }
 
 async function loadModelDefaults(): Promise<void> {
+  // 从模型设置中心读取当前音频默认模型。
+  // 页面内置值只是兜底，真实项目最好以设置中心为准。
   try {
     const settings = await getModelSettings()
     defaultAudioModel.value = settings.effective.audio.defaultModel || defaultAudioModel.value
@@ -936,6 +1148,8 @@ async function loadModelDefaults(): Promise<void> {
 }
 
 async function onGenerate(): Promise<void> {
+  // 生成音频是同步返回候选列表：
+  // 后端会调用 TTS、下载音频、写入 audio_assets 后再把新记录返回给页面。
   if (generating.value || generateBlockedReason.value || !projectId.value) return
 
   generating.value = true
@@ -961,6 +1175,10 @@ async function onGenerate(): Promise<void> {
     })
 
     await refreshAudio(created[0]?.id || null)
+    if (reworkContext.value) {
+      completeReworkItem(projectId.value, reworkContext.value.candidateId, 'audio')
+      reworkContext.value = null
+    }
     infoMsg.value = `${trackLabel(formTrackType.value)}已生成 ${created.length} 条候选，当前版本 V${created[0]?.versionNo || 1}`
     formTitle.value = ''
   } catch (error) {
@@ -971,6 +1189,8 @@ async function onGenerate(): Promise<void> {
 }
 
 async function onConfirm(audioId: number): Promise<void> {
+  // 确认音频会把它标记为 confirmed。
+  // 后续口型同步和成片导出默认只使用 confirmed 音频。
   if (confirmingAudioId.value) return
 
   confirmingAudioId.value = audioId
@@ -1099,11 +1319,15 @@ onMounted(() => {
     <div v-else class="audio-page">
       <div class="page-top">
         <div>
-          <p class="eyebrow">PROJECT {{ projectId }}</p>
           <h1 class="page-title">音频工作台</h1>
           <p class="page-subtitle">
             音频二期改成 source-aware 工作台：按轨道类型、场景、角色生成候选音频，并支持确认主版本与归档旧候选。
           </p>
+          <div class="page-meta-row">
+            <span>Project {{ projectId }}</span>
+            <span>{{ requestedSceneId ? '当前场景模式' : '全项目模式' }}</span>
+            <span>{{ confirmedCount }} 条主版本</span>
+          </div>
         </div>
 
         <div class="top-actions">
@@ -1115,34 +1339,37 @@ onMounted(() => {
 
       <div v-if="errorMsg" class="message error">{{ errorMsg }}</div>
       <div v-if="infoMsg" class="message success">{{ infoMsg }}</div>
+      <div v-if="reworkContext" class="message rework">
+        正在处理返工音频 #{{ reworkContext.candidateId }}。生成新声音成功后，会把该项标记为已完成。
+      </div>
       <div v-if="!scenes.length" class="message warn">
         当前项目还没有场景，音频二期无法按来源生成。请先完成场景拆解。
       </div>
 
-      <div class="summary-grid">
+      <div class="summary-grid" aria-label="音频工作台状态概览">
         <section class="summary-card highlight">
-          <span class="summary-label">当前项目</span>
+          <span class="summary-label">项目</span>
           <strong class="summary-value">{{ project?.name || `项目 #${projectId}` }}</strong>
           <p class="summary-help">项目状态：{{ project?.status || '未知' }}</p>
         </section>
         <section class="summary-card">
-          <span class="summary-label">来源上下文</span>
+          <span class="summary-label">来源</span>
           <strong class="summary-value">{{ requestedSceneId ? '当前场景模式' : '全项目模式' }}</strong>
           <p class="summary-help">
             {{ requestedSceneId ? sceneLabel(requestedSceneId) : '可查看全部场景与项目级轨道。' }}
           </p>
         </section>
         <section class="summary-card">
-          <span class="summary-label">候选统计</span>
+          <span class="summary-label">候选</span>
           <strong class="summary-value">{{ totalCount }}</strong>
           <p class="summary-help">
             已确认 {{ confirmedCount }} · 候选 {{ candidateCount }} · 已归档 {{ archivedCount }}
           </p>
         </section>
         <section class="summary-card">
-          <span class="summary-label">场景 / 角色</span>
+          <span class="summary-label">素材</span>
           <strong class="summary-value">{{ scenes.length }} / {{ characters.length }}</strong>
-          <p class="summary-help">已锁定角色音色 {{ lockedVoiceCount }} / {{ characters.length }}</p>
+            <p class="summary-help">项目对白音色 {{ lockedVoiceCount }} / {{ voiceBindingSummary.total }} 已绑定</p>
         </section>
       </div>
 
@@ -1150,7 +1377,7 @@ onMounted(() => {
         <div class="panel-head">
           <div>
             <h2>角色音色管理</h2>
-            <p class="panel-sub">{{ lockedVoiceCount }} 个角色已锁定，{{ Math.max(0, voiceCast.length - lockedVoiceCount) }} 个待确认</p>
+            <p class="panel-sub">项目对白角色 {{ lockedVoiceCount }} / {{ voiceBindingSummary.total }} 已完成绑定</p>
           </div>
           <button class="ghost-btn compact" type="button" @click="goCharacters">角色库</button>
         </div>
@@ -1165,11 +1392,11 @@ onMounted(() => {
               <span>{{ genderLabel(item.character.gender || item.traits.gender) }}</span>
             </div>
             <div class="voice-cast-profile">
-              <strong>{{ item.selectedProfile?.displayName || item.recommendations[0]?.displayName || '暂无推荐' }}</strong>
-              <span>{{ item.selectedProfile ? `${item.selectedProfile.voiceId} · ${item.selectedProfile.modelName}` : '需要试听确认' }}</span>
+              <strong>{{ item.selectedProfile?.displayName || (item.character.referenceAudioUrl ? '自定义参考音频' : item.recommendations[0]?.displayName || '暂无推荐') }}</strong>
+              <span>{{ item.selectedProfile ? `${item.selectedProfile.voiceId} · ${item.selectedProfile.modelName}` : item.character.referenceAudioUrl ? '参考音频已锁定' : '需要试听确认' }}</span>
             </div>
-            <span class="voice-cast-status" :class="item.ready ? 'ready' : 'pending'">
-              {{ item.ready ? '已锁定' : '待确认' }}
+            <span class="voice-cast-status" :class="item.ready ? 'ready' : !voiceBindingSummary.speakerNames.includes(item.character.name) ? 'inactive' : 'pending'">
+              {{ item.ready ? '已锁定' : !voiceBindingSummary.speakerNames.includes(item.character.name) ? '项目未出声' : '待确认' }}
             </span>
             <button
               class="icon-btn"
@@ -1196,51 +1423,178 @@ onMounted(() => {
             </div>
 
             <div class="field-grid">
-              <label class="field">
+              <div class="field control-field">
                 <span>轨道类型</span>
-                <select v-model="formTrackType">
-                  <option
-                    v-for="track in TRACK_OPTIONS"
-                    :key="track.key"
-                    :value="track.key"
-                    :disabled="track.key === 'music' || track.key === 'sfx'"
+                <div
+                  class="picker-shell"
+                  :class="{ open: isPickerOpen('track') }"
+                  @focusout="onPickerBlur($event, 'track')"
+                >
+                  <button
+                    class="picker-trigger"
+                    type="button"
+                    :aria-expanded="isPickerOpen('track')"
+                    aria-haspopup="listbox"
+                    @click="togglePicker('track')"
                   >
-                    {{ track.label }}
-                  </option>
-                </select>
-              </label>
+                    <span class="picker-value">
+                      <span class="material-symbols-outlined">{{ selectedTrackPickerOption?.icon || 'graphic_eq' }}</span>
+                      <strong>{{ selectedTrackPickerOption?.label || '请选择轨道' }}</strong>
+                    </span>
+                    <span class="material-symbols-outlined picker-chevron">expand_more</span>
+                  </button>
+                  <Transition name="picker-menu">
+                    <div v-if="isPickerOpen('track')" class="picker-menu" role="listbox">
+                      <button
+                        v-for="option in trackPickerOptions"
+                        :key="option.value"
+                        class="picker-option"
+                        :class="{ selected: option.value === formTrackType, disabled: option.disabled }"
+                        type="button"
+                        role="option"
+                        :aria-selected="option.value === formTrackType"
+                        :disabled="option.disabled"
+                        @click="onPick('track', option)"
+                      >
+                        <span class="material-symbols-outlined">{{ option.icon }}</span>
+                        <span>
+                          <strong>{{ option.label }}</strong>
+                          <small>{{ option.meta }}</small>
+                        </span>
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
 
-              <label class="field">
+              <div class="field control-field">
                 <span>场景来源</span>
-                <select v-model="formSceneId">
-                  <option :value="0">项目级 / 不绑定场景</option>
-                  <option v-for="scene in sceneOptions" :key="scene.id" :value="scene.id">
-                    {{ `Scene ${String(scene.sceneNo).padStart(2, '0')} · ${scene.title || '未命名场景'}` }}
-                  </option>
-                </select>
-              </label>
+                <div
+                  class="picker-shell"
+                  :class="{ open: isPickerOpen('scene') }"
+                  @focusout="onPickerBlur($event, 'scene')"
+                >
+                  <button
+                    class="picker-trigger"
+                    type="button"
+                    :aria-expanded="isPickerOpen('scene')"
+                    aria-haspopup="listbox"
+                    @click="togglePicker('scene')"
+                  >
+                    <span class="picker-value">
+                      <strong>{{ selectedScenePickerOption?.label || '请选择场景来源' }}</strong>
+                      <small>{{ selectedScenePickerOption?.meta }}</small>
+                    </span>
+                    <span class="material-symbols-outlined picker-chevron">expand_more</span>
+                  </button>
+                  <Transition name="picker-menu">
+                    <div v-if="isPickerOpen('scene')" class="picker-menu" role="listbox">
+                      <button
+                        v-for="option in scenePickerOptions"
+                        :key="option.value"
+                        class="picker-option"
+                        :class="{ selected: option.value === formSceneId }"
+                        type="button"
+                        role="option"
+                        :aria-selected="option.value === formSceneId"
+                        @click="onPick('scene', option)"
+                      >
+                        <span>
+                          <strong>{{ option.label }}</strong>
+                          <small>{{ option.meta }}</small>
+                        </span>
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
 
-              <label class="field">
+              <div class="field control-field">
                 <span>分镜定位</span>
-                <select v-model="formStoryboardId" :disabled="!storyboardEnabled || !formSceneId">
-                  <option :value="0">
-                    {{ storyboardEnabled ? '不绑定具体分镜（按场景排布）' : '当前轨道不绑定分镜' }}
-                  </option>
-                  <option v-for="storyboard in storyboardOptions" :key="storyboard.id" :value="storyboard.id">
-                    {{ `${storyboard.shotNo} · ${storyboard.shotType || '镜头'} · ${storyboard.durationSeconds || 4}s` }}
-                  </option>
-                </select>
-              </label>
+                <div
+                  class="picker-shell"
+                  :class="{ open: isPickerOpen('storyboard'), disabled: !storyboardEnabled || !formSceneId }"
+                  @focusout="onPickerBlur($event, 'storyboard')"
+                >
+                  <button
+                    class="picker-trigger"
+                    type="button"
+                    :aria-expanded="isPickerOpen('storyboard')"
+                    aria-haspopup="listbox"
+                    :disabled="!storyboardEnabled || !formSceneId"
+                    @click="togglePicker('storyboard', !storyboardEnabled || !formSceneId)"
+                  >
+                    <span class="picker-value">
+                      <strong>{{ selectedStoryboardPickerOption?.label || '请选择分镜' }}</strong>
+                      <small>{{ selectedStoryboardPickerOption?.meta }}</small>
+                    </span>
+                    <span class="material-symbols-outlined picker-chevron">expand_more</span>
+                  </button>
+                  <Transition name="picker-menu">
+                    <div v-if="isPickerOpen('storyboard')" class="picker-menu" role="listbox">
+                      <button
+                        v-for="option in storyboardPickerOptions"
+                        :key="option.value"
+                        class="picker-option"
+                        :class="{ selected: option.value === formStoryboardId }"
+                        type="button"
+                        role="option"
+                        :aria-selected="option.value === formStoryboardId"
+                        @click="onPick('storyboard', option)"
+                      >
+                        <span>
+                          <strong>{{ option.label }}</strong>
+                          <small>{{ option.meta }}</small>
+                        </span>
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
 
-              <label class="field">
+              <div class="field control-field">
                 <span>角色来源</span>
-                <select v-model="formCharacterId" :disabled="!characterEnabled">
-                  <option :value="0">{{ characterEnabled ? '请选择角色' : '当前轨道不绑定角色' }}</option>
-                  <option v-for="character in characterOptions" :key="character.id" :value="character.id">
-                    {{ `${character.name} · ${voiceCastMap.get(character.id)?.ready ? '已锁定音色' : '待配置音色'}` }}
-                  </option>
-                </select>
-              </label>
+                <div
+                  class="picker-shell"
+                  :class="{ open: isPickerOpen('character'), disabled: !characterEnabled }"
+                  @focusout="onPickerBlur($event, 'character')"
+                >
+                  <button
+                    class="picker-trigger"
+                    type="button"
+                    :aria-expanded="isPickerOpen('character')"
+                    aria-haspopup="listbox"
+                    :disabled="!characterEnabled"
+                    @click="togglePicker('character', !characterEnabled)"
+                  >
+                    <span class="picker-value">
+                      <strong>{{ selectedCharacterPickerOption?.label || '请选择角色' }}</strong>
+                      <small>{{ selectedCharacterPickerOption?.meta }}</small>
+                    </span>
+                    <span class="material-symbols-outlined picker-chevron">expand_more</span>
+                  </button>
+                  <Transition name="picker-menu">
+                    <div v-if="isPickerOpen('character')" class="picker-menu" role="listbox">
+                      <button
+                        v-for="option in characterPickerOptions"
+                        :key="option.value"
+                        class="picker-option"
+                        :class="{ selected: option.value === formCharacterId, disabled: option.disabled }"
+                        type="button"
+                        role="option"
+                        :aria-selected="option.value === formCharacterId"
+                        :disabled="option.disabled"
+                        @click="onPick('character', option)"
+                      >
+                        <span>
+                          <strong>{{ option.label }}</strong>
+                          <small>{{ option.meta }}</small>
+                        </span>
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
 
               <label class="field field-wide">
                 <span>自定义标题</span>
@@ -1269,7 +1623,7 @@ onMounted(() => {
                 <small v-if="autoTextNotice" class="field-hint">{{ autoTextNotice }}</small>
               </label>
 
-              <label class="field">
+              <div class="field control-field">
                 <span>{{ formTrackType === 'dialogue' ? '角色主音色' : '旁白音色' }}</span>
                 <input
                   v-if="formTrackType === 'dialogue'"
@@ -1277,12 +1631,47 @@ onMounted(() => {
                   type="text"
                   disabled
                 />
-                <select v-else v-model="formVoiceProfileKey" :disabled="!voiceEnabled">
-                  <option v-for="profile in voiceProfiles" :key="profile.profileKey" :value="profile.profileKey">
-                    {{ `${profile.displayName} · ${profile.voiceId}` }}
-                  </option>
-                </select>
-              </label>
+                <div
+                  v-else
+                  class="picker-shell"
+                  :class="{ open: isPickerOpen('voice'), disabled: !voiceEnabled }"
+                  @focusout="onPickerBlur($event, 'voice')"
+                >
+                  <button
+                    class="picker-trigger"
+                    type="button"
+                    :aria-expanded="isPickerOpen('voice')"
+                    aria-haspopup="listbox"
+                    :disabled="!voiceEnabled"
+                    @click="togglePicker('voice', !voiceEnabled)"
+                  >
+                    <span class="picker-value">
+                      <strong>{{ selectedVoicePickerOption?.label || '请选择旁白音色' }}</strong>
+                      <small>{{ selectedVoicePickerOption?.meta }}</small>
+                    </span>
+                    <span class="material-symbols-outlined picker-chevron">expand_more</span>
+                  </button>
+                  <Transition name="picker-menu">
+                    <div v-if="isPickerOpen('voice')" class="picker-menu" role="listbox">
+                      <button
+                        v-for="option in voicePickerOptions"
+                        :key="option.value"
+                        class="picker-option"
+                        :class="{ selected: option.value === formVoiceProfileKey }"
+                        type="button"
+                        role="option"
+                        :aria-selected="option.value === formVoiceProfileKey"
+                        @click="onPick('voice', option)"
+                      >
+                        <span>
+                          <strong>{{ option.label }}</strong>
+                          <small>{{ option.meta }}</small>
+                        </span>
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
 
               <label class="field">
                 <span>模型标识</span>
@@ -1317,7 +1706,7 @@ onMounted(() => {
             </div>
           </section>
 
-          <section class="panel">
+          <section class="panel candidates-panel">
             <div class="panel-head">
               <div>
                 <h2>筛选与分组</h2>
@@ -1333,34 +1722,134 @@ onMounted(() => {
                 <input v-model="keyword" type="text" placeholder="标题 / 场景 / 角色 / 音色 / 模型" />
               </label>
 
-              <label class="field">
+              <div class="field control-field">
                 <span>轨道筛选</span>
-                <select v-model="filterTrackType">
-                  <option value="all">全部轨道</option>
-                  <option v-for="track in TRACK_OPTIONS" :key="track.key" :value="track.key">
-                    {{ track.label }}
-                  </option>
-                </select>
-              </label>
+                <div
+                  class="picker-shell"
+                  :class="{ open: isPickerOpen('filterTrack') }"
+                  @focusout="onPickerBlur($event, 'filterTrack')"
+                >
+                  <button
+                    class="picker-trigger"
+                    type="button"
+                    :aria-expanded="isPickerOpen('filterTrack')"
+                    aria-haspopup="listbox"
+                    @click="togglePicker('filterTrack')"
+                  >
+                    <span class="picker-value">
+                      <span class="material-symbols-outlined">
+                        {{ selectedFilterTrackPickerOption?.icon || 'tune' }}
+                      </span>
+                      <strong>{{ selectedFilterTrackPickerOption?.label || '全部轨道' }}</strong>
+                    </span>
+                    <span class="material-symbols-outlined picker-chevron">expand_more</span>
+                  </button>
+                  <Transition name="picker-menu">
+                    <div v-if="isPickerOpen('filterTrack')" class="picker-menu" role="listbox">
+                      <button
+                        v-for="option in filterTrackPickerOptions"
+                        :key="option.value"
+                        class="picker-option"
+                        :class="{ selected: option.value === filterTrackType }"
+                        type="button"
+                        role="option"
+                        :aria-selected="option.value === filterTrackType"
+                        @click="onPick('filterTrack', option)"
+                      >
+                        <span class="material-symbols-outlined">{{ option.icon || 'select_all' }}</span>
+                        <span>
+                          <strong>{{ option.label }}</strong>
+                          <small>{{ option.meta }}</small>
+                        </span>
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
 
-              <label class="field">
+              <div class="field control-field">
                 <span>场景筛选</span>
-                <select v-model="filterSceneId">
-                  <option :value="0">全部场景 / 项目级</option>
-                  <option v-for="scene in sceneOptions" :key="scene.id" :value="scene.id">
-                    {{ `Scene ${String(scene.sceneNo).padStart(2, '0')} · ${scene.title || '未命名场景'}` }}
-                  </option>
-                </select>
-              </label>
+                <div
+                  class="picker-shell"
+                  :class="{ open: isPickerOpen('filterScene') }"
+                  @focusout="onPickerBlur($event, 'filterScene')"
+                >
+                  <button
+                    class="picker-trigger"
+                    type="button"
+                    :aria-expanded="isPickerOpen('filterScene')"
+                    aria-haspopup="listbox"
+                    @click="togglePicker('filterScene')"
+                  >
+                    <span class="picker-value">
+                      <strong>{{ selectedFilterScenePickerOption?.label || '全部场景 / 项目级' }}</strong>
+                      <small>{{ selectedFilterScenePickerOption?.meta }}</small>
+                    </span>
+                    <span class="material-symbols-outlined picker-chevron">expand_more</span>
+                  </button>
+                  <Transition name="picker-menu">
+                    <div v-if="isPickerOpen('filterScene')" class="picker-menu" role="listbox">
+                      <button
+                        v-for="option in filterScenePickerOptions"
+                        :key="option.value"
+                        class="picker-option"
+                        :class="{ selected: String(option.value) === String(filterSceneId) }"
+                        type="button"
+                        role="option"
+                        :aria-selected="String(option.value) === String(filterSceneId)"
+                        @click="onPick('filterScene', option)"
+                      >
+                        <span>
+                          <strong>{{ option.label }}</strong>
+                          <small>{{ option.meta }}</small>
+                        </span>
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
 
-              <label class="field">
+              <div class="field control-field">
                 <span>状态筛选</span>
-                <select v-model="filterStatus">
-                  <option v-for="status in STATUS_OPTIONS" :key="status.value" :value="status.value">
-                    {{ status.label }}
-                  </option>
-                </select>
-              </label>
+                <div
+                  class="picker-shell"
+                  :class="{ open: isPickerOpen('filterStatus') }"
+                  @focusout="onPickerBlur($event, 'filterStatus')"
+                >
+                  <button
+                    class="picker-trigger"
+                    type="button"
+                    :aria-expanded="isPickerOpen('filterStatus')"
+                    aria-haspopup="listbox"
+                    @click="togglePicker('filterStatus')"
+                  >
+                    <span class="picker-value">
+                      <strong>{{ selectedFilterStatusPickerOption?.label || '全部状态' }}</strong>
+                      <small>{{ selectedFilterStatusPickerOption?.meta }}</small>
+                    </span>
+                    <span class="material-symbols-outlined picker-chevron">expand_more</span>
+                  </button>
+                  <Transition name="picker-menu">
+                    <div v-if="isPickerOpen('filterStatus')" class="picker-menu" role="listbox">
+                      <button
+                        v-for="option in filterStatusPickerOptions"
+                        :key="option.value"
+                        class="picker-option"
+                        :class="{ selected: option.value === filterStatus }"
+                        type="button"
+                        role="option"
+                        :aria-selected="option.value === filterStatus"
+                        @click="onPick('filterStatus', option)"
+                      >
+                        <span>
+                          <strong>{{ option.label }}</strong>
+                          <small>{{ option.meta }}</small>
+                        </span>
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -1506,12 +1995,12 @@ onMounted(() => {
             </div>
 
             <div v-else class="inspector-body">
-              <div class="chip-row">
-                <span class="status-chip" :class="selectedAudio.status">{{ statusLabel(selectedAudio.status) }}</span>
-                <span class="status-chip neutral">{{ trackLabel(selectedAudio.trackType) }}</span>
-              </div>
-
-              <div>
+              <div class="inspector-hero">
+                <div class="inspector-status-line">
+                  <span class="status-chip" :class="selectedAudio.status">{{ statusLabel(selectedAudio.status) }}</span>
+                  <span class="status-chip neutral">{{ trackLabel(selectedAudio.trackType) }}</span>
+                  <span class="status-chip neutral">V{{ selectedAudio.versionNo }}</span>
+                </div>
                 <h3 class="inspector-title">{{ selectedAudio.title }}</h3>
                 <p class="inspector-sub">
                   {{ sceneLabel(selectedAudio.sceneId, selectedAudio.sceneNo, selectedAudio.sceneTitle) }}
@@ -1520,25 +2009,76 @@ onMounted(() => {
                     · {{ characterLabel(selectedAudio.characterId, selectedAudio.characterName) }}
                   </span>
                 </p>
+                <div class="inspector-quick-grid">
+                  <div>
+                    <span>时长</span>
+                    <strong>{{ formatDuration(selectedAudio.durationSeconds) }}</strong>
+                  </div>
+                  <div>
+                    <span>音色</span>
+                    <strong :title="selectedAudio.voiceName || '未设置'">{{ selectedAudio.voiceName || '—' }}</strong>
+                  </div>
+                  <div>
+                    <span>模型</span>
+                    <strong :title="selectedAudio.modelName || '未设置'">{{ selectedAudio.modelName || '—' }}</strong>
+                  </div>
+                </div>
               </div>
 
-              <audio class="audio-player" controls preload="none" :src="selectedAudio.audioUrl"></audio>
+              <div class="inspector-player">
+                <div class="inspector-section-head">
+                  <span class="inspector-section-label">试听预览</span>
+                  <span>{{ selectedAudio.audioUrl ? '可播放' : '缺少音频地址' }}</span>
+                </div>
+                <audio class="audio-player" controls preload="none" :src="selectedAudio.audioUrl"></audio>
+              </div>
 
               <div class="placement-panel">
-                <div class="placement-title">时间线定位</div>
-                <label class="field">
+                <div class="placement-head">
+                  <div class="placement-title">时间线定位</div>
+                  <p>确认主版本前，先把音频落到正确分镜和起始秒。</p>
+                </div>
+                <div class="field control-field">
                   <span>绑定分镜</span>
-                  <select v-model="placementStoryboardId">
-                    <option :value="0">不绑定具体分镜（按场景排布）</option>
-                    <option
-                      v-for="storyboard in storyboards.filter((item) => !selectedAudio?.sceneId || item.sceneId === selectedAudio.sceneId)"
-                      :key="storyboard.id"
-                      :value="storyboard.id"
+                  <div
+                    class="picker-shell placement-picker"
+                    :class="{ open: isPickerOpen('placementStoryboard') }"
+                    @focusout="onPickerBlur($event, 'placementStoryboard')"
+                  >
+                    <button
+                      class="picker-trigger"
+                      type="button"
+                      :aria-expanded="isPickerOpen('placementStoryboard')"
+                      aria-haspopup="listbox"
+                      @click="togglePicker('placementStoryboard')"
                     >
-                      {{ `${storyboard.shotNo} · ${storyboard.shotType || '镜头'} · ${storyboard.durationSeconds || 4}s` }}
-                    </option>
-                  </select>
-                </label>
+                      <span class="picker-value">
+                        <strong>{{ selectedPlacementStoryboardPickerOption?.label || '不绑定具体分镜' }}</strong>
+                        <small>{{ selectedPlacementStoryboardPickerOption?.meta }}</small>
+                      </span>
+                      <span class="material-symbols-outlined picker-chevron">expand_more</span>
+                    </button>
+                    <Transition name="picker-menu">
+                      <div v-if="isPickerOpen('placementStoryboard')" class="picker-menu" role="listbox">
+                        <button
+                          v-for="option in placementStoryboardPickerOptions"
+                          :key="option.value"
+                          class="picker-option"
+                          :class="{ selected: String(option.value) === String(placementStoryboardId) }"
+                          type="button"
+                          role="option"
+                          :aria-selected="String(option.value) === String(placementStoryboardId)"
+                          @click="onPick('placementStoryboard', option)"
+                        >
+                          <span>
+                            <strong>{{ option.label }}</strong>
+                            <small>{{ option.meta }}</small>
+                          </span>
+                        </button>
+                      </div>
+                    </Transition>
+                  </div>
+                </div>
                 <label class="field">
                   <span>起始微调（秒）</span>
                   <input v-model.number="placementOffsetSeconds" min="0" max="60" step="0.1" type="number" />
@@ -1548,39 +2088,48 @@ onMounted(() => {
                 </button>
               </div>
 
-              <div class="candidate-bars inspector-bars">
-                <span
-                  v-for="(bar, index) in waveformBars(selectedAudio)"
-                  :key="`inspector-${selectedAudio.id}-${index}`"
-                  class="bar"
-                  :style="{ height: `${bar}px` }"
-                ></span>
+              <div class="inspector-waveform">
+                <div class="inspector-section-head">
+                  <span class="inspector-section-label">波形概览</span>
+                  <span>预览强弱变化</span>
+                </div>
+                <div class="candidate-bars inspector-bars">
+                  <span
+                    v-for="(bar, index) in waveformBars(selectedAudio)"
+                    :key="`inspector-${selectedAudio.id}-${index}`"
+                    class="bar"
+                    :style="{ height: `${bar}px` }"
+                  ></span>
+                </div>
               </div>
 
-              <div class="inspector-grid">
-                <div>
-                  <span class="inspector-label">版本</span>
-                  <strong>V{{ selectedAudio.versionNo }}</strong>
-                </div>
-                <div>
-                  <span class="inspector-label">时长</span>
-                  <strong>{{ formatDuration(selectedAudio.durationSeconds) }}</strong>
-                </div>
-                <div>
-                  <span class="inspector-label">音色</span>
-                  <strong>{{ selectedAudio.voiceName || '—' }}</strong>
-                </div>
-                <div>
-                  <span class="inspector-label">模型</span>
-                  <strong>{{ selectedAudio.modelName || '—' }}</strong>
-                </div>
-                <div>
-                  <span class="inspector-label">创建时间</span>
-                  <strong>{{ formatDateTime(selectedAudio.createdAt) }}</strong>
-                </div>
-                <div>
-                  <span class="inspector-label">确认时间</span>
-                  <strong>{{ formatDateTime(selectedAudio.confirmedAt) }}</strong>
+              <div class="inspector-meta">
+                <span class="inspector-section-label">音频信息</span>
+                <div class="inspector-grid">
+                  <div>
+                    <span class="inspector-label">版本</span>
+                    <strong>V{{ selectedAudio.versionNo }}</strong>
+                  </div>
+                  <div>
+                    <span class="inspector-label">时长</span>
+                    <strong>{{ formatDuration(selectedAudio.durationSeconds) }}</strong>
+                  </div>
+                  <div>
+                    <span class="inspector-label">音色</span>
+                    <strong :title="selectedAudio.voiceName || '未设置'">{{ selectedAudio.voiceName || '—' }}</strong>
+                  </div>
+                  <div>
+                    <span class="inspector-label">模型</span>
+                    <strong :title="selectedAudio.modelName || '未设置'">{{ selectedAudio.modelName || '—' }}</strong>
+                  </div>
+                  <div>
+                    <span class="inspector-label">创建时间</span>
+                    <strong>{{ formatDateTime(selectedAudio.createdAt) }}</strong>
+                  </div>
+                  <div>
+                    <span class="inspector-label">确认时间</span>
+                    <strong>{{ formatDateTime(selectedAudio.confirmedAt) }}</strong>
+                  </div>
                 </div>
               </div>
 
@@ -1634,13 +2183,27 @@ onMounted(() => {
 
 <style scoped>
 .audio-page {
+  --audio-bg: #10120f;
+  --audio-panel: rgba(22, 24, 21, 0.94);
+  --audio-panel-strong: #191b17;
+  --audio-line: rgba(213, 184, 142, 0.18);
+  --audio-line-strong: rgba(245, 158, 11, 0.48);
+  --audio-text: #f4eee5;
+  --audio-muted: #b9a58d;
+  --audio-soft: #8f7c68;
+  --audio-accent: #f59e0b;
+  --audio-accent-2: #fb923c;
+  --audio-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  flex: 0 0 auto;
+  height: max-content;
   min-height: 100%;
   background:
-    radial-gradient(circle at top left, rgba(245, 158, 11, 0.16), transparent 30%),
-    radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.08), transparent 24%),
-    #111210;
-  color: #f3ede4;
-  padding: 32px;
+    radial-gradient(circle at 12% 8%, rgba(245, 158, 11, 0.14), transparent 28%),
+    radial-gradient(circle at 94% 0%, rgba(45, 212, 191, 0.06), transparent 22%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 280px),
+    var(--audio-bg);
+  color: var(--audio-text);
+  padding: 28px;
 }
 
 .page-top {
@@ -1651,25 +2214,38 @@ onMounted(() => {
   margin-bottom: 20px;
 }
 
-.eyebrow {
-  margin: 0 0 8px;
-  color: #c7b39a;
-  font-size: 12px;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-}
-
 .page-title {
   margin: 0;
-  font-size: 34px;
-  line-height: 1.1;
+  color: #fff6ea;
+  font-size: clamp(32px, 4vw, 48px);
+  font-weight: 750;
+  letter-spacing: 0;
+  line-height: 1.05;
+  text-wrap: balance;
 }
 
 .page-subtitle {
   margin: 10px 0 0;
-  max-width: 760px;
-  color: #cbb59b;
-  line-height: 1.7;
+  max-width: 70ch;
+  color: #d6c0a4;
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+.page-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.page-meta-row span {
+  border: 1px solid rgba(213, 184, 142, 0.2);
+  background: rgba(255, 255, 255, 0.035);
+  color: #d9c5aa;
+  padding: 6px 9px;
+  font-size: 12px;
+  line-height: 1;
 }
 
 .top-actions,
@@ -1683,20 +2259,21 @@ onMounted(() => {
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  gap: 10px;
   margin-bottom: 20px;
 }
 
 .summary-card,
 .panel,
 .state-card {
-  border: 1px solid rgba(203, 181, 155, 0.18);
-  background: rgba(23, 24, 21, 0.92);
-  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.24);
+  border: 1px solid var(--audio-line);
+  background: var(--audio-panel);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.22);
 }
 
 .summary-card {
-  padding: 18px;
+  min-width: 0;
+  padding: 14px 15px;
 }
 
 .summary-card.highlight {
@@ -1705,28 +2282,42 @@ onMounted(() => {
 
 .summary-label {
   display: block;
-  color: #c7b39a;
+  color: var(--audio-soft);
   font-size: 12px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-weight: 650;
 }
 
 .summary-value {
   display: block;
-  margin-top: 10px;
-  font-size: 24px;
+  overflow: hidden;
+  margin-top: 8px;
+  color: #fff4e8;
+  font-size: 21px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .summary-help {
-  margin: 10px 0 0;
-  color: #a9937a;
-  line-height: 1.6;
+  overflow: hidden;
+  margin: 7px 0 0;
+  color: var(--audio-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .main-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
   gap: 20px;
+  align-items: start;
+}
+
+.inspector-shell {
+  align-self: start;
+  min-height: 0;
 }
 
 .workspace-shell,
@@ -1737,6 +2328,24 @@ onMounted(() => {
 
 .panel {
   padding: 20px;
+}
+
+.controls-panel {
+  position: relative;
+  overflow: visible;
+  border-color: rgba(245, 158, 11, 0.24);
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.08), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.026), transparent 180px),
+    rgba(18, 20, 17, 0.96);
+}
+
+.controls-panel::before {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.025);
+  content: '';
 }
 
 .panel-head {
@@ -1754,7 +2363,7 @@ onMounted(() => {
 
 .panel-sub {
   margin: 6px 0 0;
-  color: #af9981;
+  color: var(--audio-muted);
   line-height: 1.6;
 }
 
@@ -1763,7 +2372,7 @@ onMounted(() => {
 }
 
 .voice-cast-list {
-  border: 1px solid rgba(203, 181, 155, 0.16);
+  border: 1px solid var(--audio-line);
 }
 
 .voice-cast-row {
@@ -1773,7 +2382,14 @@ onMounted(() => {
   align-items: center;
   min-height: 68px;
   padding: 12px 14px;
-  background: rgba(15, 16, 14, 0.68);
+  background: rgba(13, 15, 13, 0.62);
+  transition:
+    background 180ms var(--audio-ease),
+    border-color 180ms var(--audio-ease);
+}
+
+.voice-cast-row:hover {
+  background: rgba(245, 158, 11, 0.055);
 }
 
 .voice-cast-row + .voice-cast-row {
@@ -1798,7 +2414,7 @@ onMounted(() => {
 .voice-cast-character span,
 .voice-cast-profile span {
   overflow: hidden;
-  color: #a9937a;
+  color: var(--audio-muted);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1831,6 +2447,12 @@ onMounted(() => {
   color: #fde68a;
 }
 
+.voice-cast-status.inactive {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(148, 163, 184, 0.08);
+  color: #cbd5e1;
+}
+
 .icon-btn {
   display: inline-flex;
   width: 36px;
@@ -1839,11 +2461,16 @@ onMounted(() => {
   justify-content: center;
   border: 1px solid rgba(203, 181, 155, 0.22);
   color: #f6efe5;
+  transition:
+    border-color 180ms var(--audio-ease),
+    color 180ms var(--audio-ease),
+    transform 180ms var(--audio-ease);
 }
 
 .icon-btn:hover {
   border-color: rgba(245, 158, 11, 0.6);
   color: #ffcb8e;
+  transform: translateX(2px);
 }
 
 .panel-tag,
@@ -1872,6 +2499,10 @@ onMounted(() => {
   gap: 8px;
   color: #dbc7b0;
   font-size: 13px;
+}
+
+.control-field {
+  min-width: 0;
 }
 
 .field-wide {
@@ -1907,6 +2538,21 @@ onMounted(() => {
   color: #f6efe5;
   padding: 11px 12px;
   outline: none;
+  transition:
+    border-color 180ms var(--audio-ease),
+    box-shadow 180ms var(--audio-ease),
+    background 180ms var(--audio-ease);
+}
+
+.field input {
+  min-height: 58px;
+}
+
+.field input:hover,
+.field select:hover,
+.field textarea:hover {
+  border-color: rgba(245, 158, 11, 0.36);
+  background: rgba(18, 20, 17, 0.95);
 }
 
 .field textarea {
@@ -1919,6 +2565,207 @@ onMounted(() => {
 .field select:disabled {
   opacity: 0.58;
   cursor: not-allowed;
+}
+
+.picker-shell {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.picker-shell.open {
+  z-index: 30;
+}
+
+.picker-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(213, 184, 142, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.008)),
+    rgba(9, 11, 9, 0.92);
+  color: #fff6ea;
+  padding: 11px 13px 11px 16px;
+  text-align: left;
+  transition:
+    border-color 180ms var(--audio-ease),
+    background 180ms var(--audio-ease),
+    box-shadow 180ms var(--audio-ease),
+    transform 180ms var(--audio-ease);
+}
+
+.picker-trigger:hover:not(:disabled),
+.picker-shell.open .picker-trigger {
+  border-color: rgba(255, 183, 125, 0.72);
+  background:
+    linear-gradient(180deg, rgba(255, 183, 125, 0.08), rgba(255, 255, 255, 0.012)),
+    rgba(12, 13, 11, 0.98);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.22),
+    0 0 0 1px rgba(245, 158, 11, 0.09) inset;
+}
+
+.picker-trigger:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.picker-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.54;
+}
+
+.picker-value {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.picker-value:has(.material-symbols-outlined) {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.picker-value .material-symbols-outlined {
+  color: #ffb77d;
+  font-size: 18px;
+}
+
+.picker-value strong {
+  overflow: hidden;
+  color: #fff8ee;
+  font-size: 15px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-value small {
+  overflow: hidden;
+  color: var(--audio-muted);
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-chevron {
+  flex: 0 0 auto;
+  color: #eac59c;
+  font-size: 21px;
+  transition: transform 220ms var(--audio-ease);
+}
+
+.picker-shell.open .picker-chevron {
+  transform: rotate(180deg);
+}
+
+.picker-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  overflow: hidden auto;
+  max-height: 280px;
+  border: 1px solid rgba(255, 183, 125, 0.42);
+  background:
+    linear-gradient(180deg, rgba(33, 35, 30, 0.98), rgba(18, 20, 17, 0.98)),
+    #171814;
+  box-shadow:
+    0 24px 54px rgba(0, 0, 0, 0.48),
+    0 0 0 1px rgba(255, 255, 255, 0.035) inset;
+  padding: 6px;
+  scrollbar-gutter: stable;
+}
+
+.picker-option {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  color: #f7efe4;
+  padding: 10px 11px;
+  text-align: left;
+  transition:
+    background 160ms var(--audio-ease),
+    color 160ms var(--audio-ease),
+    transform 160ms var(--audio-ease);
+}
+
+.picker-option + .picker-option {
+  border-top: 1px solid rgba(213, 184, 142, 0.1);
+}
+
+.picker-option:hover:not(:disabled),
+.picker-option:focus-visible {
+  background: rgba(245, 158, 11, 0.1);
+  color: #fff8ee;
+  transform: translateX(2px);
+}
+
+.picker-option.selected {
+  background: rgba(245, 158, 11, 0.16);
+  color: #ffd39e;
+}
+
+.picker-option.disabled,
+.picker-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+.picker-option .material-symbols-outlined {
+  margin-top: 1px;
+  color: #ffb77d;
+  font-size: 18px;
+}
+
+.picker-option span:not(.material-symbols-outlined) {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.picker-option strong,
+.picker-option small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.picker-option strong {
+  font-size: 14px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.picker-option small {
+  color: #baa68e;
+  font-size: 11px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.picker-menu-enter-active,
+.picker-menu-leave-active {
+  transform-origin: top;
+  transition:
+    opacity 180ms var(--audio-ease),
+    transform 180ms var(--audio-ease),
+    filter 180ms var(--audio-ease);
+}
+
+.picker-menu-enter-from,
+.picker-menu-leave-to {
+  opacity: 0;
+  filter: blur(6px);
+  transform: translateY(-6px) scaleY(0.96);
 }
 
 .controls-footer {
@@ -1951,8 +2798,8 @@ onMounted(() => {
 }
 
 .audio-group {
-  border: 1px solid rgba(203, 181, 155, 0.16);
-  background: rgba(15, 16, 14, 0.78);
+  border: 1px solid var(--audio-line);
+  background: rgba(12, 14, 12, 0.72);
   padding: 16px;
 }
 
@@ -1981,7 +2828,7 @@ onMounted(() => {
 
 .candidate-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
   gap: 14px;
   margin-top: 16px;
 }
@@ -1990,11 +2837,24 @@ onMounted(() => {
   border: 1px solid rgba(203, 181, 155, 0.16);
   background: rgba(23, 24, 21, 0.92);
   padding: 16px;
+  transition:
+    border-color 180ms var(--audio-ease),
+    background 180ms var(--audio-ease),
+    transform 180ms var(--audio-ease),
+    box-shadow 180ms var(--audio-ease);
+}
+
+.audio-card:hover {
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(26, 28, 24, 0.96);
+  transform: translateY(-1px);
 }
 
 .audio-card.active {
-  border-color: rgba(245, 158, 11, 0.55);
-  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.62);
+  box-shadow:
+    0 0 0 1px rgba(245, 158, 11, 0.18),
+    0 18px 34px rgba(0, 0, 0, 0.24);
 }
 
 .audio-card.confirmed {
@@ -2009,8 +2869,7 @@ onMounted(() => {
   display: block;
   color: #c7b39a;
   font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-weight: 650;
 }
 
 .status-chip {
@@ -2054,7 +2913,7 @@ onMounted(() => {
 }
 
 .bar {
-  width: 5px;
+  flex: 0 0 5px;
   border-radius: 999px;
   background: linear-gradient(180deg, #ffcf96 0%, #ff9d45 100%);
 }
@@ -2075,15 +2934,46 @@ onMounted(() => {
 
 .sticky-panel {
   position: sticky;
-  top: 24px;
+  top: 16px;
+  max-height: calc(100dvh - 96px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.sticky-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sticky-panel::-webkit-scrollbar-thumb {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(112, 93, 75, 0.78);
+  background-clip: padding-box;
 }
 
 .placement-panel {
   display: grid;
   gap: 10px;
   border: 1px solid rgba(245, 158, 11, 0.22);
-  background: rgba(245, 158, 11, 0.06);
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(255, 255, 255, 0.018)),
+    rgba(17, 18, 15, 0.82);
   padding: 14px;
+}
+
+.placement-picker .picker-trigger {
+  min-height: 46px;
+  padding: 9px 10px 9px 12px;
+}
+
+.placement-picker .picker-menu {
+  max-height: 240px;
+}
+
+.placement-head {
+  display: grid;
+  gap: 4px;
 }
 
 .placement-title {
@@ -2092,20 +2982,102 @@ onMounted(() => {
   font-weight: 700;
 }
 
+.placement-head p {
+  margin: 0;
+  color: var(--audio-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .inspector-body {
   display: grid;
   gap: 16px;
 }
 
+.inspector-section-label {
+  display: block;
+  color: #a9937a;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.inspector-hero,
+.inspector-player,
+.inspector-waveform,
+.inspector-meta {
+  min-width: 0;
+}
+
+.inspector-hero {
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  background:
+    radial-gradient(circle at top right, rgba(245, 158, 11, 0.16), transparent 44%),
+    rgba(17, 18, 15, 0.9);
+  padding: 14px;
+}
+
+.inspector-status-line,
+.inspector-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.inspector-status-line {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  margin-bottom: 10px;
+}
+
+.inspector-section-head span:last-child {
+  color: var(--audio-soft);
+  font-size: 12px;
+}
+
 .inspector-title {
   margin: 0;
   font-size: 22px;
+  line-height: 1.2;
+  text-wrap: balance;
 }
 
 .inspector-sub {
   margin: 8px 0 0;
   color: #af9981;
   line-height: 1.6;
+}
+
+.inspector-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.inspector-quick-grid > div {
+  min-width: 0;
+  border: 1px solid rgba(203, 181, 155, 0.14);
+  background: rgba(0, 0, 0, 0.16);
+  padding: 9px;
+}
+
+.inspector-quick-grid span {
+  display: block;
+  color: var(--audio-soft);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.inspector-quick-grid strong {
+  display: block;
+  overflow: hidden;
+  color: #fff4e8;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .inspector-grid {
@@ -2138,6 +3110,238 @@ onMounted(() => {
   margin: 0;
   color: #af9981;
   line-height: 1.7;
+}
+
+@media (min-width: 1280px) {
+  .audio-page {
+    --audio-inspector-width: clamp(360px, 31vw, 480px);
+    padding-right: calc(var(--audio-inspector-width) + 20px);
+  }
+
+  .inspector-shell {
+    position: fixed;
+    top: 80px;
+    right: 24px;
+    z-index: 2;
+    width: var(--audio-inspector-width);
+  }
+
+  .main-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sticky-panel {
+    display: flex;
+    flex-direction: column;
+    height: calc(100dvh - 96px);
+    max-height: none;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid rgba(234, 198, 140, 0.24);
+    border-radius: 8px;
+    background: #171814;
+    box-shadow:
+      -20px 24px 60px rgba(0, 0, 0, 0.28),
+      0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+  }
+
+  .sticky-panel .panel-head {
+    flex: 0 0 auto;
+    min-height: 82px;
+    margin: 0;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid rgba(203, 181, 155, 0.14);
+    background: #171814;
+  }
+
+  .sticky-panel .panel-head h2 {
+    font-size: 18px;
+    letter-spacing: 0;
+  }
+
+  .sticky-panel .panel-sub {
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .inspector-body {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    gap: 0;
+    padding: 0 20px 18px;
+  }
+
+  .inspector-body::-webkit-scrollbar {
+    width: 5px;
+  }
+
+  .inspector-body::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: rgba(112, 93, 75, 0.72);
+  }
+
+  .inspector-section-label {
+    color: #9f927e;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+  }
+
+  .inspector-body .status-chip {
+    border-radius: 5px;
+  }
+
+  .inspector-hero {
+    margin-top: 16px;
+    padding: 13px;
+  }
+
+  .inspector-title {
+    font-size: 20px;
+    line-height: 1.2;
+  }
+
+  .inspector-sub {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .inspector-player {
+    padding: 14px 0;
+    border-bottom: 1px solid rgba(203, 181, 155, 0.12);
+  }
+
+  .sticky-panel .audio-player {
+    display: block;
+    margin-top: 8px;
+    height: 42px;
+  }
+
+  .placement-panel {
+    margin-top: 14px;
+    grid-template-columns: minmax(0, 1.25fr) minmax(92px, 0.7fr) auto;
+    align-items: end;
+    gap: 8px;
+    padding: 10px;
+    border-radius: 8px;
+    background: #211b10;
+  }
+
+  .placement-title {
+    color: #f2c579;
+    letter-spacing: 0.02em;
+  }
+
+  .placement-head {
+    grid-column: 1 / -1;
+  }
+
+  .placement-panel .field {
+    gap: 5px;
+    font-size: 12px;
+  }
+
+  .placement-panel .field input,
+  .placement-panel .field select {
+    min-height: 36px;
+    padding: 8px 9px;
+  }
+
+  .placement-panel .picker-trigger {
+    min-height: 36px;
+    padding: 8px 9px;
+  }
+
+  .placement-panel .picker-value strong {
+    font-size: 12px;
+  }
+
+  .placement-panel .picker-value small {
+    font-size: 10px;
+  }
+
+  .placement-panel .primary-btn {
+    align-self: end;
+    white-space: nowrap;
+  }
+
+  .inspector-waveform {
+    padding: 14px 0;
+    border-bottom: 1px solid rgba(203, 181, 155, 0.12);
+  }
+
+  .inspector-bars {
+    height: 44px;
+    margin: 8px 0 0;
+    padding: 0;
+  }
+
+  .inspector-meta {
+    padding: 14px 0 0;
+  }
+
+  .inspector-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px 10px;
+    margin-top: 8px;
+    padding: 10px 0;
+  }
+
+  .inspector-grid > div {
+    min-width: 0;
+  }
+
+  .inspector-label {
+    margin-bottom: 3px;
+    font-size: 11px;
+  }
+
+  .inspector-grid strong {
+    display: block;
+    overflow: hidden;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .inspector-note {
+    margin-top: 14px;
+    padding: 12px;
+    background: #11120f;
+  }
+
+  .inspector-note h4 {
+    margin-bottom: 4px;
+    font-size: 13px;
+  }
+
+  .inspector-note p {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .stack-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    position: sticky;
+    bottom: 0;
+    gap: 8px;
+    margin: 14px -20px -18px;
+    padding: 12px 20px 18px;
+    border-top: 1px solid rgba(203, 181, 155, 0.14);
+    background: #171814;
+  }
+
+  .stack-actions > :only-child {
+    grid-column: 1 / -1;
+  }
+
+  .stack-actions .primary-btn,
+  .stack-actions .ghost-btn {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
 }
 
 .inspector-empty,
@@ -2176,6 +3380,12 @@ onMounted(() => {
   color: #fed7aa;
 }
 
+.message.rework {
+  border-color: rgba(255, 183, 125, 0.42);
+  background: rgba(255, 183, 125, 0.1);
+  color: #ffd9b0;
+}
+
 .state-card {
   max-width: 520px;
   padding: 28px;
@@ -2197,15 +3407,46 @@ onMounted(() => {
   border: 1px solid rgba(245, 158, 11, 0.28);
   padding: 10px 16px;
   color: #f6efe5;
+  min-height: 38px;
+  transition:
+    border-color 180ms var(--audio-ease),
+    background 180ms var(--audio-ease),
+    color 180ms var(--audio-ease),
+    opacity 180ms var(--audio-ease),
+    transform 180ms var(--audio-ease);
 }
 
 .primary-btn {
   background: linear-gradient(135deg, #f59e0b, #ea580c);
   border-color: transparent;
+  color: #1f1304;
+  font-weight: 700;
 }
 
 .ghost-btn {
   background: rgba(255, 255, 255, 0.04);
+}
+
+.primary-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #ffb347, #f97316);
+  transform: translateY(-1px);
+}
+
+.ghost-btn:hover:not(:disabled) {
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.08);
+  color: #ffd3a3;
+}
+
+.primary-btn:active:not(:disabled),
+.ghost-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.primary-btn:disabled,
+.ghost-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
 }
 
 .primary-btn.compact,
@@ -2234,7 +3475,83 @@ onMounted(() => {
   color: #b59cff;
 }
 
-@media (max-width: 1240px) {
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .main-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+  }
+
+  .sticky-panel {
+    max-height: calc(100dvh - 104px);
+  }
+
+  .candidate-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-cast-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .voice-cast-character {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .voice-cast-status {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .voice-cast-traits {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .voice-cast-profile {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .voice-cast-row .icon-btn {
+    grid-column: 2;
+    grid-row: 3;
+  }
+
+  .placement-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .placement-panel .primary-btn {
+    width: 100%;
+  }
+
+  .inspector-quick-grid,
+  .inspector-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1023px) {
+  .inspector-shell {
+    position: static;
+    width: auto;
+  }
+
+  .sticky-panel {
+    max-height: none;
+    overflow: visible;
+  }
+
   .summary-grid,
   .main-grid,
   .filter-grid,

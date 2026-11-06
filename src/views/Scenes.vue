@@ -331,6 +331,7 @@ async function doGenerateScenes(): Promise<void> {
  * @returns {Promise<void>}
  */
 async function saveActiveScene(): Promise<void> {
+  // 先比较草稿和原始场景，避免用户只是点了保存却额外发起一次更新请求。
   const s = activeScene.value
   if (!s || saving.value) return
   if (!isDraftChanged()) {
@@ -363,6 +364,7 @@ async function saveActiveScene(): Promise<void> {
  * @returns {void}
  */
 function goToScriptEditor(): void {
+  // 把当前项目和场景 id 带到剧本页，剧本页据此加载对应的单场内容。
   const sid = activeSceneId.value
   if (!sid) return
   router.push({

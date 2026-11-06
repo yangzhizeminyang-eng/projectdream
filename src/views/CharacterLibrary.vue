@@ -12,6 +12,7 @@ import { useRoute, useRouter } from 'vue-router'
 import WorkspaceLayout from '@/components/WorkspaceLayout.vue'
 import {
   createCharacter,
+  deleteCharacter,
   generateProjectCharacters,
   listCharacters,
   type CharacterDTO,
@@ -71,6 +72,7 @@ const filters: { key: FilterKey; label: string }[] = [
  */
 const creating = ref(false)
 const aiGenerating = ref(false)
+const deletingCharacterId = ref(0)
 const infoMsg = ref('')
 
 /**
@@ -168,6 +170,26 @@ async function onGenerateCharacters(): Promise<void> {
   }
 }
 
+async function onDeleteCharacter(ch: CharacterDTO): Promise<void> {
+  if (!projectId.value || deletingCharacterId.value) return
+  const confirmed = window.confirm(
+    `确认删除角色“${ch.name}”吗？\n删除后会从角色库隐藏，但历史分镜和音频引用会保留。`,
+  )
+  if (!confirmed) return
+  deletingCharacterId.value = ch.id
+  errorMsg.value = ''
+  infoMsg.value = ''
+  try {
+    await deleteCharacter(ch.id)
+    await loadCharacters()
+    infoMsg.value = `角色“${ch.name}”已删除`
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '删除角色失败'
+  } finally {
+    deletingCharacterId.value = 0
+  }
+}
+
 /**
  * @description 点击角色卡片：进入详情页
  * @param {CharacterDTO} ch
@@ -225,11 +247,16 @@ onMounted(() => {
 </script>
 
 <template>
-  <WorkspaceLayout :show-side="true" :show-inspector="false" :no-padding="true">
+  <WorkspaceLayout
+    :show-side="true"
+    :show-inspector="false"
+    :no-padding="true"
+    :self-managed-scroll="true"
+  >
     <!-- 缺 projectId：整页友好提示，不静默失败 -->
     <section
       v-if="missingProjectId"
-      class="flex h-full items-center justify-center bg-surface-dim p-8"
+      class="flex h-full min-h-0 items-center justify-center bg-surface-dim p-8"
     >
       <div class="max-w-xl border border-outline-variant bg-surface-container p-10 text-center">
         <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center border border-primary/40 bg-primary/5">
@@ -250,287 +277,336 @@ onMounted(() => {
       </div>
     </section>
 
-    <template v-else>
-    <div class="flex h-full">
-      <div class="custom-scrollbar flex-1 overflow-y-auto bg-background">
-        <!-- 顶部信息区 -->
-        <div class="flex flex-col gap-6 border-b border-outline-variant px-margin-md py-8">
-          <div>
-            <nav class="mb-2 flex items-center gap-2 font-label-sm text-label-sm text-on-surface-variant">
-              <span>项目工作区</span>
-              <span class="material-symbols-outlined text-xs">chevron_right</span>
-              <span class="text-primary">角色库</span>
-            </nav>
-            <h2 class="flex items-start gap-2 whitespace-nowrap font-display-lg uppercase tracking-tight text-headline-lg text-on-surface">
-              角色库<span class="pt-1 text-2xl text-outline">/ {{ totalCount }}</span>
-            </h2>
-          </div>
-          <div class="grid w-full grid-cols-1 gap-3 sm:grid-cols-[minmax(220px,1fr)_auto_auto] sm:items-center">
-            <div class="group relative">
-              <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant">search</span>
-              <input
-                v-model="searchKeyword"
-                class="w-full border border-outline-variant bg-surface-container-low px-10 py-2 font-label-md text-label-md text-on-surface transition-all focus:border-primary focus:ring-0"
-                placeholder="搜索角色 / 角色标签..."
-                type="text"
-              />
-            </div>
-            <button
-              type="button"
-              class="flex items-center gap-2 border border-primary bg-primary/10 px-5 py-2 font-label-md text-label-md text-primary transition-all hover:bg-primary/20 disabled:opacity-50"
-              :disabled="aiGenerating || creating"
-              @click="onGenerateCharacters"
-            >
-              <span
-                class="material-symbols-outlined"
-                :class="{ 'animate-spin': aiGenerating }"
-              >{{ aiGenerating ? 'progress_activity' : 'auto_awesome' }}</span>
-              {{ aiGenerating ? '正在分析剧本' : 'AI 生成角色' }}
-            </button>
-            <button
-              type="button"
-              class="flex items-center gap-2 bg-primary-container px-6 py-2 font-label-md text-label-md text-on-primary-container transition-all hover:bg-primary-container/90 active:scale-95 disabled:opacity-50"
-              :disabled="creating || aiGenerating"
-              @click="onCreateCharacter"
-            >
-              <span class="material-symbols-outlined">person_add</span>
-              新建角色
-            </button>
-          </div>
-        </div>
-
-        <!-- 错误提示条 -->
-        <div
-          v-if="errorMsg"
-          class="mx-margin-md my-3 flex items-center justify-between border border-danger-red/40 bg-danger-red/5 px-4 py-3"
-          role="alert"
-        >
-          <div class="flex items-center gap-3 text-sm text-on-surface">
-            <span class="material-symbols-outlined text-danger-red">error</span>
-            <span>{{ errorMsg }}</span>
-          </div>
-          <button
-            type="button"
-            class="border border-outline-variant bg-surface-container-low px-3 py-1 text-xs text-on-surface-variant hover:border-primary hover:text-primary"
-            @click="retry"
-          >
-            重试
-          </button>
-        </div>
-
-        <!-- 成功提示条 -->
-        <div
-          v-if="infoMsg"
-          class="mx-margin-md my-3 flex items-center gap-3 border border-primary/40 bg-primary/5 px-4 py-3 text-sm text-on-surface"
-          role="status"
-        >
-          <span class="material-symbols-outlined text-primary">check_circle</span>
-          <span>{{ infoMsg }}</span>
-        </div>
-
-        <!-- 筛选条 -->
-        <div class="custom-scrollbar scroll-optimized flex items-center gap-6 overflow-x-auto overscroll-x-contain border-b border-outline-variant bg-surface-container-lowest px-margin-md py-4">
-          <div class="flex items-center gap-2 font-label-md text-primary">
-            <span class="material-symbols-outlined">filter_list</span>
-            <span>筛选</span>
-          </div>
-          <button
-            v-for="filter in filters"
-            :key="filter.key"
-            class="px-4 py-1 font-label-sm uppercase tracking-wider transition-all"
-            :class="
-              activeFilter === filter.key
-                ? 'border border-primary text-primary'
-                : 'border border-outline-variant text-on-surface-variant hover:border-on-surface hover:text-on-surface'
-            "
-            @click="activeFilter = filter.key"
-          >
-            {{ filter.label }}
-          </button>
-        </div>
-
-        <!-- 主体：loading / empty / ready 三态 -->
-        <div v-if="pageState === 'loading'" class="flex h-64 items-center justify-center text-on-surface-variant">
-          <div class="flex items-center gap-3">
-            <span class="material-symbols-outlined animate-spin">progress_activity</span>
-            <span>正在加载角色列表…</span>
-          </div>
-        </div>
-
-        <div
-          v-else-if="pageState === 'empty'"
-          class="flex flex-col items-center justify-center border border-dashed border-outline-variant bg-surface-container p-margin-md text-center"
-        >
-          <div class="mb-4 flex h-16 w-16 items-center justify-center border border-outline-variant">
-            <span class="material-symbols-outlined text-3xl text-on-surface-variant">person</span>
-          </div>
-          <p class="mb-2 font-label-md uppercase tracking-widest text-on-surface">该项目下还没有角色</p>
-          <p class="mb-6 max-w-md px-8 text-center text-sm text-on-surface-variant">
-            从项目总纲和剧本自动生成角色档案，或手工新建角色。
-          </p>
-          <div class="flex flex-wrap items-center justify-center gap-3">
-            <button
-              type="button"
-              class="flex items-center gap-2 border border-primary bg-primary px-4 py-2 text-xs font-bold uppercase tracking-widest text-on-secondary-fixed hover:brightness-110 disabled:opacity-50"
-              :disabled="aiGenerating"
-              @click="onGenerateCharacters"
-            >
-              <span class="material-symbols-outlined text-sm" :class="{ 'animate-spin': aiGenerating }">
-                {{ aiGenerating ? 'progress_activity' : 'auto_awesome' }}
-              </span>
-              AI 生成角色
-            </button>
-            <button
-              type="button"
-              class="flex items-center gap-2 border border-outline-variant px-4 py-2 text-xs uppercase tracking-widest text-on-surface-variant hover:border-primary hover:text-primary disabled:opacity-50"
-              :disabled="creating || aiGenerating"
-              @click="onCreateCharacter"
-            >
-              <span class="material-symbols-outlined text-sm">person_add</span>
-              手工新建
-            </button>
-          </div>
-        </div>
-
-        <div
-          v-else-if="pageState === 'ready' && !filteredCharacters.length"
-          class="flex flex-col items-center justify-center border border-dashed border-outline-variant bg-surface-container p-margin-md text-center"
-        >
-          <div class="mb-4 flex h-16 w-16 items-center justify-center border border-outline-variant">
-            <span class="material-symbols-outlined text-3xl text-on-surface-variant">filter_list_off</span>
-          </div>
-          <p class="font-label-md uppercase tracking-widest text-on-surface">没有匹配的角色</p>
-          <p class="mt-2 text-sm text-on-surface-variant">尝试调整搜索关键字或筛选条件</p>
-        </div>
-
-        <div v-else class="grid grid-cols-1 gap-margin-md p-margin-md pb-24 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-          <div
-            v-for="char in filteredCharacters"
-            :key="char.id"
-            class="character-card cv-auto group relative flex h-full cursor-pointer flex-col overflow-hidden border border-outline-variant bg-surface-charcoal transition-all duration-300 hover:-translate-y-1 hover:border-primary"
-            @click="openDetail(char)"
-          >
-            <div class="relative h-64 overflow-hidden bg-surface-slate">
-              <img
-                v-if="char.referenceImageUrl"
-                class="h-full w-full object-cover grayscale transition-all duration-700 group-hover:grayscale-0"
-                :src="char.referenceImageUrl"
-                :alt="char.name"
-              />
-              <div v-else class="flex h-full w-full items-center justify-center text-outline">
-                <span class="material-symbols-outlined text-5xl">person</span>
-              </div>
-              <div class="character-overlay absolute inset-0 bg-gradient-to-t from-surface-charcoal via-transparent to-transparent opacity-60"></div>
-              <div
-                v-if="char.roleTag"
-                class="absolute left-4 top-4 bg-primary px-2 py-0.5 text-[10px] font-bold uppercase text-on-primary-fixed-variant"
-              >
-                {{ char.roleTag }}
-              </div>
-            </div>
-            <div class="flex flex-1 flex-col p-6">
-              <div class="mb-4 flex items-start justify-between">
-                <div>
-                  <h3 class="font-headline-md text-on-surface">
-                    {{ char.name }}
-                  </h3>
-                  <p class="mt-1 font-label-sm uppercase tracking-widest text-label-sm text-on-surface-variant">
-                    {{ char.roleTag || '未指定角色' }}
-                  </p>
-                </div>
-                <span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">person</span>
-              </div>
-              <p
-                v-if="char.personality"
-                class="mb-6 line-clamp-3 text-sm leading-relaxed text-on-surface-variant"
-              >
-                {{ char.personality }}
-              </p>
-              <p v-else class="mb-6 text-sm italic text-outline">暂无性格描述</p>
-              <div class="mt-auto flex items-center justify-between border-t border-outline-variant/30 pt-4">
-                <div class="flex flex-col">
-                  <span class="text-[10px] font-label-sm uppercase text-on-surface-variant">状态</span>
-                  <span :class="['font-label-md', statusClass(char.status)]">
-                    {{ statusLabel(char.status) }}
+    <section v-else class="character-library-page flex h-full min-h-0 flex-col">
+      <div class="character-library-scroll custom-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain">
+        <div class="character-library-content mx-auto w-full max-w-[1640px]">
+          <!-- 页面标题和核心操作 -->
+          <header class="border-b border-outline-variant px-5 pb-5 pt-7 sm:px-8 sm:pt-8">
+            <div class="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+              <div class="min-w-0">
+                <nav class="mb-3 flex items-center gap-2 font-label-sm text-label-sm text-on-surface-variant">
+                  <span>项目工作区</span>
+                  <span class="material-symbols-outlined text-xs">chevron_right</span>
+                  <span class="text-primary">角色库</span>
+                </nav>
+                <div class="flex items-end gap-3">
+                  <h2 class="font-display-lg tracking-tight text-headline-lg text-on-surface">角色库</h2>
+                  <span class="pb-1 font-label-md text-on-surface-variant">
+                    {{ totalCount }} 个角色档案
                   </span>
                 </div>
+                <p class="mt-2 max-w-2xl text-sm leading-relaxed text-on-surface-variant">
+                  统一维护角色形象、性格和声音基线，保证后续分镜与生成结果保持一致。
+                </p>
+              </div>
+              <div class="flex shrink-0 flex-wrap gap-2">
                 <button
                   type="button"
-                  class="flex h-10 w-10 items-center justify-center border border-outline-variant text-on-surface-variant transition-all hover:border-primary hover:text-primary"
-                  @click.stop="openDetail(char)"
+                  class="inline-flex min-h-10 items-center gap-2 border border-primary/70 bg-primary/10 px-4 font-label-md text-label-md text-primary transition-[background-color,border-color,transform] hover:border-primary hover:bg-primary/20 active:translate-y-px disabled:cursor-wait disabled:opacity-50"
+                  :disabled="aiGenerating || creating"
+                  @click="onGenerateCharacters"
                 >
-                  <span class="material-symbols-outlined">edit_note</span>
+                  <span
+                    class="material-symbols-outlined text-[18px]"
+                    :class="{ 'animate-spin': aiGenerating }"
+                  >{{ aiGenerating ? 'progress_activity' : 'auto_awesome' }}</span>
+                  {{ aiGenerating ? '正在分析剧本' : '从剧本同步' }}
+                </button>
+                <button
+                  type="button"
+                  class="inline-flex min-h-10 items-center gap-2 bg-primary-container px-4 font-label-md text-label-md text-on-primary-container transition-[background-color,transform] hover:bg-primary-container/90 active:translate-y-px disabled:cursor-wait disabled:opacity-50"
+                  :disabled="creating || aiGenerating"
+                  @click="onCreateCharacter"
+                >
+                  <span class="material-symbols-outlined text-[18px]">person_add</span>
+                  新建角色
                 </button>
               </div>
             </div>
+
+            <!-- 原右侧工作流信息收进这里，避免形成第二个滚动上下文 -->
+            <dl class="character-summary mt-6 grid grid-cols-2 border-y border-outline-variant sm:grid-cols-4">
+              <div class="border-b border-outline-variant px-3 py-3 sm:border-b-0 sm:border-r">
+                <dt>角色档案</dt>
+                <dd>{{ totalCount }}</dd>
+              </div>
+              <div class="border-b border-outline-variant px-3 py-3 sm:border-b-0 sm:border-r">
+                <dt>已有定妆图</dt>
+                <dd>{{ characters.filter((item) => item.referenceImageUrl).length }}</dd>
+              </div>
+              <div class="px-3 py-3 sm:border-r sm:border-outline-variant">
+                <dt>已锁定音色</dt>
+                <dd>{{ characters.filter((item) => item.voiceLocked && item.voiceProfileKey).length }}</dd>
+              </div>
+              <div class="px-3 py-3">
+                <dt>当前视图</dt>
+                <dd>{{ filteredCharacters.length }} 条结果</dd>
+              </div>
+            </dl>
+          </header>
+
+          <!-- 搜索和筛选 -->
+          <section class="border-b border-outline-variant bg-surface-container-lowest px-5 py-4 sm:px-8">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-center">
+              <label class="group relative min-w-0 flex-1">
+                <span class="sr-only">搜索角色</span>
+                <span class="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[19px] text-on-surface-variant">search</span>
+                <input
+                  v-model="searchKeyword"
+                  class="w-full border border-outline-variant bg-surface-container-low px-10 py-2.5 font-label-md text-label-md text-on-surface outline-none transition-[border-color,background-color] placeholder:text-outline-variant focus:border-primary focus:bg-surface-container"
+                  placeholder="搜索角色名或角色标签"
+                  type="search"
+                />
+              </label>
+              <div class="custom-scrollbar flex items-center gap-2 overflow-x-auto overscroll-x-contain pb-1 lg:pb-0">
+                <span class="mr-1 flex shrink-0 items-center gap-1.5 font-label-sm text-on-surface-variant">
+                  <span class="material-symbols-outlined text-[17px]">filter_list</span>
+                  筛选
+                </span>
+                <button
+                  v-for="filter in filters"
+                  :key="filter.key"
+                  type="button"
+                  class="shrink-0 px-3 py-1.5 font-label-sm transition-[background-color,border-color,color] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  :class="
+                    activeFilter === filter.key
+                      ? 'border border-primary bg-primary/10 text-primary'
+                      : 'border border-outline-variant text-on-surface-variant hover:border-on-surface hover:text-on-surface'
+                  "
+                  @click="activeFilter = filter.key"
+                >
+                  {{ filter.label }}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- 错误提示条 -->
+          <div
+            v-if="errorMsg"
+            class="mx-5 my-4 flex items-center justify-between gap-4 border border-danger-red/40 bg-danger-red/5 px-4 py-3 sm:mx-8"
+            role="alert"
+          >
+            <div class="flex min-w-0 items-center gap-3 text-sm text-on-surface">
+              <span class="material-symbols-outlined shrink-0 text-danger-red">error</span>
+              <span class="truncate">{{ errorMsg }}</span>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 border border-outline-variant bg-surface-container-low px-3 py-1 text-xs text-on-surface-variant hover:border-primary hover:text-primary"
+              @click="retry"
+            >
+              重试
+            </button>
           </div>
 
-          <!-- 创建新角色虚线卡 -->
+          <!-- 成功提示条 -->
           <div
-            class="group flex min-h-[400px] cursor-pointer flex-col items-center justify-center border border-dashed border-outline-variant transition-all hover:bg-surface-container"
-            @click="onCreateCharacter"
+            v-if="infoMsg"
+            class="mx-5 my-4 flex items-center gap-3 border border-primary/40 bg-primary/5 px-4 py-3 text-sm text-on-surface sm:mx-8"
+            role="status"
           >
-            <div class="mb-4 flex h-16 w-16 items-center justify-center border border-outline-variant transition-all group-hover:border-primary group-hover:text-primary">
-              <span class="material-symbols-outlined text-3xl">add</span>
+            <span class="material-symbols-outlined shrink-0 text-primary">check_circle</span>
+            <span>{{ infoMsg }}</span>
+          </div>
+
+          <!-- 主体：loading / empty / ready 三态 -->
+          <div v-if="pageState === 'loading'" class="flex min-h-[360px] items-center justify-center px-5 text-on-surface-variant sm:px-8">
+            <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined animate-spin">progress_activity</span>
+              <span>正在加载角色列表…</span>
             </div>
-            <p class="font-label-md uppercase tracking-widest text-on-surface-variant group-hover:text-on-surface">创建新角色</p>
-            <p class="mt-2 px-8 text-center font-label-sm text-outline-variant">点击这里为当前项目补充新的角色设定、肖像和性格标签。</p>
+          </div>
+
+          <div
+            v-else-if="pageState === 'empty'"
+            class="mx-5 my-6 flex min-h-[360px] flex-col items-center justify-center border border-dashed border-outline-variant bg-surface-container px-6 py-12 text-center sm:mx-8"
+          >
+            <div class="mb-4 flex h-14 w-14 items-center justify-center border border-outline-variant">
+              <span class="material-symbols-outlined text-3xl text-on-surface-variant">person</span>
+            </div>
+            <p class="mb-2 font-label-md text-on-surface">该项目下还没有角色</p>
+            <p class="mb-6 max-w-md text-sm leading-relaxed text-on-surface-variant">
+              从项目总纲和剧本自动生成角色档案，或手工新建角色。
+            </p>
+            <div class="flex flex-wrap items-center justify-center gap-3">
+              <button
+                type="button"
+                class="flex items-center gap-2 border border-primary bg-primary px-4 py-2 text-xs font-bold tracking-widest text-on-secondary-fixed hover:brightness-110 disabled:opacity-50"
+                :disabled="aiGenerating"
+                @click="onGenerateCharacters"
+              >
+                <span class="material-symbols-outlined text-sm" :class="{ 'animate-spin': aiGenerating }">
+                  {{ aiGenerating ? 'progress_activity' : 'auto_awesome' }}
+                </span>
+                AI 生成角色
+              </button>
+              <button
+                type="button"
+                class="flex items-center gap-2 border border-outline-variant px-4 py-2 text-xs tracking-widest text-on-surface-variant hover:border-primary hover:text-primary disabled:opacity-50"
+                :disabled="creating || aiGenerating"
+                @click="onCreateCharacter"
+              >
+                <span class="material-symbols-outlined text-sm">person_add</span>
+                手工新建
+              </button>
+            </div>
+          </div>
+
+          <div
+            v-else-if="pageState === 'ready' && !filteredCharacters.length"
+            class="mx-5 my-6 flex min-h-[300px] flex-col items-center justify-center border border-dashed border-outline-variant bg-surface-container px-6 py-12 text-center sm:mx-8"
+          >
+            <div class="mb-4 flex h-14 w-14 items-center justify-center border border-outline-variant">
+              <span class="material-symbols-outlined text-3xl text-on-surface-variant">filter_list_off</span>
+            </div>
+            <p class="font-label-md text-on-surface">没有匹配的角色</p>
+            <p class="mt-2 text-sm text-on-surface-variant">尝试调整搜索关键字或筛选条件</p>
+          </div>
+
+          <div
+            v-else
+            class="grid grid-cols-1 gap-4 px-5 pb-16 pt-5 sm:grid-cols-2 sm:px-8 lg:grid-cols-3 2xl:grid-cols-4"
+          >
+            <article
+              v-for="char in filteredCharacters"
+              :key="char.id"
+              class="character-card cv-auto group relative flex min-h-[370px] cursor-pointer flex-col overflow-hidden border border-outline-variant bg-surface-charcoal transition-[border-color,transform,background-color] duration-300 hover:-translate-y-0.5 hover:border-primary hover:bg-surface-container"
+              @click="openDetail(char)"
+            >
+              <div class="relative aspect-[1.35] shrink-0 overflow-hidden bg-surface-slate">
+                <img
+                  v-if="char.referenceImageUrl"
+                  class="h-full w-full object-cover grayscale transition-[filter,transform] duration-500 group-hover:scale-[1.02] group-hover:grayscale-0"
+                  :src="char.referenceImageUrl"
+                  :alt="`${char.name} 的角色参考图`"
+                />
+                <div v-else class="flex h-full w-full items-center justify-center text-outline">
+                  <span class="material-symbols-outlined text-5xl">person</span>
+                </div>
+                <div class="character-overlay absolute inset-0 bg-gradient-to-t from-surface-charcoal via-transparent to-transparent opacity-75"></div>
+                <div
+                  class="absolute left-3 top-3 border border-white/15 bg-black/35 px-2 py-1 text-[10px] font-semibold tracking-wide text-white backdrop-blur-sm"
+                >
+                  {{ char.roleTag || '未指定角色' }}
+                </div>
+              </div>
+              <div class="flex flex-1 flex-col p-4 sm:p-5">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <h3 class="truncate font-headline-md text-on-surface">{{ char.name }}</h3>
+                    <p class="mt-1 font-label-sm text-on-surface-variant">角色档案</p>
+                  </div>
+                  <span class="material-symbols-outlined shrink-0 text-[20px] text-primary" style="font-variation-settings: 'FILL' 1;">person</span>
+                </div>
+                <p
+                  v-if="char.personality"
+                  class="mt-4 line-clamp-2 min-h-[42px] text-sm leading-relaxed text-on-surface-variant"
+                >
+                  {{ char.personality }}
+                </p>
+                <p v-else class="mt-4 min-h-[42px] text-sm italic leading-relaxed text-outline">
+                  暂无性格描述
+                </p>
+                <div class="mt-auto flex items-center justify-between gap-3 border-t border-outline-variant/40 pt-3">
+                  <div class="flex min-w-0 flex-col">
+                    <span class="text-[10px] text-on-surface-variant">状态</span>
+                    <span :class="['font-label-md', statusClass(char.status)]">
+                      {{ statusLabel(char.status) }}
+                    </span>
+                  </div>
+                  <div class="flex shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      class="flex h-9 w-9 items-center justify-center border border-outline-variant text-on-surface-variant transition-[background-color,border-color,color] hover:border-primary hover:bg-primary/10 hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                      title="编辑角色"
+                      aria-label="编辑角色"
+                      @click.stop="openDetail(char)"
+                    >
+                      <span class="material-symbols-outlined text-[19px]">edit_note</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-9 w-9 items-center justify-center border border-danger-red/40 text-danger-red transition-[background-color,border-color] hover:bg-danger-red/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-danger-red disabled:opacity-50"
+                      title="删除角色"
+                      aria-label="删除角色"
+                      :disabled="deletingCharacterId === char.id"
+                      @click.stop="onDeleteCharacter(char)"
+                    >
+                      <span
+                        class="material-symbols-outlined text-[19px]"
+                        :class="{ 'animate-spin': deletingCharacterId === char.id }"
+                      >{{ deletingCharacterId === char.id ? 'progress_activity' : 'delete' }}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <!-- 创建新角色卡保持与角色卡同一视觉节奏 -->
+            <button
+              type="button"
+              class="character-create-card group flex min-h-[370px] cursor-pointer flex-col items-center justify-center border border-dashed border-outline-variant px-6 text-center transition-[background-color,border-color] hover:border-primary hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              :disabled="creating || aiGenerating"
+              @click="onCreateCharacter"
+            >
+              <span class="material-symbols-outlined mb-4 text-3xl text-on-surface-variant transition-colors group-hover:text-primary">add</span>
+              <span class="font-label-md text-on-surface-variant transition-colors group-hover:text-on-surface">创建新角色</span>
+              <span class="mt-2 max-w-[220px] text-sm leading-relaxed text-outline-variant">
+                为当前项目补充新的角色设定、肖像和性格标签
+              </span>
+            </button>
           </div>
         </div>
       </div>
-
-      <!-- 右侧角色工作流 -->
-      <aside class="custom-scrollbar hidden w-[320px] flex-shrink-0 flex-col overflow-y-auto overscroll-y-contain border-l border-outline-variant bg-surface-charcoal xl:flex">
-        <div class="border-b border-outline-variant bg-surface-container-low p-6">
-          <h4 class="flex items-center gap-2 font-label-md uppercase tracking-widest text-on-surface">
-            <span class="material-symbols-outlined text-sm text-primary">psychology</span>
-            角色工作流
-          </h4>
-        </div>
-        <div class="flex-1 space-y-5 p-6 text-sm leading-relaxed text-on-surface-variant">
-          <div class="border border-outline-variant bg-surface-container-low p-4">
-            <span class="text-[10px] uppercase tracking-widest text-outline">项目角色</span>
-            <strong class="mt-1 block text-2xl font-normal text-on-surface">{{ totalCount }}</strong>
-          </div>
-          <button
-            type="button"
-            class="flex w-full items-center justify-center gap-2 border border-primary bg-primary/10 px-4 py-3 text-xs font-bold uppercase tracking-widest text-primary hover:bg-primary/20 disabled:opacity-50"
-            :disabled="aiGenerating || creating"
-            @click="onGenerateCharacters"
-          >
-            <span class="material-symbols-outlined text-base" :class="{ 'animate-spin': aiGenerating }">
-              {{ aiGenerating ? 'progress_activity' : 'auto_awesome' }}
-            </span>
-            {{ aiGenerating ? '正在提取角色' : '从剧本同步角色' }}
-          </button>
-          <div class="space-y-3 border-t border-outline-variant pt-5 text-xs">
-            <div class="flex items-center justify-between">
-              <span>已有定妆图</span>
-              <span class="text-on-surface">{{ characters.filter((item) => item.referenceImageUrl).length }}</span>
-            </div>
-            <div class="flex items-center justify-between">
-              <span>已锁定音色</span>
-              <span class="text-on-surface">{{ characters.filter((item) => item.voiceLocked && item.voiceProfileKey).length }}</span>
-            </div>
-          </div>
-        </div>
-      </aside>
-    </div>
-    </template>
+    </section>
   </WorkspaceLayout>
 </template>
 
 <style scoped>
-.custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+.character-library-page {
+  background:
+    linear-gradient(180deg, rgba(255, 183, 125, 0.025), transparent 18rem),
+    var(--pd-bg);
 }
 
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: #0d0f0d;
+.character-library-scroll {
+  scrollbar-gutter: stable;
 }
 
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #554336;
+.character-summary dt {
+  color: var(--pd-muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+}
+
+.character-summary dd {
+  margin-top: 0.35rem;
+  color: var(--pd-ink);
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.character-card,
+.character-create-card {
+  min-height: 370px;
+}
+
+.character-card:focus-within {
+  border-color: var(--pd-accent);
+}
+
+@media (max-width: 639px) {
+  .character-summary > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .character-summary > div:nth-child(3) {
+    border-top: 1px solid rgba(164, 132, 84, 0.28);
+  }
+
+  .character-summary > div:nth-child(4) {
+    border-top: 1px solid rgba(164, 132, 84, 0.28);
+  }
 }
 </style>

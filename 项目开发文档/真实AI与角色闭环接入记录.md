@@ -1,6 +1,6 @@
-# 真实 AI 与角色闭环接入记录
+﻿# 真实 AI 与角色闭环接入记录
 
-> 更新日期：2026-07-23  
+> 更新日期：2026-07-24
 > 范围：文本、角色定妆、分镜参考图、视频、TTS
 
 ## 1. 当前模型
@@ -8,8 +8,8 @@
 | 类型 | Provider | 模型 | 状态 |
 |---|---|---|---|
 | 文本 | OpenAI-compatible | 由 `AI_MODEL*` 配置 | 已接入 |
-| 图片 | ToAPI | `gpt-image-2` | 已接入并真实验证 16:9 输出 |
-| 视频 | 智谱 BigModel | `cogvideox-flash` | 已接入并真实验证 |
+| 图片 | Agnes | `agnes-image-2.1-flash` | 已接入并真实验证 2K、16:9 与参考图输出 |
+| 视频 | Agnes | `agnes-video-v2.0` | 已接入后台任务、限流、恢复轮询和本地持久化 |
 | 音频 | DashScope | `qwen3-tts-flash` / `qwen3-tts-instruct-flash` | 已接入并真实验证 |
 
 密钥只保存在被 Git 忽略的 `.env.local`。文档和源码不得记录真实密钥。
@@ -20,9 +20,9 @@
 2. 服务端提取姓名、戏剧身份、性格、固定外观和 TTS 音色。
 3. 再次同步只新增角色并补齐空字段，不覆盖已有人工设定。
 4. 单角色详情可显式执行“AI 补全档案”。
-5. 使用 ToAPI `gpt-image-2` 生成 1 到 3 张定妆图候选，确认后写入 `reference_image_url`。
+5. 使用 Agnes `agnes-image-2.1-flash` 生成定妆图候选，确认后写入 `reference_image_url`。
 6. 分镜保存 `character_id`；历史分镜会按同项目角色名轻量回填。
-7. 生成分镜静帧时自动读取角色定妆图，并按当前图片 Provider 的参考图参数提交给 `gpt-image-2`。
+7. 生成分镜静帧时自动读取角色定妆图，并通过 `extra_body.image` 提交给 Agnes 参考图生图接口。
 8. 角色详情可用 `qwen3-tts-flash` 生成短句试听，不写入正式音频资产表。
 9. 手动改名会先预览影响范围，可选择同步当前项目文本；AI 补全档案不会修改角色姓名。
 10. 角色音色先根据年龄段、声线性别和气质推荐，试听确认后锁定；对白生成只读取已锁定的角色主音色。
@@ -58,8 +58,10 @@
 - 图片生成提交后立即返回作业 ID，页面通过轮询显示排队、执行、成功和失败进度，不再同步等待 1-3 分钟。
 - `generation_jobs` 在素材落库前就保存任务状态，因此刷新页面、切换模块或进入任务中心后仍能追踪。
 - 服务重启会恢复未完成任务；失败任务保留最终 Provider、模型和供应商错误，可从任务中心显式重试。
-- `FRAME_FALLBACK_MODELS` 可配置图片模型降级链；当前默认 ToAPI 配置只使用 `gpt-image-2`。
+- `FRAME_FALLBACK_MODELS` 可配置图片模型降级链；当前默认 `agnes-image-2.1-flash`，临时失败时回退 `agnes-image-2.0-flash`。
 - 静帧结果会读取真实图片尺寸并按 `FRAME_IMAGE_RATIO` 校验，当前要求 16:9。
+- 普通视频使用 `video_image` 后台任务；Agnes 任务 ID 会立即保存，状态查询网络抖动自动退避，重启或重试不会重复创建供应商任务。
+- Agnes 视频创建默认每分钟最多 2 次；完成结果立即下载到 `.codex-runtime/generated-videos`，数据库只保存稳定的本地 URL。
 
 ## 3. 数据结构
 

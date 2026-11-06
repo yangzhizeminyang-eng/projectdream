@@ -1,0 +1,43 @@
+# 不把本地依赖、构建产物、生成媒体和临时调试文件送进 Docker 构建上下文。
+node_modules
+dist
+.git
+.github
+.idea
+.vscode
+.codex-runtime
+.codex_tmp
+.genwork
+artifacts
+public/generated
+.task-center-shots
+.tmp-*
+.workbuddy
+
+# 真实环境变量和本地日志必须留在宿主机，不进入镜像。
+.env
+.env.*
+*.log
+*.local
+
+# 文档和截图不参与镜像构建，减少上传到服务器后的构建体积。
+项目开发文档
+*.md
+**/*.test.*
+**/*.spec.*
+/actual-frame-*.png
+/actual-video-contact.png
+/video-check-*.png
+/captcha-*.png
+
+# 本地调试补丁和一次性脚本残留。
+a.mjs
+*.patch
+*.bundle
+*.orig
+patch*.cjs
+patch*.py
+_*.cjs
+_*.js
+_*.txt
+_*.ps1

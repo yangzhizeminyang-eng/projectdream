@@ -1,0 +1,224 @@
+# ProjectDream 腾讯云 2 核 2G 单机部署编排。
+# 启动时请使用：docker compose --env-file .env.production up -d
+services:
+  # MySQL 保存用户、项目、总纲、场景、角色、分镜、任务和导出记录。
+  mysql:
+    image: mysql:8.0.39
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-projectdream}
+      MYSQL_USER: ${MYSQL_USER:-projectdream}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_connections=40
+      - --innodb_buffer_pool_size=128M
+      - --skip-name-resolve
+    volumes:
+      - mysql_data:/var/lib/mysql
+    # 只绑定服务器本机回环地址，方便 SSH 隧道连接，不对公网开放数据库。
+    ports:
+      - "127.0.0.1:${MYSQL_TUNNEL_PORT:-3306}:3306"
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    mem_limit: 384m
+    mem_reservation: 256m
+    cpus: 0.70
+    security_opt:
+      - no-new-privileges:true
+
+  # FastAPI API gateway：唯一的公网 /api 入口，四路媒体（/generated、/storage、
+  # /mock、/mock-assets）均已原生实现，不再有任何 Node 兼容代理。
+  # 第五阶段：与 worker-node 共享 runtime_data 卷（生成媒体与本地对象存储根）；
+  # mock-assets 占位图经只读 bind mount 提供，MOCK_ASSET_IMAGE_PATH 指向挂载路径。
+  api:
+    build:
+      context: ./api-service
+      dockerfile: Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${APP_ENV_FILE:-.env.production}
+    environment:
+      APP_ENV: ${RAG_APP_ENV:-production}
+      API_PORT: 8000
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: ${MYSQL_USER:-projectdream}
+      DB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      DB_NAME: ${MYSQL_DATABASE:-projectdream}
+      TZ: Asia/Shanghai
+      # mock-assets 占位图：bind mount 仓库静态图到容器内，media_service 读取该路径。
+      MOCK_ASSET_IMAGE_PATH: /app/public/images/login-hero-clean.png
+    volumes:
+      # 与 worker-node 共享生成媒体与本地对象存储根（.codex-runtime 相对 cwd=/app）。
+      - runtime_data:/app/.codex-runtime
+      - ./public/images/login-hero-clean.png:/app/public/images/login-hero-clean.png:ro
+    expose:
+      - "8000"
+    networks:
+      - frontend_net
+      - backend_net
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    mem_limit: 256m
+    mem_reservation: 96m
+    cpus: 0.35
+    security_opt:
+      - no-new-privileges:true
+
+  # 独立 Node Worker（worker-node）：唯一负责生成、重试与 FFmpeg 导出。
+  # 不暴露 HTTP 端口、不经 Nginx 代理（第五阶段起 Node API 角色退役）。
+  worker-node:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        APK_MIRROR: ${APK_MIRROR:-https://mirrors.aliyun.com/alpine}
+    restart: unless-stopped
+    init: true
+    command: ["node", "server/index.mjs"]
+    env_file:
+      - ${APP_ENV_FILE:-.env.production}
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: ${MYSQL_USER:-projectdream}
+      DB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      DB_NAME: ${MYSQL_DATABASE:-projectdream}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://<YOUR_SERVER_IP>}
+      FFMPEG_BIN: ffmpeg
+      FFPROBE_BIN: ffprobe
+      APP_RUNTIME_ROLE: worker
+      RAG_ENABLED: ${RAG_ENABLED:-false}
+      RAG_INDEX_ENABLED: ${RAG_INDEX_ENABLED:-false}
+      RAG_SERVICE_URL: ${RAG_SERVICE_URL:-http://rag:8001}
+      RAG_INTERNAL_TOKEN: ${RAG_INTERNAL_TOKEN:-${INTERNAL_TOKEN:-}}
+      RAG_TIMEOUT_MS: ${RAG_TIMEOUT_MS:-15000}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+      BACKGROUND_QUEUE_POLL_INTERVAL_MS: ${BACKGROUND_QUEUE_POLL_INTERVAL_MS:-15000}
+      TZ: Asia/Shanghai
+    volumes:
+      - runtime_data:/app/.codex-runtime
+    healthcheck:
+      test: ["CMD", "node", "scripts/worker-healthcheck.mjs"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 45s
+    networks:
+      - backend_net
+    depends_on:
+      mysql:
+        condition: service_healthy
+    mem_limit: 640m
+    mem_reservation: 256m
+    cpus: 0.55
+    security_opt:
+      - no-new-privileges:true
+
+  # LlamaIndex + Milvus RAG 旁路服务。默认不暴露公网端口，后续由 API 内网调用。
+  rag:
+    build:
+      context: ./rag-service
+      dockerfile: Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${APP_ENV_FILE:-.env.production}
+    environment:
+      RAG_APP_ENV: ${RAG_APP_ENV:-production}
+      RAG_PORT: 8001
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-}
+      RAG_MILVUS_URI: ${RAG_MILVUS_URI:-/app/.codex-runtime/milvus/projectdream.db}
+      RAG_MILVUS_TOKEN: ${RAG_MILVUS_TOKEN:-}
+      MILVUS_COLLECTION: ${MILVUS_COLLECTION:-projectdream_rag_v1}
+      MILVUS_DIM: ${MILVUS_DIM:-2048}
+      ZHIPU_MODEL: ${ZHIPU_MODEL:-embedding-3}
+      ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
+      ZHIPU_BASE_URL: ${ZHIPU_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      ZHIPU_DIMENSIONS: ${ZHIPU_DIMENSIONS:-2048}
+      TZ: Asia/Shanghai
+    volumes:
+      - rag_runtime_data:/app/.codex-runtime
+    expose:
+      - "8001"
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 45s
+    mem_limit: 384m
+    mem_reservation: 128m
+    cpus: 0.25
+    security_opt:
+      - no-new-privileges:true
+
+  # Nginx 前端：暴露公网端口，提供 Vue 静态资源，并代理 /api 与四路媒体到 FastAPI。
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${HTTP_PORT:-80}:8080"
+    networks:
+      - frontend_net
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:8080/nginx-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 128m
+    mem_reservation: 48m
+    cpus: 0.25
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  mysql_data:
+    name: projectdream_mysql_data
+  runtime_data:
+    name: projectdream_runtime_data
+  rag_runtime_data:
+    name: projectdream_rag_runtime_data
+
+networks:
+  frontend_net:
+    name: projectdream_frontend_net
+    driver: bridge
+  backend_net:
+    name: projectdream_backend_net
+    driver: bridge

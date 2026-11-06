@@ -10,6 +10,8 @@ function escapeRegExp(value) {
 }
 
 export function extractRelatedSpeakerNames(textValues, currentName, reservedNames = []) {
+  // 角色改名时，从对白/剧本文本里找出可能的历史称呼和说话人标签。
+  // 这些名称用于预览影响范围，但不会盲目替换结构化 JSON 的键名。
   const canonicalName = String(currentName || '').trim()
   if (canonicalName.length < 2) return []
 
@@ -33,6 +35,7 @@ export function extractRelatedSpeakerNames(textValues, currentName, reservedName
 }
 
 export function transformCharacterNames(value, sourceNames, newName) {
+  // 在可编辑文本中替换角色历史名称，使用一次性正则避免新名称再次被连锁替换。
   const normalizedNames = normalizeSourceNames(sourceNames, newName)
   if (!normalizedNames.length) {
     return { value, occurrences: 0, changed: false }
@@ -82,6 +85,7 @@ export function transformCharacterName(value, oldName, newName) {
 }
 
 export function transformCharacterNamesJson(rawJson, sourceNames, newName) {
+  // 结构化 JSON 改名只递归修改字符串值，不修改对象 key，避免破坏数据结构。
   if (!String(rawJson || '').trim()) {
     return { value: rawJson, occurrences: 0, changed: false, valid: true }
   }
